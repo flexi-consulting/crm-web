@@ -13,6 +13,7 @@ const manifest = {
   },
   platformContractRange: ">=1.0.0 <2.0.0",
   domainApiVersion: "1.0.0",
+  // Synthetic intent routes are deliberately not published as discoverable capabilities.
   capabilities: [
     {
       id: "exhibitions.catalog.read", version: "1.0.0", required: true,
@@ -29,16 +30,6 @@ const manifest = {
       inputSchemaRef: "schemas/company-query.schema.json", outputSchemaRef: "schemas/company.schema.json",
       effect: "read", requiredScopes: ["crm.companies.read"], operationRef: "GET /api/v1/companies/{id}"
     },
-    {
-      id: "crm.deal_intents.prepare", version: "1.0.0", required: false,
-      inputSchemaRef: "schemas/deal-intent-request.schema.json", outputSchemaRef: "schemas/deal-intent-response.schema.json",
-      effect: "write", requiredScopes: ["crm.deal_intents.prepare"], operationRef: "POST /api/v1/deal-intents"
-    },
-    {
-      id: "crm.deal_intents.read", version: "1.0.0", required: false,
-      inputSchemaRef: "schemas/deal-intent-query.schema.json", outputSchemaRef: "schemas/deal-intent-response.schema.json",
-      effect: "read", requiredScopes: ["crm.deal_intents.read"], operationRef: "GET /api/v1/deal-intents/{id}"
-    }
   ],
   readiness: {
     status: "ready",

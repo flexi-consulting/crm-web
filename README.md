@@ -1,6 +1,6 @@
 # CRM Web
 
-Independent CRM and exhibitions web service. This work is a local synthetic API/domain-logic foundation. Catalog and company reads use fixtures; the sales extension prepares only in-memory synthetic deal intents and does not create a CRM deal. It exposes a versioned HTTP contract, but the deal-intent capability is not safe for agent registration yet.
+Independent CRM and exhibitions web service. This work is a local synthetic API/domain-logic foundation. Catalog and company reads use fixtures; the sales extension prepares only in-memory synthetic deal intents and does not create a CRM deal. Deal-intent routes are omitted from the published manifest, so the agent cannot discover them as capabilities.
 
 ## Run locally
 
@@ -25,7 +25,7 @@ JSON Schemas live in `schemas/`, including typed request/response schemas for th
 
 Profile-scoped company and deal-intent routes require a trusted-profile resolver injected into `createServer`. It must supply profile identity and granted scopes separately; each operation enforces its least-privilege `requiredScopes`. No production resolver is configured in this slice, so those routes fail closed with 503 by default; tests inject a synthetic resolver to verify profile isolation and 403 scope denial. The request body contains no profile identity or scopes. The fake Weeek adapter, company ownership assignments, and intent store are process-local synthetic fixtures; none writes CRM/Weeek data or survives restart.
 
-This PR is an API/domain-logic foundation only: it adds no browser create-deal flow and does not establish actual agent relay parity. It is not S-04 complete, and its intent-preparation capability must not be registered for agent use until user confirmation and a real provider receipt/reconciliation flow exist. Canonical company ownership and the platform source for trusted profile context/scopes remain integration decisions.
+This PR is an API/domain-logic foundation only: it adds no browser create-deal flow and does not establish actual agent relay parity. It is not S-04 complete. Deal-intent routes remain gated by the injected trusted-profile resolver and are not discoverable until user confirmation and a real provider contract/receipt/reconciliation flow are ready. Canonical company ownership and the platform source for trusted profile context/scopes remain integration decisions.
 
 The manifest follows the proposed [C14 connected application contract](https://github.com/trained-assist/trained-agent-architecture/blob/refs/pull/150/head/contracts/C14-CONNECTED-APPLICATION.md); runtime registration, compatibility negotiation, and authenticated platform readiness are not implemented here.
 
