@@ -17,8 +17,9 @@
     "prelead": {
       "type": "object", "required": ["id", "companyId", "exhibitionId", "stage", "disposition"],
       "properties": {
-        "id": { "type": "string", "pattern": "^demo-prelead-[0-9]{3}$" },
-        "companyId": { "type": "string", "pattern": "^demo-company-[0-9]{3}$" },
+        "id": { "type": "string", "pattern": "^(demo-prelead-[0-9]{3}|built-prelead-[a-f0-9]{24})$" },
+        "companyId": { "type": "string", "pattern": "^(demo-company-[0-9]{3}|co-[a-f0-9]{20})$" },
+        "buildId": { "type": "string", "pattern": "^build-[a-f0-9]{24}$" },
         "exhibitionId": { "type": "string", "pattern": "^demo-expo-[0-9]{3}$" },
         "stage": { "enum": ["draft", "ready", "converted", "archived"] },
         "disposition": { "enum": ["active", "rejected", "deal"] }

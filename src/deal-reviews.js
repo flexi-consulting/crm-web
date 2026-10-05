@@ -10,17 +10,19 @@ const syntheticLeadStageIds = { "demo-profile-a": "demo-status-lead-a", "demo-pr
 
 export function normalizeDealReviewRequest(value) {
   if (!value || typeof value !== "object" || Array.isArray(value) ||
-      Object.keys(value).some((key) => !["companyId", "exhibitionId", "title", "companyInn", "contactName", "dealComment"].includes(key)) ||
-      !/^demo-company-[0-9]{3}$/.test(value.companyId ?? "") || !/^demo-expo-[0-9]{3}$/.test(value.exhibitionId ?? "") ||
+      Object.keys(value).some((key) => !["companyId", "exhibitionId", "buildId", "title", "companyInn", "contactName", "dealComment"].includes(key)) ||
+      !(value.buildId ? /^build-[a-f0-9]{24}$/.test(value.buildId) && /^co-[a-f0-9]{20}$/.test(value.companyId ?? "") : /^demo-company-[0-9]{3}$/.test(value.companyId ?? "")) ||
+      !/^demo-expo-[0-9]{3}$/.test(value.exhibitionId ?? "") ||
       !requiredText(value.title, 160) || !requiredText(value.companyInn, 20) ||
       !requiredText(value.contactName, 160) || !requiredText(value.dealComment, 2000)) return null;
   return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, typeof item === "string" ? item.trim() : item]));
 }
 
-export function createDealReviewService({ confirmedDeals, preleadTimeline, storagePort,
+export function createDealReviewService({ confirmedDeals, preleadTimeline, participantResolver, storagePort,
   now = () => new Date().toISOString() } = {}) {
   const reviews = new Map();
   function participant(profileId, request) {
+    if (participantResolver) return participantResolver.resolve({ profileId, ...request });
     const visible = new Set(syntheticProfileCompanies[profileId] ?? []);
     const company = companies.find((item) => item.id === request.companyId && visible.has(item.id) && item.exhibitionIds.includes(request.exhibitionId));
     const exhibition = catalog.find((item) => item.id === request.exhibitionId);
@@ -30,13 +32,15 @@ export function createDealReviewService({ confirmedDeals, preleadTimeline, stora
     const selected = participant(profileId, draft);
     const stageId = syntheticLeadStageIds[profileId];
     if (!selected || !stageId) return null;
-    const preleadId = `demo-prelead-${draft.companyId.slice(-3)}`;
+    const preleadId = selected.preleadId ?? `demo-prelead-${draft.companyId.slice(-3)}`;
     const timeline = preleadTimeline.getTimeline({ profileId, preleadId });
     if (timeline.status !== 200 || timeline.body.prelead.companyId !== draft.companyId ||
-        timeline.body.prelead.exhibitionId !== draft.exhibitionId) return null;
+        timeline.body.prelead.exhibitionId !== draft.exhibitionId ||
+        (timeline.body.prelead.buildId ?? null) !== (draft.buildId ?? null)) return null;
     const notes = timeline.body.events.filter((event) => event.type === "note_added").map((event) => event.payload.noteText);
     const details = {
       companyId: draft.companyId, exhibitionId: draft.exhibitionId,
+      ...(draft.buildId ? { buildId: draft.buildId } : {}),
       statusId: stageId, title: draft.title, source: selected.exhibition.name,
       dealType: "direct", companyInn: draft.companyInn, contactName: draft.contactName,
       dealComment: [draft.dealComment, ...notes.map((note) => `Note: ${note}`)].join("\n"),
@@ -47,6 +51,7 @@ export function createDealReviewService({ confirmedDeals, preleadTimeline, stora
   }
   const detailsFor = (profileId, draft, selected, notes) => ({
     companyId: draft.companyId, exhibitionId: draft.exhibitionId,
+    ...(draft.buildId ? { buildId: draft.buildId } : {}),
     statusId: syntheticLeadStageIds[profileId], title: draft.title,
     source: selected.exhibition.name, dealType: "direct", companyInn: draft.companyInn,
     contactName: draft.contactName,

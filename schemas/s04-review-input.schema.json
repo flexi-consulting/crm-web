@@ -5,11 +5,16 @@
   "additionalProperties": false,
   "required": ["companyId", "exhibitionId", "title", "companyInn", "contactName", "dealComment"],
   "properties": {
-    "companyId": { "type": "string", "pattern": "^demo-company-[0-9]{3}$" },
+    "companyId": { "type": "string", "pattern": "^(demo-company-[0-9]{3}|co-[a-f0-9]{20})$" },
     "exhibitionId": { "type": "string", "pattern": "^demo-expo-[0-9]{3}$" },
+    "buildId": { "type": "string", "pattern": "^build-[a-f0-9]{24}$" },
     "title": { "type": "string", "minLength": 1, "maxLength": 160 },
     "companyInn": { "type": "string", "minLength": 1, "maxLength": 20 },
     "contactName": { "type": "string", "minLength": 1, "maxLength": 160 },
     "dealComment": { "type": "string", "minLength": 1, "maxLength": 2000 }
-  }
+  },
+  "allOf": [
+    { "if": { "properties": { "companyId": { "type": "string", "pattern": "^co-" } }, "required": ["companyId"] }, "then": { "required": ["buildId"] } },
+    { "if": { "required": ["buildId"] }, "then": { "properties": { "companyId": { "type": "string", "pattern": "^co-[a-f0-9]{20}$" } } } }
+  ]
 }

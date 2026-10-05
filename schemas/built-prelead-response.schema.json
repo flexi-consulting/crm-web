@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crm-web.example.invalid/schemas/built-prelead-response.schema.json",
+  "type": "object", "additionalProperties": false,
+  "required": ["domainApiVersion", "prelead", "replayed"],
+  "properties": {
+    "domainApiVersion": { "const": "1.0.0" },
+    "prelead": { "$ref": "https://crm-web.example.invalid/schemas/prelead-event-response.schema.json#/$defs/prelead" },
+    "replayed": { "type": "boolean" }
+  }
+}

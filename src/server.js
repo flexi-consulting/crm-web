@@ -8,6 +8,7 @@ import { createConfirmedDealService, normalizeConfirmedDealRequest } from "./con
 import { createCatalogBuildService } from "./catalog-build.js";
 import { s01ParticipantCapability, readExhibitionParticipants } from "./s01-participants.js";
 import { createDealReviewService, normalizeDealReviewRequest } from "./deal-reviews.js";
+import { createParticipantResolver } from "./participant-resolver.js";
 
 const manifest = {
   serviceId: "crm-web.exhibitions",
@@ -91,13 +92,14 @@ export function createServer({
   resolveTrustedReviewReceipt,
   allowUnsafeSyntheticConfirm = false,
   dealIntents = createDealIntentService(),
+  catalogBuilds = createCatalogBuildService(),
   preleadTimeline = createPreleadTimelineService(),
   confirmedDeals,
-  reviewService,
-  catalogBuilds = createCatalogBuildService()
+  reviewService
 } = {}) {
-  const dealService = confirmedDeals ?? createConfirmedDealService({ preleadTimeline });
-  const dealReviews = reviewService ?? createDealReviewService({ confirmedDeals: dealService, preleadTimeline });
+  const participantResolver = createParticipantResolver({ catalogBuilds, preleadTimeline });
+  const dealService = confirmedDeals ?? createConfirmedDealService({ preleadTimeline, participantResolver });
+  const dealReviews = reviewService ?? createDealReviewService({ confirmedDeals: dealService, preleadTimeline, participantResolver });
   async function trustedProfile(request, response, requiredScope) {
     if (!resolveTrustedProfile) {
       json(response, 503, { error: "trusted_profile_unavailable" });
@@ -119,7 +121,7 @@ export function createServer({
   return nodeCreateServer(async (request, response) => {
     const url = new URL(request.url ?? "/", "http://localhost");
     const isCreateIntent = url.pathname === "/api/v1/deal-intents" && request.method === "POST";
-    const timelineEventMatch = url.pathname.match(/^\/api\/v1\/preleads\/(demo-prelead-[0-9]{3})\/events$/);
+    const timelineEventMatch = url.pathname.match(/^\/api\/v1\/preleads\/((?:demo-prelead-[0-9]{3}|built-prelead-[a-f0-9]{24}))\/events$/);
     const isAppendPreleadEvent = Boolean(timelineEventMatch) && request.method === "POST";
     const isConfirmDeal = url.pathname === "/api/v1/deals/confirm" && request.method === "POST";
     const isPrepareReview = url.pathname === "/api/v1/deal-reviews" && request.method === "POST";
@@ -132,11 +134,13 @@ export function createServer({
     const catalogBuildMatch = url.pathname.match(/^\/api\/v1\/catalog-builds\/(build-[a-f0-9]{24})$/);
     const isCatalogBuildRead = Boolean(catalogBuildMatch) && (request.method === "GET" || request.method === "HEAD");
     const builtParticipantsMatch = url.pathname.match(/^\/api\/v1\/catalog-builds\/(build-[a-f0-9]{24})\/participants(?:\/(co-[a-f0-9]{20}))?$/);
+    const builtPreleadMatch = url.pathname.match(/^\/api\/v1\/catalog-builds\/(build-[a-f0-9]{24})\/participants\/(co-[a-f0-9]{20})\/prelead$/);
+    const isBuiltPrelead = Boolean(builtPreleadMatch) && request.method === "POST";
     const catalogBuildPreviewMatch = url.pathname.match(/^\/api\/v1\/catalog-builds\/(build-[a-f0-9]{24})\/preview$/);
     const isCatalogBuildPreview = Boolean(catalogBuildPreviewMatch) && request.method === "POST";
     const catalogPreviewMatch = url.pathname.match(/^\/api\/v1\/catalog-previews\/(preview-[a-f0-9]{24})$/);
     const isCatalogPreviewRead = Boolean(catalogPreviewMatch) && (request.method === "GET" || request.method === "HEAD");
-    if (request.method !== "GET" && request.method !== "HEAD" && !isCreateIntent && !isAppendPreleadEvent && !isConfirmDeal && !isPrepareReview && !isConfirmReview && !isDealAction && !isCatalogBuild && !isCatalogBuildPreview) {
+    if (request.method !== "GET" && request.method !== "HEAD" && !isCreateIntent && !isAppendPreleadEvent && !isConfirmDeal && !isPrepareReview && !isConfirmReview && !isDealAction && !isCatalogBuild && !isCatalogBuildPreview && !isBuiltPrelead) {
       response.setHeader("allow", "GET, HEAD, POST");
       return json(response, 405, { error: "method_not_allowed" });
     }
@@ -303,6 +307,16 @@ export function createServer({
         companyId: builtParticipantsMatch[2] ?? null, query: queryValues[0] ?? "", classification: classValues[0] ?? null });
       return json(response, result.status, result.body);
     }
+    if (isBuiltPrelead) {
+      const context = await trustedProfile(request, response, "crm.preleads.create.synthetic");
+      if (!context) return;
+      if (url.searchParams.size > 0) return json(response, 400, { error: "invalid_query" });
+      const owned = catalogBuilds.get({ profileId: context.profileId, buildId: builtPreleadMatch[1] });
+      if (owned.status !== 200) return json(response, owned.status, owned.body);
+      const result = participantResolver.ensureBuiltPrelead({ profileId: context.profileId,
+        exhibitionId: owned.body.artifact.exhibitionId, companyId: builtPreleadMatch[2], buildId: builtPreleadMatch[1] });
+      return json(response, result.status, result.body);
+    }
     const intentMatch = url.pathname.match(/^\/api\/v1\/deal-intents\/(demo-intent-[0-9a-f-]{36})$/);
     if (intentMatch && (request.method === "GET" || request.method === "HEAD")) {
       if (url.searchParams.size > 0) return json(response, 400, { error: "invalid_query" });
@@ -311,7 +325,7 @@ export function createServer({
       const result = await dealIntents.get({ profileId: context.profileId, id: intentMatch[1] });
       return json(response, result.status, result.body);
     }
-    const timelineMatch = url.pathname.match(/^\/api\/v1\/preleads\/(demo-prelead-[0-9]{3})\/timeline$/);
+    const timelineMatch = url.pathname.match(/^\/api\/v1\/preleads\/((?:demo-prelead-[0-9]{3}|built-prelead-[a-f0-9]{24}))\/timeline$/);
     if (timelineMatch && (request.method === "GET" || request.method === "HEAD")) {
       if (url.searchParams.size > 0) return json(response, 400, { error: "invalid_query" });
       const context = await trustedProfile(request, response, "crm.preleads.read");

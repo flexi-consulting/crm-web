@@ -17,6 +17,7 @@
       "required": ["companyId", "exhibitionId", "statusId", "title", "source", "dealType", "companyInn", "contactName", "dealComment", "notesCount"],
       "properties": {
         "companyId": { "type": "string" }, "exhibitionId": { "type": "string" },
+        "buildId": { "type": "string", "pattern": "^build-[a-f0-9]{24}$" },
         "statusId": { "type": "string" }, "title": { "type": "string" },
         "source": { "type": "string" }, "dealType": { "enum": ["direct", "partner"] },
         "companyInn": { "type": "string" }, "contactName": { "type": "string" },

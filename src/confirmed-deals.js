@@ -39,7 +39,7 @@ export function normalizeConfirmedDealRequest(v) {
   return { companyId: v.companyId, exhibitionId: v.exhibitionId, title: v.title.trim(), summary: v.summary.trim(), confirmation: true, operationId: v.operationId };
 }
 
-export function createConfirmedDealService({ provider = new FakeDealProvider(), preleadTimeline = createPreleadTimelineService() } = {}) {
+export function createConfirmedDealService({ provider = new FakeDealProvider(), preleadTimeline = createPreleadTimelineService(), participantResolver } = {}) {
   const operations = new Map();
   const idempotency = new Map();
   const activeBinding = new Map();
@@ -48,8 +48,11 @@ export function createConfirmedDealService({ provider = new FakeDealProvider(), 
     const ids = new Set(syntheticProfileCompanies[profileId] ?? []);
     return companies.filter((company) => ids.has(company.id));
   };
-  const visible = (profileId, request) => ownedCompanies(profileId).some((c) => c.id === request.companyId && c.exhibitionIds.includes(request.exhibitionId)) && catalog.some((e) => e.id === request.exhibitionId);
-  const response = (op, replayed = false) => ({ domainApiVersion: "1.0.0", operationId: op.operationId, status: op.status, companyId: op.request.companyId, exhibitionId: op.request.exhibitionId, ...(op.dealId ? { dealId: op.dealId } : {}), ...(op.linked ? { linkStatus: "linked" } : {}), replayed });
+  const visible = (profileId, request) => participantResolver
+    ? Boolean(participantResolver.resolve({ profileId, exhibitionId: request.exhibitionId, companyId: request.companyId, buildId: request.buildId ?? null }))
+    : ownedCompanies(profileId).some((c) => c.id === request.companyId && c.exhibitionIds.includes(request.exhibitionId)) && catalog.some((e) => e.id === request.exhibitionId);
+  const response = (op, replayed = false) => ({ domainApiVersion: "1.0.0", operationId: op.operationId, status: op.status, companyId: op.request.companyId, exhibitionId: op.request.exhibitionId, ...(op.request.buildId ? { buildId: op.request.buildId } : {}), ...(op.dealId ? { dealId: op.dealId } : {}), ...(op.linked ? { linkStatus: "linked" } : {}), replayed });
+  // Rebuilds may change source revision; one event/company still maps to one deal.
   const bindingKey = (profileId, request) => JSON.stringify([profileId, request.exhibitionId, request.companyId]);
 
   async function linkOne(op) {
@@ -60,7 +63,7 @@ export function createConfirmedDealService({ provider = new FakeDealProvider(), 
     const providerLinked = await provider.repairLink(op.operationId, op.dealId);
     if (providerLinked !== true) return false;
     const linked = preleadTimeline.linkConfirmedDeal({ profileId: op.profileId,
-      companyId: op.request.companyId, exhibitionId: op.request.exhibitionId,
+      companyId: op.request.companyId, exhibitionId: op.request.exhibitionId, buildId: op.request.buildId ?? null,
       operationId: op.operationId, dealId: op.dealId });
     op.linked = linked.status === 200 || linked.status === 201;
     return op.linked;
