@@ -60,7 +60,7 @@ export function createDealReviewService({ confirmedDeals, preleadTimeline, parti
   });
   const hash = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
   async function persistentState(profileId, draft) {
-    const selected = participant(profileId, draft);
+    const selected = await participant(profileId, draft);
     if (!selected || !syntheticLeadStageIds[profileId]) return null;
     const context = await storagePort.getPreleadContext({ profileRef: profileId,
       eventId: draft.exhibitionId, companyId: draft.companyId });

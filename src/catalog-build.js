@@ -93,7 +93,7 @@ export function qualify(company) {
   return { classification: "near_target", target: false, nearTarget: true, reason: !e.inn ? "inn_missing" : e.revenueRub === null ? "revenue_unknown" : r.status === "unknown" ? "registry_unknown" : r.status === "inactive" || r.status === "not_found" ? "registry_not_active" : e.activity === "unknown" ? "activity_unknown" : "outside_target_threshold" };
 }
 
-function validateReport(artifact, report) {
+export function validateReport(artifact, report) {
   const rows = artifact.companies;
   const counts = {
     sourceRecords: report.stages.source.imported,
