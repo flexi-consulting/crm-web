@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crm-web.example.invalid/schemas/synthetic-deal-operation.schema.json",
+  "title": "Synthetic deal operation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["domainApiVersion", "operationId", "status", "companyId", "exhibitionId", "replayed"],
+  "properties": {
+    "domainApiVersion": { "const": "1.0.0" },
+    "operationId": { "type": "string", "pattern": "^op-[0-9a-f-]{36}$" },
+    "status": { "enum": ["pending", "created", "unknown", "rejected"] },
+    "companyId": { "type": "string", "pattern": "^demo-company-[0-9]{3}$" },
+    "exhibitionId": { "type": "string", "pattern": "^demo-expo-[0-9]{3}$" },
+    "dealId": { "type": "string", "pattern": "^demo-deal-[0-9a-f-]{36}$" },
+    "linkStatus": { "const": "linked" },
+    "replayed": { "type": "boolean" }
+  }
+}

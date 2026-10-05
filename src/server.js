@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { catalog } from "./fixtures.js";
 import { createDealIntentService, isDealIntentRequest } from "./deal-intents.js";
 import { createPreleadTimelineService, normalizePreleadEventRequest } from "./prelead-timeline.js";
+import { createConfirmedDealService, normalizeConfirmedDealRequest } from "./confirmed-deals.js";
 
 const manifest = {
   serviceId: "crm-web.exhibitions",
@@ -78,7 +79,8 @@ async function readJson(request) {
 export function createServer({
   resolveTrustedProfile,
   dealIntents = createDealIntentService(),
-  preleadTimeline = createPreleadTimelineService()
+  preleadTimeline = createPreleadTimelineService(),
+  confirmedDeals = createConfirmedDealService()
 } = {}) {
   async function trustedProfile(request, response, requiredScope) {
     if (!resolveTrustedProfile) {
@@ -103,8 +105,11 @@ export function createServer({
     const isCreateIntent = url.pathname === "/api/v1/deal-intents" && request.method === "POST";
     const timelineEventMatch = url.pathname.match(/^\/api\/v1\/preleads\/(demo-prelead-[0-9]{3})\/events$/);
     const isAppendPreleadEvent = Boolean(timelineEventMatch) && request.method === "POST";
-    if (request.method !== "GET" && request.method !== "HEAD" && !isCreateIntent && !isAppendPreleadEvent) {
-      response.setHeader("allow", "GET, HEAD");
+    const isConfirmDeal = url.pathname === "/api/v1/deals/confirm" && request.method === "POST";
+    const dealActionMatch = url.pathname.match(/^\/api\/v1\/deal-operations\/(op-[0-9a-f-]{36})\/(reconcile|repair)$/);
+    const isDealAction = Boolean(dealActionMatch) && request.method === "POST";
+    if (request.method !== "GET" && request.method !== "HEAD" && !isCreateIntent && !isAppendPreleadEvent && !isConfirmDeal && !isDealAction) {
+      response.setHeader("allow", "GET, HEAD, POST");
       return json(response, 405, { error: "method_not_allowed" });
     }
     if (url.pathname === "/api/v1/manifest") return json(response, 200, manifest);
@@ -150,6 +155,28 @@ export function createServer({
       if (parsed.error) return json(response, parsed.error === "content_type_required" ? 415 : 400, { error: parsed.error });
       if (!isDealIntentRequest(parsed.value)) return json(response, 400, { error: "invalid_request" });
       const result = await dealIntents.create({ profileId: context.profileId, idempotencyKey, request: parsed.value });
+      return json(response, result.status, result.body);
+    }
+    if (isConfirmDeal) {
+      const context = await trustedProfile(request, response, "crm.deals.confirm.synthetic");
+      if (!context) return;
+      const idempotencyKey = request.headers["idempotency-key"];
+      if (typeof idempotencyKey !== "string" || !/^[A-Za-z0-9._:-]{8,128}$/.test(idempotencyKey)) return json(response, 400, { error: "valid_idempotency_key_required" });
+      const parsed = await readJson(request);
+      if (parsed.error) return json(response, parsed.error === "content_type_required" ? 415 : 400, { error: parsed.error });
+      const normalized = normalizeConfirmedDealRequest(parsed.value);
+      if (!normalized) return json(response, 400, { error: "invalid_confirmed_deal_request", operationId: parsed.value?.operationId });
+      const result = await confirmedDeals.create({ profileId: context.profileId, idempotencyKey, request: normalized });
+      return json(response, result.status, result.body);
+    }
+    if (isDealAction) {
+      const scope = dealActionMatch[2] === "repair" ? "crm.deals.links.repair.synthetic" : "crm.deals.operations.read.synthetic";
+      const context = await trustedProfile(request, response, scope);
+      if (!context) return;
+      if (url.searchParams.size > 0) return json(response, 400, { error: "invalid_query" });
+      const result = dealActionMatch[2] === "repair"
+        ? await confirmedDeals.repair({ profileId: context.profileId, operationId: dealActionMatch[1] })
+        : await confirmedDeals.reconcile({ profileId: context.profileId, operationId: dealActionMatch[1] });
       return json(response, result.status, result.body);
     }
     const intentMatch = url.pathname.match(/^\/api\/v1\/deal-intents\/(demo-intent-[0-9a-f-]{36})$/);

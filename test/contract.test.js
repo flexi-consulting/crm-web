@@ -40,6 +40,7 @@ test("manifest declares stable v1 read-only contract and capabilities", async ()
       }
     ]);
     assert.equal(body.capabilities.some((capability) => capability.id.startsWith("crm.deal_intents.")), false);
+    assert.equal(body.capabilities.some((capability) => capability.id.startsWith("crm.deals.")), false);
     assert.deepEqual(body.readiness, {
       status: "ready", scope: "local_process_only", reason: { code: "local_process_available" },
       checked: {
@@ -104,7 +105,7 @@ test("service serves the page and rejects writes", async () => {
     assert.match(await page.text(), /Exhibition catalog/);
     const write = await fetch(`${base}/api/v1/catalog`, { method: "POST" });
     assert.equal(write.status, 405);
-    assert.equal(write.headers.get("allow"), "GET, HEAD");
+    assert.equal(write.headers.get("allow"), "GET, HEAD, POST");
   });
 });
 
