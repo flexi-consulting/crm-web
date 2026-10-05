@@ -22,22 +22,22 @@ const manifest = {
     {
       id: "crm.companies.read", version: "1.0.0", required: true,
       inputSchemaRef: "schemas/company-query.schema.json", outputSchemaRef: "schemas/company-list.schema.json",
-      effect: "read", requiredScopes: [], operationRef: "GET /api/v1/companies"
+      effect: "read", requiredScopes: ["crm.companies.read"], operationRef: "GET /api/v1/companies"
     },
     {
       id: "crm.company.read", version: "1.0.0", required: false,
       inputSchemaRef: "schemas/company-query.schema.json", outputSchemaRef: "schemas/company.schema.json",
-      effect: "read", requiredScopes: [], operationRef: "GET /api/v1/companies/{id}"
+      effect: "read", requiredScopes: ["crm.companies.read"], operationRef: "GET /api/v1/companies/{id}"
     },
     {
-      id: "crm.deal_intents.create", version: "1.0.0", required: true,
+      id: "crm.deal_intents.prepare", version: "1.0.0", required: false,
       inputSchemaRef: "schemas/deal-intent-request.schema.json", outputSchemaRef: "schemas/deal-intent-response.schema.json",
-      effect: "write", requiredScopes: [], operationRef: "POST /api/v1/deal-intents"
+      effect: "write", requiredScopes: ["crm.deal_intents.prepare"], operationRef: "POST /api/v1/deal-intents"
     },
     {
       id: "crm.deal_intents.read", version: "1.0.0", required: false,
       inputSchemaRef: "schemas/deal-intent-query.schema.json", outputSchemaRef: "schemas/deal-intent-response.schema.json",
-      effect: "read", requiredScopes: [], operationRef: "GET /api/v1/deal-intents/{id}"
+      effect: "read", requiredScopes: ["crm.deal_intents.read"], operationRef: "GET /api/v1/deal-intents/{id}"
     }
   ],
   readiness: {
@@ -84,14 +84,19 @@ async function readJson(request) {
 }
 
 export function createServer({ resolveTrustedProfile, dealIntents = createDealIntentService() } = {}) {
-  async function trustedProfile(request, response) {
+  async function trustedProfile(request, response, requiredScope) {
     if (!resolveTrustedProfile) {
       json(response, 503, { error: "trusted_profile_unavailable" });
       return null;
     }
     try {
-      const profileId = await resolveTrustedProfile(request);
-      if (typeof profileId === "string" && profileId.length > 0) return profileId;
+      const context = await resolveTrustedProfile(request);
+      if (context && typeof context.profileId === "string" && context.profileId.length > 0 &&
+          Array.isArray(context.scopes) && context.scopes.every((scope) => typeof scope === "string")) {
+        if (context.scopes.includes(requiredScope)) return context;
+        json(response, 403, { error: "required_scope_missing" });
+        return null;
+      }
     } catch { /* Fail closed without exposing resolver details. */ }
     json(response, 503, { error: "trusted_profile_unavailable" });
     return null;
@@ -122,23 +127,23 @@ export function createServer({ resolveTrustedProfile, dealIntents = createDealIn
     }
     if (url.pathname === "/api/v1/companies" && (request.method === "GET" || request.method === "HEAD")) {
       if (url.searchParams.size > 0) return json(response, 400, { error: "invalid_query" });
-      const profileId = await trustedProfile(request, response);
-      if (!profileId) return;
-      return json(response, 200, { domainApiVersion: manifest.domainApiVersion, items: dealIntents.visibleCompanies(profileId) });
+      const context = await trustedProfile(request, response, "crm.companies.read");
+      if (!context) return;
+      return json(response, 200, { domainApiVersion: manifest.domainApiVersion, items: dealIntents.visibleCompanies(context.profileId) });
     }
     const companyMatch = url.pathname.match(/^\/api\/v1\/companies\/(demo-company-[0-9]{3})$/);
     if (companyMatch && (request.method === "GET" || request.method === "HEAD")) {
       if (url.searchParams.size > 0) return json(response, 400, { error: "invalid_query" });
-      const profileId = await trustedProfile(request, response);
-      if (!profileId) return;
-      const company = dealIntents.visibleCompanies(profileId).find((item) => item.id === companyMatch[1]);
+      const context = await trustedProfile(request, response, "crm.companies.read");
+      if (!context) return;
+      const company = dealIntents.visibleCompanies(context.profileId).find((item) => item.id === companyMatch[1]);
       return company
         ? json(response, 200, { domainApiVersion: manifest.domainApiVersion, company })
         : json(response, 404, { error: "company_not_found" });
     }
     if (isCreateIntent) {
-      const profileId = await trustedProfile(request, response);
-      if (!profileId) return;
+      const context = await trustedProfile(request, response, "crm.deal_intents.prepare");
+      if (!context) return;
       const idempotencyKey = request.headers["idempotency-key"];
       if (typeof idempotencyKey !== "string" || !/^[A-Za-z0-9._:-]{8,128}$/.test(idempotencyKey)) {
         return json(response, 400, { error: "valid_idempotency_key_required" });
@@ -146,15 +151,15 @@ export function createServer({ resolveTrustedProfile, dealIntents = createDealIn
       const parsed = await readJson(request);
       if (parsed.error) return json(response, parsed.error === "content_type_required" ? 415 : 400, { error: parsed.error });
       if (!isDealIntentRequest(parsed.value)) return json(response, 400, { error: "invalid_request" });
-      const result = await dealIntents.create({ profileId, idempotencyKey, request: parsed.value });
+      const result = await dealIntents.create({ profileId: context.profileId, idempotencyKey, request: parsed.value });
       return json(response, result.status, result.body);
     }
     const intentMatch = url.pathname.match(/^\/api\/v1\/deal-intents\/(demo-intent-[0-9a-f-]{36})$/);
     if (intentMatch && (request.method === "GET" || request.method === "HEAD")) {
       if (url.searchParams.size > 0) return json(response, 400, { error: "invalid_query" });
-      const profileId = await trustedProfile(request, response);
-      if (!profileId) return;
-      const result = await dealIntents.get({ profileId, id: intentMatch[1] });
+      const context = await trustedProfile(request, response, "crm.deal_intents.read");
+      if (!context) return;
+      const result = await dealIntents.get({ profileId: context.profileId, id: intentMatch[1] });
       return json(response, result.status, result.body);
     }
     if (url.pathname === "/" || url.pathname === "/index.html") {

@@ -23,7 +23,12 @@ class RecordingFakeAdapter extends FakeWeeekAdapter {
 
 async function withServer(run, { profile = undefined, adapter = new RecordingFakeAdapter() } = {}) {
   const server = createServer({
-    ...(profile ? { resolveTrustedProfile: (request) => request.headers["x-test-profile"] } : {}),
+    ...(profile ? {
+      resolveTrustedProfile: (request) => ({
+        profileId: request.headers["x-test-profile"],
+        scopes: (request.headers["x-test-scopes"] ?? "").split(" ").filter(Boolean)
+      })
+    } : {}),
     dealIntents: createDealIntentService({ adapter })
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -38,8 +43,14 @@ const requestBody = {
   summary: "Discuss a synthetic exhibition follow-up"
 };
 
-function profileHeaders(profileId) {
-  return { "x-test-profile": profileId };
+const allSyntheticScopes = [
+  "crm.companies.read",
+  "crm.deal_intents.prepare",
+  "crm.deal_intents.read"
+];
+
+function profileHeaders(profileId, scopes = allSyntheticScopes) {
+  return { "x-test-profile": profileId, "x-test-scopes": scopes.join(" ") };
 }
 
 test("company to deal-intent flow is profile-scoped and reconciles through fake adapter", async () => {
@@ -162,5 +173,30 @@ test("writes fail closed without a trusted profile resolver and profileId is not
     });
     assert.equal(injectedProfile.status, 400);
     assert.deepEqual(await injectedProfile.json(), { error: "invalid_request" });
+  }, { profile: true });
+});
+
+test("profile scope is checked separately from profile identity and request data", async () => {
+  await withServer(async (base, adapter) => {
+    const noCompanyScope = await fetch(`${base}/api/v1/companies`, {
+      headers: profileHeaders("demo-profile-a", ["crm.deal_intents.prepare"])
+    });
+    assert.equal(noCompanyScope.status, 403);
+    assert.deepEqual(await noCompanyScope.json(), { error: "required_scope_missing" });
+
+    const noCreateScope = await fetch(`${base}/api/v1/deal-intents`, {
+      method: "POST",
+      headers: { ...profileHeaders("demo-profile-a", ["crm.companies.read"]), "content-type": "application/json", "idempotency-key": "operation-scope" },
+      body: JSON.stringify(requestBody)
+    });
+    assert.equal(noCreateScope.status, 403);
+    assert.deepEqual(await noCreateScope.json(), { error: "required_scope_missing" });
+    assert.equal(adapter.preparations, 0);
+
+    const noReadScope = await fetch(`${base}/api/v1/deal-intents/demo-intent-00000000-0000-0000-0000-000000000000`, {
+      headers: profileHeaders("demo-profile-a", ["crm.deal_intents.prepare"])
+    });
+    assert.equal(noReadScope.status, 403);
+    assert.deepEqual(await noReadScope.json(), { error: "required_scope_missing" });
   }, { profile: true });
 });

@@ -31,22 +31,22 @@ test("manifest declares stable v1 read-only contract and capabilities", async ()
       {
         id: "crm.companies.read", version: "1.0.0", required: true,
         inputSchemaRef: "schemas/company-query.schema.json", outputSchemaRef: "schemas/company-list.schema.json",
-        effect: "read", requiredScopes: [], operationRef: "GET /api/v1/companies"
+        effect: "read", requiredScopes: ["crm.companies.read"], operationRef: "GET /api/v1/companies"
       },
       {
         id: "crm.company.read", version: "1.0.0", required: false,
         inputSchemaRef: "schemas/company-query.schema.json", outputSchemaRef: "schemas/company.schema.json",
-        effect: "read", requiredScopes: [], operationRef: "GET /api/v1/companies/{id}"
+        effect: "read", requiredScopes: ["crm.companies.read"], operationRef: "GET /api/v1/companies/{id}"
       },
       {
-        id: "crm.deal_intents.create", version: "1.0.0", required: true,
+        id: "crm.deal_intents.prepare", version: "1.0.0", required: false,
         inputSchemaRef: "schemas/deal-intent-request.schema.json", outputSchemaRef: "schemas/deal-intent-response.schema.json",
-        effect: "write", requiredScopes: [], operationRef: "POST /api/v1/deal-intents"
+        effect: "write", requiredScopes: ["crm.deal_intents.prepare"], operationRef: "POST /api/v1/deal-intents"
       },
       {
         id: "crm.deal_intents.read", version: "1.0.0", required: false,
         inputSchemaRef: "schemas/deal-intent-query.schema.json", outputSchemaRef: "schemas/deal-intent-response.schema.json",
-        effect: "read", requiredScopes: [], operationRef: "GET /api/v1/deal-intents/{id}"
+        effect: "read", requiredScopes: ["crm.deal_intents.read"], operationRef: "GET /api/v1/deal-intents/{id}"
       }
     ]);
     assert.deepEqual(body.readiness, {
