@@ -29,10 +29,12 @@ test("manifest declares stable v1 read-only contract and capabilities", async ()
     }]);
     const schema = JSON.parse(await readFile(new URL("../schemas/manifest.schema.json", import.meta.url)));
     assert.ok(new Ajv().compile(schema)(body));
+    const schemaAjv = new Ajv();
+    addFormats(schemaAjv);
     for (const capability of body.capabilities) {
       for (const reference of [capability.inputSchemaRef, capability.outputSchemaRef]) {
         const referencedSchema = JSON.parse(await readFile(new URL(`../${reference}`, import.meta.url)));
-        assert.ok(new Ajv().compile(referencedSchema));
+        assert.ok(schemaAjv.compile(referencedSchema));
       }
     }
   });
