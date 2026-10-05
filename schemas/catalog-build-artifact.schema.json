@@ -22,7 +22,7 @@
             "required": ["sourceRecordId", "country", "booth", "href", "duplicateSourceRecordIds"],
             "properties": {
               "sourceRecordId": { "type": "string", "pattern": "^src-[a-z0-9-]{1,48}$" },
-              "country": { "type": "string" }, "booth": { "type": ["string", "null"] }, "href": { "type": ["string", "null"] },
+              "country": { "type": "string" }, "booth": { "type": ["string", "null"] }, "href": { "type": ["string", "null"], "pattern": "^https?:\\/\\/[^\\s]+$" },
               "duplicateSourceRecordIds": { "type": "array", "items": { "type": "string", "pattern": "^src-[a-z0-9-]{1,48}$" } }
             }
           },
@@ -32,12 +32,12 @@
             "properties": {
               "status": { "enum": ["found", "not_found", "unavailable"] }, "inn": { "type": ["string", "null"] }, "ogrn": { "type": ["string", "null"] },
               "revenueRub": { "type": ["integer", "null"], "minimum": 0 }, "activity": { "enum": ["manufacturer", "distributor", "service", "unknown"] },
-              "website": { "type": ["string", "null"] }, "provenance": { "type": "object", "additionalProperties": false, "required": ["provider", "fixtureRef"], "properties": { "provider": { "type": "string" }, "fixtureRef": { "type": "string" } } }
+              "website": { "type": ["string", "null"], "pattern": "^https?:\\/\\/[^\\s]+$" }, "provenance": { "type": "object", "additionalProperties": false, "required": ["provider", "fixtureRef"], "properties": { "provider": { "type": "string", "minLength": 1 }, "fixtureRef": { "type": "string", "minLength": 1 } } }
             }
           },
           "registry": {
             "type": "object", "additionalProperties": false, "required": ["status", "provenance"],
-            "properties": { "status": { "enum": ["ok", "sanctioned", "not_found", "inactive", "unknown"] }, "provenance": { "type": "object", "additionalProperties": false, "required": ["source", "fixtureRef"], "properties": { "source": { "type": "string" }, "fixtureRef": { "type": "string" } } } }
+            "properties": { "status": { "enum": ["ok", "sanctioned", "not_found", "inactive", "unknown"] }, "provenance": { "type": "object", "additionalProperties": false, "required": ["source", "fixtureRef"], "properties": { "source": { "type": "string", "minLength": 1 }, "fixtureRef": { "type": "string", "minLength": 1 } } } }
           },
           "qualification": {
             "type": "object", "additionalProperties": false, "required": ["classification", "target", "nearTarget", "reason"],

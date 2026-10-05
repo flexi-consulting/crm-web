@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import Ajv from "ajv/dist/2020.js";
 import { readFile } from "node:fs/promises";
 import { createServer } from "../src/server.js";
-import { createCatalogBuildService, createSyntheticSourceAdapter, createSyntheticEnrichmentAdapter, createSyntheticRegistryAdapter } from "../src/catalog-build.js";
+import { createCatalogBuildService, createSyntheticSourceAdapter, createSyntheticEnrichmentAdapter, createSyntheticRegistryAdapter, normalizeEnrichment, normalizeRegistry, qualify } from "../src/catalog-build.js";
 
 const scopes = ["crm.catalog.build.synthetic", "crm.catalog.build.read.synthetic"];
 const headers = (profileId, granted = scopes) => ({ "x-test-profile": profileId, "x-test-scopes": granted.join(" ") });
@@ -162,6 +162,52 @@ test("provider failures are typed and preserved as partial unknown results", asy
     enrichmentAdapter: { async enrich() { throw new Error("private provider message"); } },
     registryAdapter: { async check() { throw new Error("private provider message"); } }
   });
+});
+
+test("not_found and unavailable enrichment discard contradictory target data and cannot qualify", async () => {
+  const targetData = { inn: "0000000001", ogrn: "0000000000001", revenueRub: 500000000, activity: "manufacturer", website: "https://example.invalid/company", provenance: { provider: "synthetic", fixtureRef: "contradictory-response" } };
+  for (const status of ["not_found", "unavailable"]) {
+    const enrichment = normalizeEnrichment({ ...targetData, status });
+    assert.equal(enrichment.status, status);
+    assert.equal(enrichment.inn, null);
+    assert.equal(enrichment.ogrn, null);
+    assert.equal(enrichment.revenueRub, null);
+    const qualification = qualify({ source: { country: "RU" }, enrichment, registry: { status: "ok" } });
+    assert.equal(qualification.target, false);
+  }
+  assert.equal(normalizeEnrichment({ ...targetData, status: "found", revenueRub: -1 }), null);
+
+  const source = { sourceRevision: "fixture-contradictory", records: [
+    { sourceRecordId: "src-contradict-1", name: "Synthetic Missing", country: "RU" },
+    { sourceRecordId: "src-contradict-2", name: "Synthetic Unavailable", country: "RU" }
+  ] };
+  const sources = { "demo-expo-001": source };
+  await withServer(async (base) => {
+    const body = await (await postBuild(base, "demo-profile-a", "catalog-build-key-contradiction")).json();
+    for (const company of body.artifact.companies) {
+      assert.equal(company.enrichment.inn, null);
+      assert.equal(company.enrichment.revenueRub, null);
+      assert.equal(company.registry.status, "unknown");
+      assert.equal(company.qualification.target, false);
+    }
+  }, { sources, sourceAdapter: { async load() { return source; } }, enrichmentAdapter: { async enrich(record) { return { ...targetData, status: record.sourceRecordId.endsWith("1") ? "not_found" : "unavailable" }; } }, registryAdapter: { async check() { throw new Error("should not be called without validated identity"); } } });
+});
+
+test("unsafe source href and empty provenance identifiers fail closed", async () => {
+  let enrichCalls = 0;
+  const source = { sourceRevision: "fixture-unsafe-href", records: [{ sourceRecordId: "src-unsafe-href", name: "Synthetic Unsafe Link", country: "RU", href: "javascript:alert(1)" }] };
+  const sources = { "demo-expo-001": source };
+  await withServer(async (base) => {
+    const response = await postBuild(base, "demo-profile-a", "catalog-build-key-unsafe-href");
+    assert.equal(response.status, 422);
+    assert.equal((await response.json()).code, "BUILD_SOURCE_INVALID");
+    assert.equal(enrichCalls, 0);
+  }, { sources, sourceAdapter: { async load() { return source; } }, enrichmentAdapter: { async enrich() { enrichCalls++; } } });
+
+  assert.equal(normalizeEnrichment({ status: "found", inn: "0000000001", provenance: { provider: " ", fixtureRef: "ref" } }), null);
+  assert.equal(normalizeEnrichment({ status: "found", inn: "0000000001", provenance: { provider: "provider", fixtureRef: " " } }), null);
+  assert.equal(normalizeRegistry({ status: "ok", source: " ", fixtureRef: "ref" }), null);
+  assert.equal(normalizeRegistry({ status: "ok", source: "registry", fixtureRef: " " }), null);
 });
 
 test("registry adapter failure is recorded as unknown with provenance, not as ok", async () => {

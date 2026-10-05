@@ -17,9 +17,19 @@ export const syntheticBuildSources = {
 const sha = (value, length = 20) => createHash("sha256").update(value).digest("hex").slice(0, length);
 const normalizeName = (value) => value.normalize("NFKC").trim().toLocaleLowerCase("en").replace(/[^\p{L}\p{N}]+/gu, " ").trim().replace(/\s+/g, " ");
 const validId = (value) => typeof value === "string" && /^src-[a-z0-9-]{1,48}$/.test(value);
+function safeHttpUrl(value) {
+  if (typeof value !== "string" || !value.trim() || /\s/.test(value)) return null;
+  try {
+    const url = new URL(value);
+    if (!["http:", "https:"].includes(url.protocol) || !url.hostname || url.username || url.password) return null;
+    return url.href;
+  } catch { return null; }
+}
 const validRecord = (record) => record && typeof record === "object" && !Array.isArray(record) &&
   validId(record.sourceRecordId) && typeof record.name === "string" && normalizeName(record.name).length > 0 &&
   typeof record.country === "string" && record.country.trim().length > 0 &&
+  (record.booth === undefined || record.booth === null || typeof record.booth === "string" && [...record.booth].length <= 80) &&
+  (record.href === undefined || record.href === null || safeHttpUrl(record.href) !== null) &&
   Object.keys(record).every((key) => ["sourceRecordId", "name", "country", "booth", "href"].includes(key));
 const stableCompanyId = (name) => `co-${sha(normalizeName(name), 20)}`;
 
@@ -47,28 +57,36 @@ export function createSyntheticRegistryAdapter() {
   return { async check(record) { return structuredClone(values[record.sourceRecordId] ?? { status: "not_found", source: "synthetic-registry", fixtureRef: "registry-no-match" }); } };
 }
 
-function normalizeEnrichment(value) {
+export function normalizeEnrichment(value) {
   const allowed = ["found", "not_found", "unavailable"];
-  if (!value || !allowed.includes(value.status) || !value.provenance || typeof value.provenance.provider !== "string" || typeof value.provenance.fixtureRef !== "string") return null;
+  if (!value || !allowed.includes(value.status) || !value.provenance || typeof value.provenance.provider !== "string" || !value.provenance.provider.trim() || typeof value.provenance.fixtureRef !== "string" || !value.provenance.fixtureRef.trim()) return null;
+  if (value.status !== "found") {
+    return { status: value.status, inn: null, ogrn: null, revenueRub: null, activity: "unknown", website: null, provenance: { provider: value.provenance.provider.trim(), fixtureRef: value.provenance.fixtureRef.trim() } };
+  }
+  if ((value.inn != null && (typeof value.inn !== "string" || !/^\d{10,12}$/.test(value.inn))) ||
+      (value.ogrn != null && (typeof value.ogrn !== "string" || !/^\d{13,15}$/.test(value.ogrn))) ||
+      (value.revenueRub != null && (!Number.isSafeInteger(value.revenueRub) || value.revenueRub < 0)) ||
+      (value.activity != null && !["manufacturer", "distributor", "service", "unknown"].includes(value.activity)) ||
+      (value.website != null && safeHttpUrl(value.website) === null)) return null;
   const inn = typeof value.inn === "string" && /^\d{10,12}$/.test(value.inn) ? value.inn : null;
   const ogrn = typeof value.ogrn === "string" && /^\d{13,15}$/.test(value.ogrn) ? value.ogrn : null;
   const revenueRub = Number.isSafeInteger(value.revenueRub) && value.revenueRub >= 0 ? value.revenueRub : null;
   const activity = ["manufacturer", "distributor", "service", "unknown"].includes(value.activity) ? value.activity : "unknown";
-  const website = typeof value.website === "string" && /^https:\/\/[^\s]+$/.test(value.website) ? value.website : null;
-  return { status: value.status, inn, ogrn, revenueRub, activity, website, provenance: { provider: value.provenance.provider, fixtureRef: value.provenance.fixtureRef } };
+  const website = value.website == null ? null : safeHttpUrl(value.website);
+  return { status: value.status, inn, ogrn, revenueRub, activity, website, provenance: { provider: value.provenance.provider.trim(), fixtureRef: value.provenance.fixtureRef.trim() } };
 }
 
-function normalizeRegistry(value) {
-  if (!value || !["ok", "sanctioned", "not_found", "inactive", "unknown"].includes(value.status) || typeof value.source !== "string" || typeof value.fixtureRef !== "string") return null;
-  return { status: value.status, provenance: { source: value.source, fixtureRef: value.fixtureRef } };
+export function normalizeRegistry(value) {
+  if (!value || !["ok", "sanctioned", "not_found", "inactive", "unknown"].includes(value.status) || typeof value.source !== "string" || !value.source.trim() || typeof value.fixtureRef !== "string" || !value.fixtureRef.trim()) return null;
+  return { status: value.status, provenance: { source: value.source.trim(), fixtureRef: value.fixtureRef.trim() } };
 }
 
-function qualify(company) {
+export function qualify(company) {
   const { enrichment: e, registry: r, source } = company;
   if (source.country !== "RU" || e.activity === "distributor" || e.activity === "service" || r.status === "sanctioned") {
     return { classification: "not_target", target: false, nearTarget: false, reason: r.status === "sanctioned" ? "registry_sanctioned" : "not_eligible_by_country_or_activity" };
   }
-  if (e.inn && e.activity === "manufacturer" && e.revenueRub !== null && e.revenueRub >= 150_000_000 && e.revenueRub <= 1_000_000_000 && r.status === "ok") {
+  if (e.status === "found" && e.inn && e.activity === "manufacturer" && e.revenueRub !== null && e.revenueRub >= 150_000_000 && e.revenueRub <= 1_000_000_000 && r.status === "ok") {
     return { classification: "target", target: true, nearTarget: false, reason: "manufacturer_revenue_and_registry_eligible" };
   }
   return { classification: "near_target", target: false, nearTarget: true, reason: !e.inn ? "inn_missing" : e.revenueRub === null ? "revenue_unknown" : r.status === "unknown" ? "registry_unknown" : r.status === "inactive" || r.status === "not_found" ? "registry_not_active" : e.activity === "unknown" ? "activity_unknown" : "outside_target_threshold" };
@@ -166,7 +184,7 @@ export function createCatalogBuildService({ sourceAdapter = createSyntheticSourc
           providerErrors.push({ stage: "registry", sourceRecordId: record.sourceRecordId, code: "REGISTRY_UNAVAILABLE" });
         }
         const company = {
-          id: stableCompanyId(record.normalizedName), name: record.name.trim().replace(/\s+/g, " "), source: { sourceRecordId: record.sourceRecordId, country: record.country, booth: record.booth ?? null, href: record.href ?? null, duplicateSourceRecordIds: record.duplicateSourceRecordIds },
+          id: stableCompanyId(record.normalizedName), name: record.name.trim().replace(/\s+/g, " "), source: { sourceRecordId: record.sourceRecordId, country: record.country, booth: record.booth ?? null, href: record.href == null ? null : safeHttpUrl(record.href), duplicateSourceRecordIds: record.duplicateSourceRecordIds },
           enrichment, registry
         };
         company.qualification = qualify(company);

@@ -38,7 +38,7 @@ This slice handles text fixtures only. It does not accept, transcribe, or store 
 
 ### S-02 catalog build boundary
 
-This implementation is limited to the fixture-only pre-publication stages in `exhibition/01-exhibition-catalog-to-sales-site`: source validation/import, name deduplication, enrichment outcome/provenance, registry outcome, conservative qualification, and deterministic artifact/report validation. It does not scrape a live exhibition catalog, generate the production HTML site, open a PR in a source repository, deploy, or publish. The documented live source pipeline and its remaining registry checks are not represented as complete here.
+This implementation is limited to the fixture-only pre-publication stages in `exhibition/01-exhibition-catalog-to-sales-site`: source validation/import, name deduplication, enrichment outcome/provenance, registry outcome, conservative qualification, and deterministic artifact/report validation. Only enrichment with status `found` can retain identity/revenue data or qualify as target; unsafe source links are rejected, and emitted URLs are limited to safe HTTP(S). It does not scrape a live exhibition catalog, generate the production HTML site, open a PR in a source repository, deploy, or publish. The documented live source pipeline and its remaining registry checks are not represented as complete here.
 
 The manifest follows the proposed [C14 connected application contract](https://github.com/trained-assist/trained-agent-architecture/blob/refs/pull/150/head/contracts/C14-CONNECTED-APPLICATION.md); runtime registration, compatibility negotiation, and authenticated platform readiness are not implemented here.
 
