@@ -113,7 +113,11 @@ export function createServer({
     const isCatalogBuild = url.pathname === "/api/v1/catalog-builds" && request.method === "POST";
     const catalogBuildMatch = url.pathname.match(/^\/api\/v1\/catalog-builds\/(build-[a-f0-9]{24})$/);
     const isCatalogBuildRead = Boolean(catalogBuildMatch) && (request.method === "GET" || request.method === "HEAD");
-    if (request.method !== "GET" && request.method !== "HEAD" && !isCreateIntent && !isAppendPreleadEvent && !isConfirmDeal && !isDealAction && !isCatalogBuild) {
+    const catalogBuildPreviewMatch = url.pathname.match(/^\/api\/v1\/catalog-builds\/(build-[a-f0-9]{24})\/preview$/);
+    const isCatalogBuildPreview = Boolean(catalogBuildPreviewMatch) && request.method === "POST";
+    const catalogPreviewMatch = url.pathname.match(/^\/api\/v1\/catalog-previews\/(preview-[a-f0-9]{24})$/);
+    const isCatalogPreviewRead = Boolean(catalogPreviewMatch) && (request.method === "GET" || request.method === "HEAD");
+    if (request.method !== "GET" && request.method !== "HEAD" && !isCreateIntent && !isAppendPreleadEvent && !isConfirmDeal && !isDealAction && !isCatalogBuild && !isCatalogBuildPreview) {
       response.setHeader("allow", "GET, HEAD, POST");
       return json(response, 405, { error: "method_not_allowed" });
     }
@@ -195,6 +199,27 @@ export function createServer({
       if (!parsed.value || typeof parsed.value !== "object" || Array.isArray(parsed.value) || Object.keys(parsed.value).length !== 1 || typeof parsed.value.exhibitionId !== "string" || !/^demo-expo-[0-9]{3}$/.test(parsed.value.exhibitionId)) return json(response, 400, { error: "invalid_catalog_build_request", code: "BUILD_INVALID_REQUEST" });
       const result = await catalogBuilds.build({ profileId: context.profileId, idempotencyKey, exhibitionId: parsed.value.exhibitionId });
       return json(response, result.status, result.body);
+    }
+    if (isCatalogBuildPreview) {
+      const context = await trustedProfile(request, response, "crm.catalog.preview.synthetic");
+      if (!context) return;
+      if (url.searchParams.size > 0) return json(response, 400, { error: "invalid_query", code: "PREVIEW_INVALID_QUERY" });
+      const result = catalogBuilds.preview({ profileId: context.profileId, buildId: catalogBuildPreviewMatch[1] });
+      return json(response, result.status, result.body);
+    }
+    if (isCatalogPreviewRead) {
+      if (url.searchParams.size > 0) return json(response, 400, { error: "invalid_query", code: "PREVIEW_INVALID_QUERY" });
+      const context = await trustedProfile(request, response, "crm.catalog.preview.read.synthetic");
+      if (!context) return;
+      const result = catalogBuilds.getPreview({ profileId: context.profileId, previewId: catalogPreviewMatch[1] });
+      if (result.status !== 200) return json(response, result.status, result.body);
+      response.writeHead(200, {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+        "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'none'; img-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+      });
+      return response.end(result.html);
     }
     if (isCatalogBuildRead) {
       if (url.searchParams.size > 0) return json(response, 400, { error: "invalid_query", code: "BUILD_INVALID_QUERY" });

@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
+import { renderCatalogPreview, catalogPreviewGeneratorRevision } from "./catalog-preview.js";
 
 export const syntheticBuildSources = {
   "demo-expo-001": {
     sourceRevision: "fixture-expo-001-r1",
     records: [
-      { sourceRecordId: "src-demo-001", name: "Example Machine Works", country: "RU", booth: "A-01" },
+      { sourceRecordId: "src-demo-001", name: "Example Machine Works", country: "RU", booth: "A-01", href: "https://example.invalid/catalog/example-machine-works" },
       { sourceRecordId: "src-demo-002", name: "  EXAMPLE   MACHINE WORKS ", country: "RU", booth: "A-02" },
       { sourceRecordId: "src-demo-003", name: "Synthetic Trade House", country: "RU", booth: "B-03" },
       { sourceRecordId: "src-demo-004", name: "Sample Inactive Manufacturer", country: "RU", booth: "C-04" },
@@ -124,6 +125,7 @@ export function createCatalogBuildService({ sourceAdapter = createSyntheticSourc
   const builds = new Map();
   const byKey = new Map();
   const running = new Map();
+  const previews = new Map();
 
   async function build({ profileId, idempotencyKey, exhibitionId }) {
     const existingId = byKey.get(`${profileId}\0${idempotencyKey}`);
@@ -215,5 +217,33 @@ export function createCatalogBuildService({ sourceAdapter = createSyntheticSourc
     const { profileId: _profileId, ...body } = build;
     return { status: 200, body };
   }
-  return { build, get };
+  function preview({ profileId, buildId }) {
+    const sourceBuild = builds.get(buildId);
+    if (!sourceBuild || sourceBuild.profileId !== profileId) return { status: 404, body: { error: "catalog_build_not_found", code: "BUILD_NOT_FOUND" } };
+    if (sourceBuild.report.validation?.valid !== true) return { status: 409, body: { error: "validated_build_required", code: "BUILD_NOT_VALIDATED" } };
+    const generated = renderCatalogPreview({ buildId, artifact: sourceBuild.artifact, buildReport: sourceBuild.report });
+    if (!generated.valid) return { status: 422, body: { error: "preview_validation_failed", code: "PREVIEW_VALIDATION_FAILED", report: generated.report } };
+    const previewId = `preview-${sha(`${buildId}\0${catalogPreviewGeneratorRevision}`, 24)}`;
+    if (previews.has(previewId)) return { status: 200, body: { ...previews.get(previewId).descriptor, replayed: true } };
+    const record = {
+      profileId,
+      html: generated.html,
+      descriptor: {
+        previewId, buildId, sourceRevision: sourceBuild.artifact.sourceRevision,
+        generatorRevision: catalogPreviewGeneratorRevision,
+        url: `/api/v1/catalog-previews/${previewId}`,
+        report: generated.report,
+        published: false,
+        replayed: false
+      }
+    };
+    previews.set(previewId, record);
+    return { status: 201, body: record.descriptor };
+  }
+  function getPreview({ profileId, previewId }) {
+    const preview = previews.get(previewId);
+    if (!preview || preview.profileId !== profileId) return { status: 404, body: { error: "catalog_preview_not_found", code: "PREVIEW_NOT_FOUND" } };
+    return { status: 200, html: preview.html, descriptor: preview.descriptor };
+  }
+  return { build, get, preview, getPreview };
 }

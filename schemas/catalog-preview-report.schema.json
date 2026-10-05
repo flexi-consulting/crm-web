@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crm-web.example.invalid/schemas/catalog-preview-report.schema.json",
+  "title": "Synthetic catalog HTML preview validation report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "buildId", "sourceRevision", "generatorRevision", "valid", "issues", "companyCount", "linkCount", "published"],
+  "properties": {
+    "schemaVersion": { "const": "1.0.0" },
+    "buildId": { "type": "string", "pattern": "^build-[a-f0-9]{24}$" },
+    "sourceRevision": { "type": "string", "minLength": 1 },
+    "generatorRevision": { "const": "catalog-html-preview-1.0.0" },
+    "valid": { "type": "boolean" },
+    "issues": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["code", "token"], "properties": { "code": { "const": "required_preview_markup_missing" }, "token": { "type": "string" } } } },
+    "companyCount": { "type": "integer", "minimum": 0 },
+    "linkCount": { "type": "integer", "minimum": 0 },
+    "published": { "const": false }
+  }
+}

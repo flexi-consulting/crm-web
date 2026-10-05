@@ -1,16 +1,18 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import Ajv from "ajv/dist/2020.js";
+import vm from "node:vm";
 import { readFile } from "node:fs/promises";
 import { createServer } from "../src/server.js";
 import { createCatalogBuildService, createSyntheticSourceAdapter, createSyntheticEnrichmentAdapter, createSyntheticRegistryAdapter, normalizeEnrichment, normalizeRegistry, qualify } from "../src/catalog-build.js";
+import { renderCatalogPreview } from "../src/catalog-preview.js";
 
-const scopes = ["crm.catalog.build.synthetic", "crm.catalog.build.read.synthetic"];
+const scopes = ["crm.catalog.build.synthetic", "crm.catalog.build.read.synthetic", "crm.catalog.preview.synthetic", "crm.catalog.preview.read.synthetic"];
 const headers = (profileId, granted = scopes) => ({ "x-test-profile": profileId, "x-test-scopes": granted.join(" ") });
 
-async function withServer(run, { sourceAdapter, enrichmentAdapter, registryAdapter, sources } = {}) {
-  const catalogBuilds = createCatalogBuildService({ sourceAdapter, enrichmentAdapter, registryAdapter, sources });
-  const server = createServer({ catalogBuilds, resolveTrustedProfile: (request) => ({ profileId: request.headers["x-test-profile"], scopes: (request.headers["x-test-scopes"] ?? "").split(" ").filter(Boolean) }) });
+async function withServer(run, { sourceAdapter, enrichmentAdapter, registryAdapter, sources, catalogBuilds, trusted = true } = {}) {
+  catalogBuilds ??= createCatalogBuildService({ sourceAdapter, enrichmentAdapter, registryAdapter, sources });
+  const server = createServer({ catalogBuilds, ...(trusted ? { resolveTrustedProfile: (request) => ({ profileId: request.headers["x-test-profile"], scopes: (request.headers["x-test-scopes"] ?? "").split(" ").filter(Boolean) }) } : {}) });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
   try { await run(`http://127.0.0.1:${address.port}`); }
@@ -232,4 +234,94 @@ test("build reads are profile isolated, scoped, and absent from capability disco
     const manifest = await (await fetch(`${base}/api/v1/manifest`)).json();
     assert.equal(manifest.capabilities.some((capability) => capability.id.includes("catalog.build")), false);
   });
+});
+
+test("preview renders required catalog sections, cards, links, filters, badges, and build provenance", async () => {
+  let sourceCalls = 0, enrichmentCalls = 0, registryCalls = 0;
+  const sourceFixtures = createSyntheticSourceAdapter(), enrichmentFixtures = createSyntheticEnrichmentAdapter(), registryFixtures = createSyntheticRegistryAdapter();
+  await withServer(async (base) => {
+    const buildResponse = await postBuild(base, "demo-profile-a", "preview-source-build-01");
+    const build = await buildResponse.json();
+    const callsBeforePreview = [sourceCalls, enrichmentCalls, registryCalls];
+    const previewResponse = await fetch(`${base}/api/v1/catalog-builds/${build.buildId}/preview`, { method: "POST", headers: headers("demo-profile-a") });
+    assert.equal(previewResponse.status, 201);
+    const descriptor = await previewResponse.json();
+    const { "catalog-preview-response": descriptorSchema } = await validators("catalog-preview-response", "catalog-preview-report", "catalog-preview-error");
+    assert.equal(descriptorSchema(descriptor), true);
+    assert.equal(descriptor.buildId, build.buildId);
+    assert.equal(descriptor.sourceRevision, build.artifact.sourceRevision);
+    assert.equal(descriptor.report.valid, true);
+    assert.equal(descriptor.report.published, false);
+
+    const pageResponse = await fetch(`${base}${descriptor.url}`, { headers: headers("demo-profile-a") });
+    assert.equal(pageResponse.status, 200);
+    assert.match(pageResponse.headers.get("content-security-policy"), /connect-src 'none'/);
+    const html = await pageResponse.text();
+    for (const token of ["data-preview-only=\"true\"", "id=\"searchInput\"", "data-filter=\"target\"", "data-filter=\"near\"", "data-filter=\"not-target\"", "data-filter=\"registry-review\"", "id=\"alphaNav\"", "id=\"catalog\"", "class=\"company-card", "class=\"target-badge\"", "class=\"near-badge\"", "class=\"not-target-badge\"", "class=\"enrichment-badge", "class=\"registry-badge", "class=\"card-link profile-link\"", "class=\"card-link website-link\""]) assert.ok(html.includes(token), `missing ${token}`);
+    const inlineScript = html.match(/<script>([\s\S]*?)<\/script>/)?.[1];
+    assert.ok(inlineScript);
+    assert.doesNotThrow(() => new vm.Script(inlineScript));
+    assert.ok(html.includes(build.buildId));
+    assert.ok(html.includes(build.artifact.sourceRevision));
+    assert.equal(html.includes("NOTES_API"), false);
+    assert.equal(html.includes("getUserMedia"), false);
+    assert.equal(html.includes("t.me/"), false);
+    assert.deepEqual([sourceCalls, enrichmentCalls, registryCalls], callsBeforePreview);
+
+    const replay = await fetch(`${base}/api/v1/catalog-builds/${build.buildId}/preview`, { method: "POST", headers: headers("demo-profile-a") });
+    assert.equal(replay.status, 200);
+    assert.equal((await replay.json()).previewId, descriptor.previewId);
+    const replayPage = await fetch(`${base}${descriptor.url}`, { headers: headers("demo-profile-a") });
+    assert.equal(await replayPage.text(), html);
+    const manifest = await (await fetch(`${base}/api/v1/manifest`)).json();
+    assert.equal(manifest.capabilities.some((capability) => capability.id.includes("catalog.preview")), false);
+    assert.equal(manifest.capabilities.some((capability) => capability.id.includes("catalog.build")), false);
+  }, {
+    sourceAdapter: { async load(id) { sourceCalls++; return sourceFixtures.load(id); } },
+    enrichmentAdapter: { async enrich(record) { enrichmentCalls++; return enrichmentFixtures.enrich(record); } },
+    registryAdapter: { async check(record) { registryCalls++; return registryFixtures.check(record); } }
+  });
+});
+
+test("preview escapes hostile company names and omits unsafe links", async () => {
+  const source = { sourceRevision: "fixture-hostile-text-r1", records: [{
+    sourceRecordId: "src-hostile-text", name: "<script>alert('preview')</script> & Co", country: "RU", booth: "H-1", href: "https://safe.example.invalid/profile"
+  }] };
+  const sources = { "demo-expo-001": source };
+  await withServer(async (base) => {
+    const build = await (await postBuild(base, "demo-profile-a", "preview-hostile-build-01")).json();
+    const preview = await (await fetch(`${base}/api/v1/catalog-builds/${build.buildId}/preview`, { method: "POST", headers: headers("demo-profile-a") })).json();
+    const html = await (await fetch(`${base}${preview.url}`, { headers: headers("demo-profile-a") })).text();
+    assert.ok(html.includes("&lt;script&gt;alert(&#39;preview&#39;)&lt;/script&gt; &amp; Co"));
+    assert.equal(html.includes("<script>alert('preview')</script>"), false);
+    assert.ok(html.includes('href="https://safe.example.invalid/profile"'));
+
+    const forged = structuredClone(build.artifact);
+    forged.companies[0].name = "</h3><img src=x onerror=alert(1)>";
+    forged.companies[0].source.href = "javascript:alert(2)";
+    forged.companies[0].enrichment.website = 'https://unsafe.example.invalid/" onmouseover="alert(3)';
+    const rendered = renderCatalogPreview({ buildId: build.buildId, artifact: forged, buildReport: build.report });
+    assert.equal(rendered.valid, true);
+    assert.ok(rendered.html.includes("&lt;/h3&gt;&lt;img src=x onerror=alert(1)&gt;"));
+    assert.equal(rendered.html.includes('href="javascript:alert(2)"'), false);
+    assert.equal(rendered.html.includes('onmouseover="alert(3)"'), false);
+  }, { sources, sourceAdapter: { async load() { return source; } }, enrichmentAdapter: { async enrich() { return { status: "not_found", provenance: { provider: "synthetic", fixtureRef: "no-data" } }; } } });
+});
+
+test("preview routes are profile scoped and fail closed without trusted identity", async () => {
+  const catalogBuilds = createCatalogBuildService();
+  const built = await catalogBuilds.build({ profileId: "demo-profile-a", idempotencyKey: "preview-deny-build-01", exhibitionId: "demo-expo-001" });
+  const buildId = built.body.buildId;
+  const preview = catalogBuilds.preview({ profileId: "demo-profile-a", buildId });
+  assert.equal(preview.status, 201);
+  await withServer(async (base) => {
+    const foreignCreate = await fetch(`${base}/api/v1/catalog-builds/${buildId}/preview`, { method: "POST", headers: headers("demo-profile-b") });
+    assert.equal(foreignCreate.status, 404);
+    const foreignRead = await fetch(`${base}${preview.body.url}`, { headers: headers("demo-profile-b") });
+    assert.equal(foreignRead.status, 404);
+  }, { catalogBuilds });
+  await withServer(async (base) => {
+    const denied = await fetch(`${base}/api/v1/catalog-builds/${buildId}/preview`, { method: "POST" });
+    assert.equal(denied.status, 503);
+  }, { catalogBuilds, trusted: false });
 });
