@@ -10,9 +10,10 @@
   },
   "devDependencies": {
     "ajv": "^8.17.1",
-    "ajv-formats": "^3.0.1"
+    "ajv-formats": "^3.0.1",
+    "wrangler": "4.147.0"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   }
 }

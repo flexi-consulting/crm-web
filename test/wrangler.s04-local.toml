@@ -1,0 +1,8 @@
+name = "crm-web-s04-contract-local"
+main = "../fixtures/d1-worker.js"
+compatibility_date = "2025-04-01"
+
+[[d1_databases]]
+binding = "CRM_DB"
+database_name = "crm-web-s04-contract-local"
+database_id = "00000000-0000-4000-8000-000000000001"
