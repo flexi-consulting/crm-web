@@ -1,8 +1,10 @@
 import { createS04D1Repository } from "../src/s04-d1-repository.js";
 import { createDealReviewService } from "../src/deal-reviews.js";
 import { createS04D1ConfirmedDeals } from "../src/s04-d1-confirmed-deals.js";
+import { createWeeekCorrelationProvider } from "../src/weeek-correlation-provider.js";
 
 let fakeProviderCalls = 0;
+const mockWeeekDeals = new Map();
 const localNow = "2026-10-06T09:00:00.000Z";
 
 const respond = (status, body) => new Response(JSON.stringify(body), { status,
@@ -17,13 +19,34 @@ export default {
     try { args = await request.json(); } catch { return respond(400, { error: "invalid_json" }); }
     const repository = createS04D1Repository(env.CRM_DB);
     try {
-      if (path.startsWith("/review/") || path === "/operation/get" || path === "/provider-count") {
+      if (path.startsWith("/review/") || path.startsWith("/operation/") || path === "/provider-count") {
         const profileId = request.headers.get("x-test-profile") ?? "demo-profile-a";
-        const provider = { async create({ operationId, request: deal }) {
+        const simpleProvider = { async create({ operationId, request: deal }) {
           fakeProviderCalls++;
           if (deal.title === "Unknown outcome") throw new Error("synthetic_timeout_after_reservation");
           return { status: "created", dealId: `demo-deal-${operationId.slice(3)}` };
         } };
+        const transport = {
+          async createDeal({ statusId, body }) {
+            fakeProviderCalls++;
+            const marker = body.description.match(/\[crm-web-s04:(op-[0-9a-f-]{36}):[0-9a-f]{64}\]/)?.[1];
+            const deal = { id: `demo-deal-${marker?.slice(3)}`, statusId, ...body };
+            mockWeeekDeals.set(deal.id, deal);
+            if (body.title === "Timeout and recover") throw new Error("synthetic_timeout_after_post");
+            return { success: true, deal: { id: deal.id } };
+          },
+          async listDeals({ statusId, limit, offset }) {
+            const all = [...mockWeeekDeals.values()].filter((deal) => deal.statusId === statusId);
+            return { success: true, deals: all.slice(offset, offset + limit),
+              hasMoreDeals: offset + limit < all.length };
+          },
+          async getDeal({ dealId }) { return { success: true, deal: mockWeeekDeals.get(dealId) ?? null }; }
+        };
+        const provider = request.headers.get("x-test-provider-mode") === "correlation"
+          ? createWeeekCorrelationProvider({ transport,
+            resolveStatusIds: async (id) => id === "demo-profile-a"
+              ? ["demo-status-lead-a"] : ["demo-status-lead-b"] })
+          : simpleProvider;
         const confirmedDeals = createS04D1ConfirmedDeals({ repository, provider, now: () => localNow });
         const reviews = createDealReviewService({ confirmedDeals, storagePort: repository,
           now: () => localNow });
@@ -44,6 +67,7 @@ export default {
           result = await reviews.confirm({ profileId, reviewId: args.reviewId,
             revision: args.revision, trustedReceipt });
         } else if (path === "/operation/get") result = await confirmedDeals.get({ profileId, operationId: args.operationId });
+        else if (path === "/operation/reconcile") result = await confirmedDeals.reconcile({ profileId, operationId: args.operationId });
         else return respond(200, { calls: fakeProviderCalls });
         return respond(result.status, result.body);
       }

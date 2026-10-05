@@ -57,12 +57,53 @@ async function call(base, path, body) {
   assert.equal(response.status, 200, JSON.stringify(result));
   return result;
 }
-async function reviewedCall(base, path, body, { profile = "demo-profile-a", approval = false } = {}) {
+async function reviewedCall(base, path, body, { profile = "demo-profile-a", approval = false,
+  correlation = false } = {}) {
   const response = await fetch(`${base}${path}`, { method: "POST", headers: {
     "content-type": "application/json", "x-test-profile": profile,
+    ...(correlation ? { "x-test-provider-mode": "correlation" } : {}),
     ...(approval ? { "x-test-approval": "approved" } : {}) }, body: JSON.stringify(body) });
   return { status: response.status, body: await response.json() };
 }
+
+test("reviewed D1 reservation reconciles a mock Weeek timeout by marker without another POST", async () => {
+  const root = mkdtempSync(join(tmpdir(), "crm-s04-correlation-d1-"));
+  let running;
+  try {
+    const migrated = spawnSync(compatibleNode, [wrangler, "d1", "execute", "CRM_DB", "--config", config,
+      "--local", "--persist-to", root, "--file", migration, "--yes", "--json"], { cwd, encoding: "utf8" });
+    assert.equal(migrated.status, 0, migrated.stderr || migrated.stdout);
+    running = await startWorker(root);
+    const draft = { companyId: "demo-company-001", exhibitionId: "demo-expo-001",
+      title: "Timeout and recover", companyInn: "1234567890",
+      contactName: "Example Person", dealComment: "Synthetic catalog inquiry" };
+    await call(running.base, "/seed-prelead", { preleadId: "prelead-correlation-a",
+      profileRef: "demo-profile-a", eventId: draft.exhibitionId, companyId: draft.companyId });
+    const prepared = await reviewedCall(running.base, "/review/prepare", draft);
+    assert.equal(prepared.status, 201);
+    const confirmation = { reviewId: prepared.body.reviewId, revision: prepared.body.revision };
+    const unknown = await reviewedCall(running.base, "/review/confirm", confirmation,
+      { approval: true, correlation: true });
+    assert.equal(unknown.status, 202);
+    assert.equal(unknown.body.status, "unknown");
+    assert.equal((await reviewedCall(running.base, "/provider-count", {})).body.calls, 1);
+    const reconciled = await reviewedCall(running.base, "/operation/reconcile",
+      { operationId: prepared.body.operationId }, { correlation: true });
+    assert.equal(reconciled.status, 200, JSON.stringify(reconciled.body));
+    assert.equal(reconciled.body.status, "created");
+    assert.equal(reconciled.body.linkStatus, "linked");
+    assert.match(reconciled.body.dealId, /^demo-deal-/);
+    assert.equal((await reviewedCall(running.base, "/provider-count", {})).body.calls, 1);
+    const replay = await reviewedCall(running.base, "/review/confirm", confirmation,
+      { approval: true, correlation: true });
+    assert.equal(replay.status, 200);
+    assert.equal(replay.body.replayed, true);
+    assert.equal((await reviewedCall(running.base, "/provider-count", {})).body.calls, 1);
+  } finally {
+    if (running) await stopWorker(running.child);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("reviewed S-04 HTTP contract persists trusted approval, survives restart, and never retries unknown", async () => {
   const root = mkdtempSync(join(tmpdir(), "crm-s04-reviewed-d1-"));

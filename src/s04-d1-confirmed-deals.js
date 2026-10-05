@@ -8,6 +8,15 @@ export function createS04D1ConfirmedDeals({ repository, provider, now = () => ne
     const op = await repository.getOperation({ profileRef: profileId, operationId });
     return op ? { status: 200, body: view(op) } : { status: 404, body: { error: "operation_not_found", operationId } };
   }
+  async function recordVerified({ profileId, operationId, outcome }) {
+    const recorded = await repository.recordCreated({ profileRef: profileId, operationId,
+      dealId: outcome.dealId, providerRef: outcome.providerRef ?? null, now: now() });
+    if (recorded.status !== "created" && recorded.status !== "replay")
+      return { status: 202, body: view(await repository.getOperation({ profileRef: profileId, operationId })) };
+    const linked = await repository.linkVerifiedDeal({ profileRef: profileId, operationId, now: now() });
+    const operation = linked.operation ?? await repository.getOperation({ profileRef: profileId, operationId });
+    return { status: 200, body: view(operation) };
+  }
   async function create({ profileId, idempotencyKey, request, reviewEvidence }) {
     // Evidence is supplied by the reviewed domain handler, never by a direct HTTP body.
     if (!reviewEvidence || idempotencyKey !== reviewEvidence.reviewId ||
@@ -25,18 +34,12 @@ export function createS04D1ConfirmedDeals({ repository, provider, now = () => ne
     if (reserved.status !== "reserved_unknown") return { status: reserved.status === "storage_unavailable" ? 503 : 409,
       body: { error: reserved.status, operationId: request.operationId } };
     let outcome;
-    try { outcome = await provider.create({ operationId: request.operationId, request }); }
+    try { outcome = await provider.create({ profileId, operationId: request.operationId,
+      request, requestHash: reviewEvidence.requestHash }); }
     catch { return { status: 202, body: view(reserved.operation) }; }
     if (outcome?.status !== "created") return { status: 202, body: view(reserved.operation) };
-    const recorded = await repository.recordCreated({ profileRef: profileId,
-      operationId: request.operationId, dealId: outcome.dealId, now: now() });
-    if (recorded.status !== "created" && recorded.status !== "replay")
-      return { status: 202, body: view(reserved.operation) };
-    const linked = await repository.linkVerifiedDeal({ profileRef: profileId,
-      operationId: request.operationId, now: now() });
-    const operation = linked.operation ?? await repository.getOperation({ profileRef: profileId,
-      operationId: request.operationId });
-    return { status: 201, body: view(operation) };
+    const result = await recordVerified({ profileId, operationId: request.operationId, outcome });
+    return result.status === 200 ? { ...result, status: 201 } : result;
   }
   async function repair({ profileId, operationId }) {
     const op = await repository.getOperation({ profileRef: profileId, operationId });
@@ -47,8 +50,24 @@ export function createS04D1ConfirmedDeals({ repository, provider, now = () => ne
       ? { status: 200, body: view(linked.operation) }
       : { status: 409, body: { error: linked.status, operationId } };
   }
-  // A provider read needs a durable correlation contract; absent that, unknown
-  // remains unknown and no second create can occur.
-  async function reconcile({ profileId, operationId }) { return get({ profileId, operationId }); }
+  async function reconcile({ profileId, operationId }) {
+    const operation = await repository.getOperation({ profileRef: profileId, operationId });
+    if (!operation) return { status: 404, body: { error: "operation_not_found", operationId } };
+    if (operation.status !== "unknown") return { status: 200, body: view(operation) };
+    if (typeof provider.reconcile !== "function")
+      return { status: 202, body: { ...view(operation), reason: "correlation_unavailable" } };
+    const review = await repository.getReview({ profileRef: profileId, reviewId: operation.reviewId });
+    if (!review || review.operationId !== operationId || review.requestHash !== operation.requestHash ||
+        !review.snapshot?.details || review.snapshot.details.companyId !== operation.companyId ||
+        review.snapshot.details.exhibitionId !== operation.eventId)
+      return { status: 202, body: { ...view(operation), reason: "review_binding_unavailable" } };
+    let result;
+    try { result = await provider.reconcile({ profileId, operationId,
+      requestHash: operation.requestHash, request: review.snapshot.details }); }
+    catch { return { status: 202, body: { ...view(operation), reason: "provider_unavailable" } }; }
+    if (result?.status !== "created") return { status: 202, body: { ...view(operation),
+      reason: result?.reason ?? "correlation_unresolved" } };
+    return recordVerified({ profileId, operationId, outcome: result });
+  }
   return { create, get, repair, reconcile };
 }
