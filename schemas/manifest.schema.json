@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CRM Web contract manifest",
+  "type": "object",
+  "required": ["contractVersion", "service", "mode", "capabilities", "endpoints"],
+  "properties": {
+    "contractVersion": { "type": "string", "pattern": "^1\\.0\\.0$" },
+    "service": { "const": "crm-web" },
+    "mode": { "const": "synthetic-read-only" },
+    "capabilities": { "type": "array", "contains": { "const": "exhibitions.catalog.read" } },
+    "endpoints": { "type": "object", "required": ["readiness", "catalog"] }
+  },
+  "additionalProperties": false
+}

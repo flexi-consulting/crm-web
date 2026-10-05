@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Exhibition catalog · CRM Web</title>
+  <style>
+    :root { color-scheme: light; font: 16px/1.5 system-ui, sans-serif; color: #172033; background: #f4f6fa; }
+    body { max-width: 850px; margin: 4rem auto; padding: 0 1.25rem; }
+    header { margin-bottom: 2rem; } h1 { margin-bottom: .3rem; font-size: clamp(2rem, 5vw, 3rem); }
+    .hint { color: #536078; } #status { display: inline-block; padding: .25rem .7rem; border-radius: 2rem; background: #dff5e8; color: #155b32; }
+    ul { list-style: none; padding: 0; display: grid; gap: 1rem; }
+    li { background: white; border: 1px solid #e1e6ef; border-radius: .8rem; padding: 1.2rem; box-shadow: 0 3px 14px #15223a0c; }
+    li h2 { margin: 0 0 .25rem; font-size: 1.15rem; } li p { margin: .2rem 0; color: #536078; }
+    a { color: #295bd6; }
+  </style>
+</head>
+<body>
+  <header><p id="status">Loading</p><h1>Exhibition catalog</h1><p class="hint">Synthetic sample data served through the versioned, read-only CRM Web contract.</p></header>
+  <main><ul id="catalog" aria-live="polite"></ul></main>
+  <script>
+    const status = document.querySelector('#status');
+    fetch('/api/v1/catalog').then((response) => {
+      if (!response.ok) throw new Error('Catalog unavailable');
+      return response.json();
+    }).then(({ items }) => {
+      const list = document.querySelector('#catalog');
+      for (const item of items) {
+        const card = document.createElement('li');
+        const title = document.createElement('h2');
+        title.textContent = item.name;
+        const details = document.createElement('p');
+        details.textContent = `${item.city}, ${item.country} · ${item.startsOn}–${item.endsOn}`;
+        const linkLine = document.createElement('p');
+        const link = document.createElement('a');
+        link.href = item.website;
+        link.textContent = 'Event information';
+        linkLine.append(link);
+        card.append(title, details, linkLine);
+        list.append(card);
+      }
+      status.textContent = 'Read-only · synthetic data';
+    }).catch(() => { status.textContent = 'Catalog unavailable'; });
+  </script>
+</body>
+</html>
