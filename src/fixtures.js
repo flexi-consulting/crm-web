@@ -40,3 +40,9 @@ export const syntheticProfileCompanies = {
   "demo-profile-a": ["demo-company-001"],
   "demo-profile-b": ["demo-company-002"]
 };
+
+// Synthetic empty preleads used to exercise S-03 timelines. No note or disposition text is seeded.
+export const syntheticPreleads = [
+  { id: "demo-prelead-001", profileId: "demo-profile-a", companyId: "demo-company-001", exhibitionId: "demo-expo-001", stage: "draft" },
+  { id: "demo-prelead-002", profileId: "demo-profile-b", companyId: "demo-company-002", exhibitionId: "demo-expo-002", stage: "draft" }
+];

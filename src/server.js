@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { catalog } from "./fixtures.js";
 import { createDealIntentService, isDealIntentRequest } from "./deal-intents.js";
+import { createPreleadTimelineService, normalizePreleadEventRequest } from "./prelead-timeline.js";
 
 const manifest = {
   serviceId: "crm-web.exhibitions",
@@ -13,7 +14,7 @@ const manifest = {
   },
   platformContractRange: ">=1.0.0 <2.0.0",
   domainApiVersion: "1.0.0",
-  // Synthetic intent routes are deliberately not published as discoverable capabilities.
+  // Synthetic prelead and deal-intent routes are deliberately not discoverable capabilities.
   capabilities: [
     {
       id: "exhibitions.catalog.read", version: "1.0.0", required: true,
@@ -74,7 +75,11 @@ async function readJson(request) {
   catch { return { error: "invalid_json" }; }
 }
 
-export function createServer({ resolveTrustedProfile, dealIntents = createDealIntentService() } = {}) {
+export function createServer({
+  resolveTrustedProfile,
+  dealIntents = createDealIntentService(),
+  preleadTimeline = createPreleadTimelineService()
+} = {}) {
   async function trustedProfile(request, response, requiredScope) {
     if (!resolveTrustedProfile) {
       json(response, 503, { error: "trusted_profile_unavailable" });
@@ -96,7 +101,9 @@ export function createServer({ resolveTrustedProfile, dealIntents = createDealIn
   return nodeCreateServer(async (request, response) => {
     const url = new URL(request.url ?? "/", "http://localhost");
     const isCreateIntent = url.pathname === "/api/v1/deal-intents" && request.method === "POST";
-    if (request.method !== "GET" && request.method !== "HEAD" && !isCreateIntent) {
+    const timelineEventMatch = url.pathname.match(/^\/api\/v1\/preleads\/(demo-prelead-[0-9]{3})\/events$/);
+    const isAppendPreleadEvent = Boolean(timelineEventMatch) && request.method === "POST";
+    if (request.method !== "GET" && request.method !== "HEAD" && !isCreateIntent && !isAppendPreleadEvent) {
       response.setHeader("allow", "GET, HEAD");
       return json(response, 405, { error: "method_not_allowed" });
     }
@@ -151,6 +158,29 @@ export function createServer({ resolveTrustedProfile, dealIntents = createDealIn
       const context = await trustedProfile(request, response, "crm.deal_intents.read");
       if (!context) return;
       const result = await dealIntents.get({ profileId: context.profileId, id: intentMatch[1] });
+      return json(response, result.status, result.body);
+    }
+    const timelineMatch = url.pathname.match(/^\/api\/v1\/preleads\/(demo-prelead-[0-9]{3})\/timeline$/);
+    if (timelineMatch && (request.method === "GET" || request.method === "HEAD")) {
+      if (url.searchParams.size > 0) return json(response, 400, { error: "invalid_query" });
+      const context = await trustedProfile(request, response, "crm.preleads.read");
+      if (!context) return;
+      const result = preleadTimeline.getTimeline({ profileId: context.profileId, preleadId: timelineMatch[1] });
+      return json(response, result.status, result.body);
+    }
+    if (isAppendPreleadEvent) {
+      if (url.searchParams.size > 0) return json(response, 400, { error: "invalid_query" });
+      const context = await trustedProfile(request, response, "crm.preleads.events.append");
+      if (!context) return;
+      const parsed = await readJson(request);
+      if (parsed.error) return json(response, parsed.error === "content_type_required" ? 415 : 400, { error: parsed.error });
+      const eventRequest = normalizePreleadEventRequest(parsed.value);
+      if (!eventRequest) return json(response, 400, { error: "invalid_event_request" });
+      const result = preleadTimeline.appendEvent({
+        profileId: context.profileId,
+        preleadId: timelineEventMatch[1],
+        request: eventRequest
+      });
       return json(response, result.status, result.body);
     }
     if (url.pathname === "/" || url.pathname === "/index.html") {

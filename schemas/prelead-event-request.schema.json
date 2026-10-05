@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crm-web.example.invalid/schemas/prelead-event-request.schema.json",
+  "title": "Append a synthetic prelead timeline event",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": ["type", "noteText", "operationId"],
+      "properties": {
+        "type": { "const": "note_added" },
+        "noteText": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "operationId": { "$ref": "#/$defs/operationId" }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": ["type", "reason", "operationId"],
+      "properties": {
+        "type": { "const": "rejection_added" },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "operationId": { "$ref": "#/$defs/operationId" }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": ["type", "targetEventId", "operationId"],
+      "properties": {
+        "type": { "const": "rejection_undone" },
+        "targetEventId": { "type": "string", "pattern": "^evt-[0-9a-f-]{36}$" },
+        "operationId": { "$ref": "#/$defs/operationId" }
+      },
+      "additionalProperties": false
+    }
+  ],
+  "$defs": {
+    "operationId": { "type": "string", "pattern": "^op-[0-9a-f-]{36}$" }
+  }
+}
