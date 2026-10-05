@@ -6,6 +6,7 @@ import { createDealIntentService, isDealIntentRequest } from "./deal-intents.js"
 import { createPreleadTimelineService, normalizePreleadEventRequest } from "./prelead-timeline.js";
 import { createConfirmedDealService, normalizeConfirmedDealRequest } from "./confirmed-deals.js";
 import { createCatalogBuildService } from "./catalog-build.js";
+import { s01ParticipantCapability, readExhibitionParticipants } from "./s01-participants.js";
 
 const manifest = {
   serviceId: "crm-web.exhibitions",
@@ -24,9 +25,11 @@ const manifest = {
       effect: "read", requiredScopes: [], operationRef: "GET /api/v1/catalog"
     },
     {
-      id: "crm.companies.read", version: "1.0.0", required: true,
-      inputSchemaRef: "schemas/company-query.schema.json", outputSchemaRef: "schemas/company-list.schema.json",
-      effect: "read", requiredScopes: ["crm.companies.read"], operationRef: "GET /api/v1/companies"
+      id: s01ParticipantCapability.capabilityId, version: s01ParticipantCapability.version, required: true,
+      inputSchemaRef: s01ParticipantCapability.inputSchemaRef, outputSchemaRef: s01ParticipantCapability.outputSchemaRef,
+      errorsSchemaRef: s01ParticipantCapability.errorsSchemaRef, descriptorRef: "capabilities/s01-exhibition-participants.v1.json",
+      handlerBinding: s01ParticipantCapability.handlerBinding, mcpTool: s01ParticipantCapability.mcpTool,
+      effect: s01ParticipantCapability.effect, requiredScopes: s01ParticipantCapability.requiredScopes, operationRef: s01ParticipantCapability.httpBinding
     },
     {
       id: "crm.company.read", version: "1.0.0", required: false,
@@ -141,14 +144,17 @@ export function createServer({
       if (url.searchParams.size > 0) return json(response, 400, { error: "invalid_query" });
       const context = await trustedProfile(request, response, "crm.companies.read");
       if (!context) return;
-      return json(response, 200, { domainApiVersion: manifest.domainApiVersion, items: dealIntents.visibleCompanies(context.profileId) });
+      const result = readExhibitionParticipants(context, dealIntents);
+      return json(response, result.status, result.body);
     }
     const companyMatch = url.pathname.match(/^\/api\/v1\/companies\/(demo-company-[0-9]{3})$/);
     if (companyMatch && (request.method === "GET" || request.method === "HEAD")) {
       if (url.searchParams.size > 0) return json(response, 400, { error: "invalid_query" });
       const context = await trustedProfile(request, response, "crm.companies.read");
       if (!context) return;
-      const company = dealIntents.visibleCompanies(context.profileId).find((item) => item.id === companyMatch[1]);
+      const participantResult = readExhibitionParticipants(context, dealIntents);
+      if (participantResult.status !== 200) return json(response, participantResult.status, participantResult.body);
+      const company = participantResult.body.items.find((item) => item.id === companyMatch[1]);
       return company
         ? json(response, 200, { domainApiVersion: manifest.domainApiVersion, company })
         : json(response, 404, { error: "company_not_found" });

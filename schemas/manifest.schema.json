@@ -97,6 +97,10 @@
         "required": { "type": "boolean" },
         "inputSchemaRef": { "type": "string", "pattern": "^schemas/[^ ]+\\.schema\\.json$" },
         "outputSchemaRef": { "type": "string", "pattern": "^schemas/[^ ]+\\.schema\\.json$" },
+        "errorsSchemaRef": { "type": "string", "pattern": "^schemas/[^ ]+\\.schema\\.json$" },
+        "descriptorRef": { "type": "string", "pattern": "^capabilities/[^ ]+\\.json$" },
+        "handlerBinding": { "type": "string", "minLength": 1 },
+        "mcpTool": { "type": "object", "required": ["name", "protocolVersion"], "properties": { "name": { "type": "string" }, "protocolVersion": { "type": "string" } }, "additionalProperties": false },
         "effect": { "enum": ["read", "write", "external_mutation"] },
         "requiredScopes": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
         "operationRef": { "type": "string", "minLength": 1 }

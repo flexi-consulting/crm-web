@@ -29,8 +29,10 @@ test("manifest declares stable v1 read-only contract and capabilities", async ()
         effect: "read", requiredScopes: [], operationRef: "GET /api/v1/catalog"
       },
       {
-        id: "crm.companies.read", version: "1.0.0", required: true,
-        inputSchemaRef: "schemas/company-query.schema.json", outputSchemaRef: "schemas/company-list.schema.json",
+        id: "crm.exhibitions.participants.read", version: "1.0.0", required: true,
+        inputSchemaRef: "schemas/s01-participants-input.schema.json", outputSchemaRef: "schemas/s01-participants-output.schema.json",
+        errorsSchemaRef: "schemas/s01-participants-errors.schema.json", descriptorRef: "capabilities/s01-exhibition-participants.v1.json",
+        handlerBinding: "src/s01-participants.js#readExhibitionParticipants", mcpTool: { name: "crm_exhibitions_participants_read", protocolVersion: "2025-06-18" },
         effect: "read", requiredScopes: ["crm.companies.read"], operationRef: "GET /api/v1/companies"
       },
       {
@@ -39,6 +41,11 @@ test("manifest declares stable v1 read-only contract and capabilities", async ()
         effect: "read", requiredScopes: ["crm.companies.read"], operationRef: "GET /api/v1/companies/{id}"
       }
     ]);
+    const s01 = body.capabilities.find((capability) => capability.id === "crm.exhibitions.participants.read");
+    assert.ok(s01);
+    assert.equal(s01.descriptorRef, "capabilities/s01-exhibition-participants.v1.json");
+    assert.equal(s01.handlerBinding, "src/s01-participants.js#readExhibitionParticipants");
+    assert.deepEqual(s01.requiredScopes, ["crm.companies.read"]);
     assert.equal(body.capabilities.some((capability) => capability.id.startsWith("crm.deal_intents.")), false);
     assert.equal(body.capabilities.some((capability) => capability.id.startsWith("crm.deals.")), false);
     assert.deepEqual(body.readiness, {
@@ -54,7 +61,7 @@ test("manifest declares stable v1 read-only contract and capabilities", async ()
     addFormats(schemaAjv);
     const referencedSchemas = new Map();
     for (const capability of body.capabilities) {
-      for (const reference of [capability.inputSchemaRef, capability.outputSchemaRef]) {
+      for (const reference of [capability.inputSchemaRef, capability.outputSchemaRef, ...(capability.errorsSchemaRef ? [capability.errorsSchemaRef] : [])]) {
         const referencedSchema = JSON.parse(await readFile(new URL(`../${reference}`, import.meta.url)));
         referencedSchemas.set(referencedSchema.$id, referencedSchema);
       }

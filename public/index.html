@@ -17,7 +17,7 @@
 </head>
 <body>
   <header><p id="status">Loading</p><h1>Exhibition catalog</h1><p class="hint">Synthetic sample data served through the versioned, read-only CRM Web contract.</p></header>
-  <main><ul id="catalog" aria-live="polite"></ul></main>
+  <main><ul id="catalog" aria-live="polite"></ul><section aria-labelledby="participants-title"><h2 id="participants-title">Profile exhibition participants</h2><p id="participant-status" class="hint">Loading scoped participant view</p><ul id="participants" aria-live="polite"></ul></section></main>
   <script>
     const status = document.querySelector('#status');
     fetch('/api/v1/catalog').then((response) => {
@@ -41,6 +41,24 @@
       }
       status.textContent = 'Read-only · synthetic data';
     }).catch(() => { status.textContent = 'Catalog unavailable'; });
+    fetch('/api/v1/companies', { credentials: 'same-origin' }).then((response) => {
+      if (!response.ok) throw new Error('Participant view unavailable');
+      return response.json();
+    }).then(({ items }) => {
+      const list = document.querySelector('#participants');
+      for (const participant of items) {
+        const card = document.createElement('li');
+        const title = document.createElement('h2');
+        title.textContent = participant.name;
+        const event = document.createElement('p');
+        event.textContent = `Participant ${participant.id} · ${participant.country} · ${participant.exhibitions.map((event) => `${event.name} (${event.id})`).join(', ')}`;
+        const qualification = document.createElement('p');
+        qualification.textContent = `Profile qualification: ${participant.qualification.qualification} (${participant.qualification.reason})`;
+        card.append(title, event, qualification);
+        list.append(card);
+      }
+      document.querySelector('#participant-status').textContent = 'Scoped to the authenticated profile';
+    }).catch(() => { document.querySelector('#participant-status').textContent = 'Sign in to view profile-scoped participants'; });
   </script>
 </body>
 </html>

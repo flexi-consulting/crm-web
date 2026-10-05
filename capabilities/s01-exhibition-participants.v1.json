@@ -1,0 +1,14 @@
+{
+  "capabilityId": "crm.exhibitions.participants.read",
+  "version": "1.0.0",
+  "description": "Read synthetic exhibition participant identities with the caller's profile-specific qualification overlay.",
+  "inputSchemaRef": "schemas/s01-participants-input.schema.json",
+  "outputSchemaRef": "schemas/s01-participants-output.schema.json",
+  "errorsSchemaRef": "schemas/s01-participants-errors.schema.json",
+  "effect": "read",
+  "requiredScopes": ["crm.companies.read"],
+  "handlerBinding": "src/s01-participants.js#readExhibitionParticipants",
+  "httpBinding": "GET /api/v1/companies",
+  "mcpTool": { "name": "crm_exhibitions_participants_read", "protocolVersion": "2025-06-18" },
+  "errors": ["AUTH_CONTEXT_UNAVAILABLE", "SCOPE_DENIED", "INVALID_ARGUMENTS", "UNKNOWN_TOOL", "CAPABILITY_VERSION_MISMATCH", "DOMAIN_UNAVAILABLE"]
+}

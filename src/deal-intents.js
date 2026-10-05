@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { catalog, companies, syntheticProfileCompanies } from "./fixtures.js";
+import { catalog, companies, syntheticProfileCompanies, syntheticProfileCompanyOverlays } from "./fixtures.js";
 
 const uuid = () => randomUUID();
 const intentKey = (profileId, idempotencyKey) => `${profileId}\u0000${idempotencyKey}`;
@@ -41,7 +41,12 @@ export function createDealIntentService({ adapter = new FakeWeeekAdapter() } = {
       ? syntheticProfileCompanies[profileId]
       : [];
     const visibleIds = new Set(profileCompanies);
-    return companies.filter((company) => visibleIds.has(company.id));
+    const overlays = syntheticProfileCompanyOverlays[profileId] ?? {};
+    return companies.filter((company) => visibleIds.has(company.id)).map((company) => ({
+      ...company,
+      exhibitionIds: [...company.exhibitionIds],
+      qualification: overlays[company.id] ?? { qualification: "unreviewed", reason: "no-profile-rule" }
+    }));
   }
 
   async function create({ profileId, idempotencyKey, request }) {
