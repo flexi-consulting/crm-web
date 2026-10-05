@@ -50,7 +50,7 @@ export function createPreleadTimelineService({ preleads = syntheticPreleads } = 
       companyId: prelead.companyId,
       exhibitionId: prelead.exhibitionId,
       stage: prelead.stage,
-      disposition: activeRejection(prelead) ? "rejected" : "active"
+      disposition: prelead.events.some((event) => event.type === "deal_linked") ? "deal" : activeRejection(prelead) ? "rejected" : "active"
     };
   }
 
@@ -61,6 +61,20 @@ export function createPreleadTimelineService({ preleads = syntheticPreleads } = 
       status: 200,
       body: { domainApiVersion: "1.0.0", prelead: publicPrelead(prelead), events: prelead.events.map((event) => ({ ...event })) }
     };
+  }
+
+  function linkConfirmedDeal({ profileId, companyId, exhibitionId, operationId, dealId }) {
+    const prelead = [...records.values()].find((item) => item.profileId === profileId &&
+      item.companyId === companyId && item.exhibitionId === exhibitionId);
+    if (!prelead) return errorResult(404, "prelead_not_found", operationId);
+    const existing = prelead.events.find((event) => event.type === "deal_linked");
+    if (existing) return existing.operationId === operationId && existing.payload.dealId === dealId
+      ? { status: 200, body: { domainApiVersion: "1.0.0", prelead: publicPrelead(prelead), event: { ...existing }, operationId, eventCount: prelead.events.length, replayed: true } }
+      : errorResult(409, "prelead_deal_conflict", operationId);
+    const event = { eventId: `evt-${randomUUID()}`, operationId, sequence: prelead.events.length + 1,
+      type: "deal_linked", payload: { dealId }, occurredAt: new Date().toISOString() };
+    prelead.events.push(event);
+    return { status: 201, body: { domainApiVersion: "1.0.0", prelead: publicPrelead(prelead), event: { ...event }, operationId, eventCount: prelead.events.length, replayed: false } };
   }
 
   function appendEvent({ profileId, preleadId, request }) {
@@ -109,5 +123,5 @@ export function createPreleadTimelineService({ preleads = syntheticPreleads } = 
     return { status: 201, body: response };
   }
 
-  return { getTimeline, appendEvent };
+  return { getTimeline, appendEvent, linkConfirmedDeal };
 }

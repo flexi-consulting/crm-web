@@ -8,7 +8,7 @@
     "eventId": { "type": "string", "pattern": "^evt-[0-9a-f-]{36}$" },
     "operationId": { "type": "string", "pattern": "^op-[0-9a-f-]{36}$" },
     "sequence": { "type": "integer", "minimum": 1 },
-    "type": { "enum": ["note_added", "rejection_added", "rejection_undone"] },
+    "type": { "enum": ["note_added", "rejection_added", "rejection_undone", "deal_linked"] },
     "payload": { "type": "object" },
     "occurredAt": { "type": "string", "format": "date-time" }
   },
@@ -39,6 +39,16 @@
         "payload": {
           "type": "object", "required": ["targetEventId"],
           "properties": { "targetEventId": { "type": "string", "pattern": "^evt-[0-9a-f-]{36}$" } },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "properties": {
+        "type": { "const": "deal_linked" },
+        "payload": {
+          "type": "object", "required": ["dealId"],
+          "properties": { "dealId": { "type": "string", "pattern": "^demo-deal-[0-9a-f-]{36}$" } },
           "additionalProperties": false
         }
       }

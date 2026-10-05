@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crm-web.example.invalid/schemas/s04-create-input.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["idempotencyKey", "request"],
+  "properties": {
+    "idempotencyKey": { "type": "string", "pattern": "^[A-Za-z0-9._:-]{8,128}$" },
+    "request": { "$ref": "https://crm-web.example.invalid/schemas/synthetic-confirmed-deal-request.schema.json" }
+  }
+}

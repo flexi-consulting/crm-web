@@ -21,7 +21,7 @@
         "companyId": { "type": "string", "pattern": "^demo-company-[0-9]{3}$" },
         "exhibitionId": { "type": "string", "pattern": "^demo-expo-[0-9]{3}$" },
         "stage": { "enum": ["draft", "ready", "converted", "archived"] },
-        "disposition": { "enum": ["active", "rejected"] }
+        "disposition": { "enum": ["active", "rejected", "deal"] }
       },
       "additionalProperties": false
     }

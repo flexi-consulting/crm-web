@@ -89,9 +89,10 @@ export function createServer({
   resolveTrustedProfile,
   dealIntents = createDealIntentService(),
   preleadTimeline = createPreleadTimelineService(),
-  confirmedDeals = createConfirmedDealService(),
+  confirmedDeals,
   catalogBuilds = createCatalogBuildService()
 } = {}) {
+  const dealService = confirmedDeals ?? createConfirmedDealService({ preleadTimeline });
   async function trustedProfile(request, response, requiredScope) {
     if (!resolveTrustedProfile) {
       json(response, 503, { error: "trusted_profile_unavailable" });
@@ -186,7 +187,7 @@ export function createServer({
       if (parsed.error) return json(response, parsed.error === "content_type_required" ? 415 : 400, { error: parsed.error });
       const normalized = normalizeConfirmedDealRequest(parsed.value);
       if (!normalized) return json(response, 400, { error: "invalid_confirmed_deal_request", operationId: parsed.value?.operationId });
-      const result = await confirmedDeals.create({ profileId: context.profileId, idempotencyKey, request: normalized });
+      const result = await dealService.create({ profileId: context.profileId, idempotencyKey, request: normalized });
       return json(response, result.status, result.body);
     }
     if (isDealAction) {
@@ -195,8 +196,15 @@ export function createServer({
       if (!context) return;
       if (url.searchParams.size > 0) return json(response, 400, { error: "invalid_query" });
       const result = dealActionMatch[2] === "repair"
-        ? await confirmedDeals.repair({ profileId: context.profileId, operationId: dealActionMatch[1] })
-        : await confirmedDeals.reconcile({ profileId: context.profileId, operationId: dealActionMatch[1] });
+        ? await dealService.repair({ profileId: context.profileId, operationId: dealActionMatch[1] })
+        : await dealService.reconcile({ profileId: context.profileId, operationId: dealActionMatch[1] });
+      return json(response, result.status, result.body);
+    }
+    const operationMatch = url.pathname.match(/^\/api\/v1\/deal-operations\/(op-[0-9a-f-]{36})$/);
+    if (operationMatch && (request.method === "GET" || request.method === "HEAD")) {
+      const context = await trustedProfile(request, response, "crm.deals.operations.read.synthetic");
+      if (!context) return;
+      const result = dealService.get({ profileId: context.profileId, operationId: operationMatch[1] });
       return json(response, result.status, result.body);
     }
     if (isCatalogBuild) {
