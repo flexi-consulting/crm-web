@@ -17,7 +17,8 @@ export function normalizeDealReviewRequest(value) {
   return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, typeof item === "string" ? item.trim() : item]));
 }
 
-export function createDealReviewService({ confirmedDeals, preleadTimeline } = {}) {
+export function createDealReviewService({ confirmedDeals, preleadTimeline, storagePort,
+  now = () => new Date().toISOString() } = {}) {
   const reviews = new Map();
   function participant(profileId, request) {
     const visible = new Set(syntheticProfileCompanies[profileId] ?? []);
@@ -43,6 +44,81 @@ export function createDealReviewService({ confirmedDeals, preleadTimeline } = {}
     };
     const revision = createHash("sha256").update(JSON.stringify([profileId, details, timeline.body.events.length])).digest("hex");
     return { details, revision };
+  }
+  const detailsFor = (profileId, draft, selected, notes) => ({
+    companyId: draft.companyId, exhibitionId: draft.exhibitionId,
+    statusId: syntheticLeadStageIds[profileId], title: draft.title,
+    source: selected.exhibition.name, dealType: "direct", companyInn: draft.companyInn,
+    contactName: draft.contactName,
+    dealComment: [draft.dealComment, ...notes.map((note) => `Note: ${note}`)].join("\n"),
+    notesCount: notes.length
+  });
+  const hash = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+  async function persistentState(profileId, draft) {
+    const selected = participant(profileId, draft);
+    if (!selected || !syntheticLeadStageIds[profileId]) return null;
+    const context = await storagePort.getPreleadContext({ profileRef: profileId,
+      eventId: draft.exhibitionId, companyId: draft.companyId });
+    if (!context) return null;
+    const details = detailsFor(profileId, draft, selected, context.notes);
+    return { details, preleadId: context.preleadId, preleadRevision: context.revision,
+      revision: hash([profileId, details, context.revision]), requestHash: hash(details) };
+  }
+  async function preparePersistent({ profileId, request }) {
+    const draft = normalizeDealReviewRequest(request);
+    if (!draft) return { status: 400, body: { error: "missing_or_invalid_deal_fields" } };
+    const current = await persistentState(profileId, draft);
+    if (!current) return { status: 404, body: { error: "company_or_exhibition_not_found" } };
+    const id = reviewId(), opId = operationId();
+    const result = await storagePort.createReview({ profileRef: profileId,
+      eventId: draft.exhibitionId, companyId: draft.companyId, preleadId: current.preleadId,
+      preleadRevision: current.preleadRevision, reviewId: id, revision: current.revision,
+      requestHash: current.requestHash, snapshot: { draft, details: current.details },
+      operationId: opId, now: now() });
+    if (result.status !== "prepared") return { status: 409, body: { error: result.status } };
+    return { status: 201, body: { domainApiVersion: "1.0.0", reviewId: id,
+      revision: current.revision, operationId: opId, details: current.details, status: "prepared" } };
+  }
+  async function getPersistent({ profileId, reviewId: id }) {
+    const review = await storagePort.getReview({ profileRef: profileId, reviewId: id });
+    if (!review) return { status: 404, body: { error: "review_not_found" } };
+    const operation = await confirmedDeals.get({ profileId, operationId: review.operationId });
+    return { status: 200, body: { domainApiVersion: "1.0.0", reviewId: id,
+      revision: review.revision, operationId: review.operationId,
+      details: review.snapshot.details,
+      status: operation.status === 200 ? operation.body.status : "prepared",
+      ...(operation.status === 200 && operation.body.dealId ? { dealId: operation.body.dealId } : {}),
+      ...(operation.status === 200 && operation.body.linkStatus ? { linkStatus: operation.body.linkStatus } : {}) } };
+  }
+  async function confirmPersistent({ profileId, reviewId: id, revision, trustedReceipt }) {
+    const review = await storagePort.getReview({ profileRef: profileId, reviewId: id });
+    if (!review) return { status: 404, body: { error: "review_not_found" } };
+    if (revision !== review.revision) return { status: 409, body: { error: "review_stale" } };
+    if (!trustedReceipt || trustedReceipt.profileId !== profileId || trustedReceipt.reviewId !== id ||
+        trustedReceipt.revision !== revision || !requiredText(trustedReceipt.actorId, 160) ||
+        !requiredText(trustedReceipt.receiptId, 160) || !requiredText(trustedReceipt.issuerId, 160) ||
+        !trustedReceipt.issuedAt || !trustedReceipt.expiresAt || trustedReceipt.approved !== true) {
+      return { status: 403, body: { error: "trusted_review_confirmation_required" } };
+    }
+    const previous = await confirmedDeals.get({ profileId, operationId: review.operationId });
+    if (previous.status !== 200) {
+      const current = await persistentState(profileId, review.snapshot.draft);
+      if (current?.revision !== revision || current.preleadId !== review.preleadId)
+        return { status: 409, body: { error: "review_stale" } };
+    }
+    const receipt = await storagePort.recordTrustedReceipt({ profileRef: profileId,
+      reviewId: id, revision, receiptId: trustedReceipt.receiptId,
+      actorRef: trustedReceipt.actorId, issuerRef: trustedReceipt.issuerId,
+      issuedAt: trustedReceipt.issuedAt, expiresAt: trustedReceipt.expiresAt });
+    if (receipt.status !== "recorded" && receipt.status !== "replay")
+      return { status: 409, body: { error: receipt.status } };
+    const details = review.snapshot.details;
+    return confirmedDeals.create({ profileId, idempotencyKey: id,
+      request: { ...details, summary: details.dealComment, operationId: review.operationId },
+      reviewEvidence: { preleadId: review.preleadId, reviewId: id,
+        receiptId: trustedReceipt.receiptId, revision, requestHash: review.requestHash,
+        operationId: review.operationId, companyId: details.companyId,
+        eventId: details.exhibitionId } });
   }
   function prepare({ profileId, request }) {
     const draft = normalizeDealReviewRequest(request);
@@ -80,5 +156,6 @@ export function createDealReviewService({ confirmedDeals, preleadTimeline } = {}
       confirmation: true, operationId: review.operationId };
     return confirmedDeals.create({ profileId, idempotencyKey: id, request });
   }
-  return { prepare, get, confirm };
+  return storagePort ? { prepare: preparePersistent, get: getPersistent, confirm: confirmPersistent }
+    : { prepare, get, confirm };
 }

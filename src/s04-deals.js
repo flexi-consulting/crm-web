@@ -47,7 +47,7 @@ export function createOfflineS04McpServer({ dealService, reviewService, resolveT
       if (tool.operation === "prepare") {
         const request = normalizeDealReviewRequest(args);
         if (!request) return reply({ error: { code: -32602, message: "INVALID_ARGUMENTS" } });
-        domain = reviewService.prepare({ profileId: context.profileId, request });
+        domain = await reviewService.prepare({ profileId: context.profileId, request });
       } else if (tool.operation === "confirm") {
         let trustedReceipt;
         try { trustedReceipt = await resolveTrustedReviewReceipt?.({ profileId: context.profileId, reviewId: args.reviewId, revision: args.revision }); } catch {}

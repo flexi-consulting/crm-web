@@ -13,6 +13,68 @@ const operationView = (row) => row && ({
 export function createS04D1Repository(db) {
   if (!db?.prepare || !db?.batch) throw new Error("d1_binding_required");
 
+  async function getPreleadContext({ profileRef, eventId, companyId }) {
+    const row = await db.prepare(`SELECT prelead_id, revision FROM s04_preleads
+      WHERE profile_ref = ? AND event_id = ? AND company_id = ?`)
+      .bind(profileRef, eventId, companyId).first();
+    if (!row) return null;
+    const events = await db.prepare(`SELECT kind, payload_json FROM s04_prelead_events
+      WHERE prelead_id = ? AND profile_ref = ? ORDER BY sequence`)
+      .bind(row.prelead_id, profileRef).all();
+    const notes = (events.results ?? []).filter((event) => event.kind === "note_added")
+      .map((event) => { try { return JSON.parse(event.payload_json).noteText; } catch { return null; } })
+      .filter((note) => typeof note === "string" && note.length > 0);
+    return { preleadId: row.prelead_id, revision: row.revision, notes };
+  }
+
+  async function createReview({ profileRef, eventId, companyId, preleadId, preleadRevision, reviewId,
+    revision, requestHash, snapshot, operationId, now }) {
+    try {
+      const result = await db.prepare(`INSERT INTO s04_deal_reviews
+        (review_id, profile_ref, prelead_id, prelead_revision, revision, request_hash,
+         snapshot_json, operation_id, created_at)
+        SELECT ?, ?, prelead_id, revision, ?, ?, ?, ?, ? FROM s04_preleads
+        WHERE prelead_id = ? AND profile_ref = ? AND event_id = ? AND company_id = ? AND revision = ?`)
+        .bind(reviewId, profileRef, revision, requestHash, JSON.stringify(snapshot), operationId,
+          now, preleadId, profileRef, eventId, companyId, preleadRevision).run();
+      return changed(result) ? { status: "prepared" } : { status: "review_stale" };
+    } catch { return { status: "review_conflict" }; }
+  }
+
+  async function getReview({ profileRef, reviewId }) {
+    const row = await db.prepare("SELECT * FROM s04_deal_reviews WHERE profile_ref = ? AND review_id = ?")
+      .bind(profileRef, reviewId).first();
+    if (!row) return null;
+    let snapshot;
+    try { snapshot = JSON.parse(row.snapshot_json); } catch { return null; }
+    return { reviewId: row.review_id, profileRef: row.profile_ref, preleadId: row.prelead_id,
+      preleadRevision: row.prelead_revision, revision: row.revision,
+      requestHash: row.request_hash, operationId: row.operation_id, snapshot };
+  }
+
+  async function recordTrustedReceipt({ profileRef, reviewId, revision, receiptId,
+    actorRef, issuerRef, issuedAt, expiresAt }) {
+    if (![profileRef, reviewId, revision, receiptId, actorRef, issuerRef, issuedAt, expiresAt]
+      .every((value) => typeof value === "string" && value)) return { status: "invalid_receipt" };
+    try {
+      const result = await db.prepare(`INSERT INTO s04_review_receipts
+        (receipt_id, review_id, profile_ref, revision, actor_ref, issuer_ref,
+         approved, issued_at, expires_at)
+        SELECT ?, review_id, profile_ref, revision, ?, ?, 1, ?, ? FROM s04_deal_reviews
+        WHERE review_id = ? AND profile_ref = ? AND revision = ?`)
+        .bind(receiptId, actorRef, issuerRef, issuedAt, expiresAt,
+          reviewId, profileRef, revision).run();
+      return changed(result) ? { status: "recorded" } : { status: "review_not_found" };
+    } catch {
+      const row = await db.prepare(`SELECT review_id, profile_ref, revision, actor_ref, issuer_ref,
+        issued_at, expires_at FROM s04_review_receipts WHERE receipt_id = ?`).bind(receiptId).first();
+      return row?.review_id === reviewId && row.profile_ref === profileRef && row.revision === revision &&
+        row.actor_ref === actorRef && row.issuer_ref === issuerRef &&
+        row.issued_at === issuedAt && row.expires_at === expiresAt
+        ? { status: "replay" } : { status: "receipt_conflict" };
+    }
+  }
+
   async function getOperation({ profileRef, operationId }) {
     const row = await db.prepare("SELECT * FROM s04_deal_operations WHERE profile_ref = ? AND operation_id = ?")
       .bind(profileRef, operationId).first();
@@ -121,5 +183,6 @@ export function createS04D1Repository(db) {
     }
   }
 
-  return { reserve, getOperation, findParticipantOperation, recordCreated, linkVerifiedDeal };
+  return { getPreleadContext, createReview, getReview, recordTrustedReceipt,
+    reserve, getOperation, findParticipantOperation, recordCreated, linkVerifiedDeal };
 }

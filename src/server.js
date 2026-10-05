@@ -206,13 +206,13 @@ export function createServer({
       const parsed = await readJson(request);
       if (parsed.error) return json(response, parsed.error === "content_type_required" ? 415 : 400, { error: parsed.error });
       const draft = normalizeDealReviewRequest(parsed.value);
-      const result = dealReviews.prepare({ profileId: context.profileId, request: draft ?? parsed.value });
+      const result = await dealReviews.prepare({ profileId: context.profileId, request: draft ?? parsed.value });
       return json(response, result.status, result.body);
     }
     if (reviewMatch && (request.method === "GET" || request.method === "HEAD")) {
       const context = await trustedProfile(request, response, "crm.deals.review.synthetic");
       if (!context) return;
-      const result = dealReviews.get({ profileId: context.profileId, reviewId: reviewMatch[1] });
+      const result = await dealReviews.get({ profileId: context.profileId, reviewId: reviewMatch[1] });
       return json(response, result.status, result.body);
     }
     if (isConfirmReview) {

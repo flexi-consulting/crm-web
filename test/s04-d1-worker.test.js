@@ -57,6 +57,89 @@ async function call(base, path, body) {
   assert.equal(response.status, 200, JSON.stringify(result));
   return result;
 }
+async function reviewedCall(base, path, body, { profile = "demo-profile-a", approval = false } = {}) {
+  const response = await fetch(`${base}${path}`, { method: "POST", headers: {
+    "content-type": "application/json", "x-test-profile": profile,
+    ...(approval ? { "x-test-approval": "approved" } : {}) }, body: JSON.stringify(body) });
+  return { status: response.status, body: await response.json() };
+}
+
+test("reviewed S-04 HTTP contract persists trusted approval, survives restart, and never retries unknown", async () => {
+  const root = mkdtempSync(join(tmpdir(), "crm-s04-reviewed-d1-"));
+  let running;
+  const draft = { companyId: "demo-company-001", exhibitionId: "demo-expo-001",
+    title: "Synthetic catalog deal", companyInn: "1234567890", contactName: "Example Person",
+    dealComment: "Asked for catalog" };
+  try {
+    const migrated = spawnSync(compatibleNode, [wrangler, "d1", "execute", "CRM_DB", "--config", config,
+      "--local", "--persist-to", root, "--file", migration, "--yes", "--json"], { cwd, encoding: "utf8" });
+    assert.equal(migrated.status, 0, migrated.stderr || migrated.stdout);
+    running = await startWorker(root);
+    await call(running.base, "/seed-prelead", { preleadId: "prelead-reviewed-a",
+      profileRef: "demo-profile-a", eventId: draft.exhibitionId, companyId: draft.companyId });
+    const prepared = await reviewedCall(running.base, "/review/prepare", draft);
+    assert.equal(prepared.status, 201, JSON.stringify(prepared.body));
+    assert.equal(prepared.body.details.statusId, "demo-status-lead-a");
+    const confirmation = { reviewId: prepared.body.reviewId, revision: prepared.body.revision };
+    assert.equal((await reviewedCall(running.base, "/review/confirm", { ...confirmation,
+      confirmation: true })).status, 400);
+    assert.equal((await reviewedCall(running.base, "/review/confirm", confirmation)).status, 403);
+    assert.equal((await reviewedCall(running.base, "/review/get", { reviewId: prepared.body.reviewId },
+      { profile: "demo-profile-b" })).status, 404);
+    assert.equal((await reviewedCall(running.base, "/provider-count", {})).body.calls, 0);
+    assert.equal((await reviewedCall(running.base, "/review/confirm", confirmation,
+      { profile: "demo-profile-b", approval: true })).status, 404);
+    const created = await reviewedCall(running.base, "/review/confirm", confirmation, { approval: true });
+    assert.equal(created.status, 201, JSON.stringify(created.body));
+    assert.equal(created.body.status, "created");
+    assert.equal(created.body.linkStatus, "linked");
+    assert.equal((await reviewedCall(running.base, "/provider-count", {})).body.calls, 1);
+    const replay = await reviewedCall(running.base, "/review/confirm", confirmation, { approval: true });
+    assert.equal(replay.status, 200, JSON.stringify(replay.body));
+    assert.equal(replay.body.replayed, true);
+    assert.equal((await reviewedCall(running.base, "/provider-count", {})).body.calls, 1);
+    await stopWorker(running.child);
+    running = await startWorker(root);
+    const afterRestart = await reviewedCall(running.base, "/review/get", { reviewId: prepared.body.reviewId });
+    assert.equal(afterRestart.body.status, "created");
+    assert.equal(afterRestart.body.dealId, created.body.dealId);
+    assert.equal((await reviewedCall(running.base, "/review/confirm", confirmation,
+      { approval: true })).body.replayed, true);
+    assert.equal((await reviewedCall(running.base, "/provider-count", {})).body.calls, 0);
+    const staleDraft = { ...draft, title: "Changed revision" };
+    const stale = await reviewedCall(running.base, "/review/prepare", staleDraft);
+    assert.equal(stale.status, 201);
+    assert.equal((await reviewedCall(running.base, "/review/confirm",
+      { reviewId: stale.body.reviewId, revision: "0".repeat(64) }, { approval: true })).status, 409);
+    await call(running.base, "/advance-prelead", { preleadId: "prelead-reviewed-a" });
+    assert.equal((await reviewedCall(running.base, "/review/confirm",
+      { reviewId: stale.body.reviewId, revision: stale.body.revision }, { approval: true })).status, 409);
+    const unknownDraft = { ...draft, companyId: "demo-company-002",
+      exhibitionId: "demo-expo-002", title: "Unknown outcome" };
+    await call(running.base, "/seed-prelead", { preleadId: "prelead-reviewed-b",
+      profileRef: "demo-profile-b", eventId: unknownDraft.exhibitionId,
+      companyId: unknownDraft.companyId });
+    const pendingReview = await reviewedCall(running.base, "/review/prepare", unknownDraft,
+      { profile: "demo-profile-b" });
+    assert.equal(pendingReview.status, 201);
+    const unknownRequest = { reviewId: pendingReview.body.reviewId,
+      revision: pendingReview.body.revision };
+    const unknown = await reviewedCall(running.base, "/review/confirm", unknownRequest,
+      { profile: "demo-profile-b", approval: true });
+    assert.equal(unknown.status, 202, JSON.stringify(unknown.body));
+    assert.equal(unknown.body.status, "unknown");
+    await stopWorker(running.child);
+    running = await startWorker(root);
+    const retry = await reviewedCall(running.base, "/review/confirm", unknownRequest,
+      { profile: "demo-profile-b", approval: true });
+    assert.equal(retry.status, 202, JSON.stringify(retry.body));
+    assert.equal(retry.body.replayed, true);
+    assert.equal((await reviewedCall(running.base, "/provider-count", {})).body.calls, 0);
+  } finally {
+    if (running) await stopWorker(running.child);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("local Worker D1 reserves once, survives restart, and links only a verified deal atomically", async () => {
   const root = mkdtempSync(join(tmpdir(), "crm-s04-d1-"));

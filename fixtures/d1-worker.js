@@ -1,4 +1,9 @@
 import { createS04D1Repository } from "../src/s04-d1-repository.js";
+import { createDealReviewService } from "../src/deal-reviews.js";
+import { createS04D1ConfirmedDeals } from "../src/s04-d1-confirmed-deals.js";
+
+let fakeProviderCalls = 0;
+const localNow = "2026-10-06T09:00:00.000Z";
 
 const respond = (status, body) => new Response(JSON.stringify(body), { status,
   headers: { "content-type": "application/json", "cache-control": "no-store" } });
@@ -12,6 +17,43 @@ export default {
     try { args = await request.json(); } catch { return respond(400, { error: "invalid_json" }); }
     const repository = createS04D1Repository(env.CRM_DB);
     try {
+      if (path.startsWith("/review/") || path === "/operation/get" || path === "/provider-count") {
+        const profileId = request.headers.get("x-test-profile") ?? "demo-profile-a";
+        const provider = { async create({ operationId, request: deal }) {
+          fakeProviderCalls++;
+          if (deal.title === "Unknown outcome") throw new Error("synthetic_timeout_after_reservation");
+          return { status: "created", dealId: `demo-deal-${operationId.slice(3)}` };
+        } };
+        const confirmedDeals = createS04D1ConfirmedDeals({ repository, provider, now: () => localNow });
+        const reviews = createDealReviewService({ confirmedDeals, storagePort: repository,
+          now: () => localNow });
+        let result;
+        if (path === "/review/prepare") result = await reviews.prepare({ profileId, request: args });
+        else if (path === "/review/get") result = await reviews.get({ profileId, reviewId: args.reviewId });
+        else if (path === "/review/confirm") {
+          if (!args || typeof args !== "object" || Array.isArray(args) ||
+              Object.keys(args).some((key) => !["reviewId", "revision"].includes(key)) ||
+              typeof args.reviewId !== "string" || typeof args.revision !== "string")
+            return respond(400, { error: "invalid_review_confirmation" });
+          // Only a test-only trusted header may mint a receipt. Body booleans are rejected.
+          const approved = request.headers.get("x-test-approval") === "approved";
+          const trustedReceipt = approved ? { profileId, reviewId: args.reviewId,
+            revision: args.revision, actorId: "synthetic-actor", issuerId: "local-contract-harness",
+            receiptId: `receipt-${args.reviewId.slice(7)}`, approved: true,
+            issuedAt: localNow, expiresAt: "2027-01-01T00:00:00.000Z" } : undefined;
+          result = await reviews.confirm({ profileId, reviewId: args.reviewId,
+            revision: args.revision, trustedReceipt });
+        } else if (path === "/operation/get") result = await confirmedDeals.get({ profileId, operationId: args.operationId });
+        else return respond(200, { calls: fakeProviderCalls });
+        return respond(result.status, result.body);
+      }
+      if (path === "/seed-prelead") {
+        const result = await env.CRM_DB.prepare(`INSERT INTO s04_preleads
+          (prelead_id, profile_ref, event_id, company_id, revision, created_at)
+          VALUES (?, ?, ?, ?, 0, ?)`).bind(args.preleadId, args.profileRef,
+          args.eventId, args.companyId, localNow).run();
+        return respond(200, { changes: result.meta.changes });
+      }
       if (path === "/seed") {
         const db = env.CRM_DB;
         await db.batch([
