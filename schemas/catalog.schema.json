@@ -1,10 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crm-web.example.invalid/schemas/catalog.schema.json",
   "title": "Versioned exhibition catalog response",
   "type": "object",
-  "required": ["contractVersion", "items"],
+  "required": ["domainApiVersion", "items"],
   "properties": {
-    "contractVersion": { "const": "1.0.0" },
+    "domainApiVersion": { "const": "1.0.0" },
     "items": { "type": "array", "items": { "$ref": "#/$defs/exhibition" } }
   },
   "additionalProperties": false,

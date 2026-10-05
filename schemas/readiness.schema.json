@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crm-web.example.invalid/schemas/readiness.schema.json",
+  "title": "Local-only application readiness",
+  "type": "object",
+  "required": ["status", "scope", "reason", "checked"],
+  "properties": {
+    "status": { "enum": ["ready", "degraded", "blocked", "unavailable"] },
+    "scope": { "const": "local_process_only" },
+    "reason": {
+      "type": "object",
+      "required": ["code"],
+      "properties": { "code": { "type": "string", "minLength": 1 } },
+      "additionalProperties": false
+    },
+    "checked": {
+      "type": "object",
+      "required": ["serviceId", "release", "platformContractRange", "domainApiVersion"],
+      "properties": {
+        "serviceId": { "type": "string" },
+        "release": {
+          "type": "object",
+          "required": ["version", "sourceRevision", "environment"],
+          "properties": {
+            "version": { "type": "string" },
+            "sourceRevision": { "type": "string" },
+            "environment": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        "platformContractRange": { "type": "string" },
+        "domainApiVersion": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

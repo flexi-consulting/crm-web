@@ -4,10 +4,25 @@ import { fileURLToPath } from "node:url";
 import { catalog } from "./fixtures.js";
 
 const manifest = {
-  contractVersion: "1.0.0",
-  service: "crm-web",
-  mode: "synthetic-read-only",
-  capabilities: ["exhibitions.catalog.read"],
+  serviceId: "crm-web.exhibitions",
+  release: {
+    version: process.env.CRM_WEB_RELEASE_VERSION ?? "0.1.0",
+    sourceRevision: process.env.CRM_WEB_SOURCE_REVISION ?? "working-tree",
+    environment: process.env.CRM_WEB_ENVIRONMENT ?? "development"
+  },
+  platformContractRange: ">=1.0.0 <2.0.0",
+  domainApiVersion: "1.0.0",
+  capabilities: [{
+    id: "exhibitions.catalog.read",
+    version: "1.0.0",
+    required: true,
+    inputSchemaRef: "schemas/catalog-query.schema.json",
+    outputSchemaRef: "schemas/catalog.schema.json",
+    effect: "read",
+    requiredScopes: [],
+    operationRef: "GET /api/v1/catalog"
+  }],
+  compatibility: { deprecatedCapabilities: [] },
   endpoints: {
     readiness: { method: "GET", path: "/api/v1/readiness" },
     catalog: { method: "GET", path: "/api/v1/catalog" }
@@ -32,14 +47,24 @@ export function createServer() {
     }
     if (url.pathname === "/api/v1/manifest") return json(response, 200, manifest);
     if (url.pathname === "/api/v1/readiness") {
-      return json(response, 200, { status: "ready", contractVersion: manifest.contractVersion });
+      return json(response, 200, {
+        status: "ready",
+        scope: "local_process_only",
+        reason: { code: "local_process_available" },
+        checked: {
+          serviceId: manifest.serviceId,
+          release: manifest.release,
+          platformContractRange: manifest.platformContractRange,
+          domainApiVersion: manifest.domainApiVersion
+        }
+      });
     }
     if (url.pathname === "/api/v1/catalog") {
       const query = (url.searchParams.get("q") ?? "").trim().toLocaleLowerCase("en");
       const items = query
         ? catalog.filter((item) => `${item.name} ${item.city} ${item.country}`.toLocaleLowerCase("en").includes(query))
         : catalog;
-      return json(response, 200, { contractVersion: manifest.contractVersion, items });
+      return json(response, 200, { domainApiVersion: manifest.domainApiVersion, items });
     }
     if (url.pathname === "/" || url.pathname === "/index.html") {
       const html = await readFile(new URL("../public/index.html", import.meta.url));

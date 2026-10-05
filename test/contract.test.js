@@ -19,22 +19,43 @@ test("manifest declares stable v1 read-only contract and capabilities", async ()
     const response = await fetch(`${base}/api/v1/manifest`);
     assert.equal(response.status, 200);
     const body = await response.json();
-    assert.deepEqual(body, {
-      contractVersion: "1.0.0", service: "crm-web", mode: "synthetic-read-only",
-      capabilities: ["exhibitions.catalog.read"],
-      endpoints: { readiness: { method: "GET", path: "/api/v1/readiness" }, catalog: { method: "GET", path: "/api/v1/catalog" } }
-    });
+    assert.equal(body.serviceId, "crm-web.exhibitions");
+    assert.equal(body.domainApiVersion, "1.0.0");
+    assert.deepEqual(body.release, { version: "0.1.0", sourceRevision: "working-tree", environment: "development" });
+    assert.deepEqual(body.capabilities, [{
+      id: "exhibitions.catalog.read", version: "1.0.0", required: true,
+      inputSchemaRef: "schemas/catalog-query.schema.json", outputSchemaRef: "schemas/catalog.schema.json",
+      effect: "read", requiredScopes: [], operationRef: "GET /api/v1/catalog"
+    }]);
     const schema = JSON.parse(await readFile(new URL("../schemas/manifest.schema.json", import.meta.url)));
     assert.ok(new Ajv().compile(schema)(body));
+    for (const capability of body.capabilities) {
+      for (const reference of [capability.inputSchemaRef, capability.outputSchemaRef]) {
+        const referencedSchema = JSON.parse(await readFile(new URL(`../${reference}`, import.meta.url)));
+        assert.ok(new Ajv().compile(referencedSchema));
+      }
+    }
   });
 });
 
 test("readiness and catalog return the documented shape with synthetic records", async () => {
   await withServer(async (base) => {
     const readiness = await fetch(`${base}/api/v1/readiness`).then((r) => r.json());
-    assert.deepEqual(readiness, { status: "ready", contractVersion: "1.0.0" });
+    assert.deepEqual(readiness, {
+      status: "ready", scope: "local_process_only", reason: { code: "local_process_available" },
+      checked: {
+        serviceId: "crm-web.exhibitions",
+        release: { version: "0.1.0", sourceRevision: "working-tree", environment: "development" },
+        platformContractRange: ">=1.0.0 <2.0.0", domainApiVersion: "1.0.0"
+      }
+    });
+    const readinessSchema = JSON.parse(await readFile(new URL("../schemas/readiness.schema.json", import.meta.url)));
+    assert.ok(new Ajv().compile(readinessSchema)(readiness));
+    for (const state of ["ready", "degraded", "blocked", "unavailable"]) {
+      assert.ok(new Ajv().compile(readinessSchema)({ ...readiness, status: state }));
+    }
     const result = await fetch(`${base}/api/v1/catalog`).then((r) => r.json());
-    assert.equal(result.contractVersion, "1.0.0");
+    assert.equal(result.domainApiVersion, "1.0.0");
     assert.deepEqual(result.items, catalog);
     assert.ok(result.items.every((item) => item.id.startsWith("demo-expo-")));
     const schema = JSON.parse(await readFile(new URL("../schemas/catalog.schema.json", import.meta.url)));
