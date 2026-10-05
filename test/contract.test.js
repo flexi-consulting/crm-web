@@ -22,11 +22,33 @@ test("manifest declares stable v1 read-only contract and capabilities", async ()
     assert.equal(body.serviceId, "crm-web.exhibitions");
     assert.equal(body.domainApiVersion, "1.0.0");
     assert.deepEqual(body.release, { version: "0.1.0", sourceRevision: "working-tree", environment: "development" });
-    assert.deepEqual(body.capabilities, [{
-      id: "exhibitions.catalog.read", version: "1.0.0", required: true,
-      inputSchemaRef: "schemas/catalog-query.schema.json", outputSchemaRef: "schemas/catalog.schema.json",
-      effect: "read", requiredScopes: [], operationRef: "GET /api/v1/catalog"
-    }]);
+    assert.deepEqual(body.capabilities, [
+      {
+        id: "exhibitions.catalog.read", version: "1.0.0", required: true,
+        inputSchemaRef: "schemas/catalog-query.schema.json", outputSchemaRef: "schemas/catalog.schema.json",
+        effect: "read", requiredScopes: [], operationRef: "GET /api/v1/catalog"
+      },
+      {
+        id: "crm.companies.read", version: "1.0.0", required: true,
+        inputSchemaRef: "schemas/company-query.schema.json", outputSchemaRef: "schemas/company-list.schema.json",
+        effect: "read", requiredScopes: [], operationRef: "GET /api/v1/companies"
+      },
+      {
+        id: "crm.company.read", version: "1.0.0", required: false,
+        inputSchemaRef: "schemas/company-query.schema.json", outputSchemaRef: "schemas/company.schema.json",
+        effect: "read", requiredScopes: [], operationRef: "GET /api/v1/companies/{id}"
+      },
+      {
+        id: "crm.deal_intents.create", version: "1.0.0", required: true,
+        inputSchemaRef: "schemas/deal-intent-request.schema.json", outputSchemaRef: "schemas/deal-intent-response.schema.json",
+        effect: "write", requiredScopes: [], operationRef: "POST /api/v1/deal-intents"
+      },
+      {
+        id: "crm.deal_intents.read", version: "1.0.0", required: false,
+        inputSchemaRef: "schemas/deal-intent-query.schema.json", outputSchemaRef: "schemas/deal-intent-response.schema.json",
+        effect: "read", requiredScopes: [], operationRef: "GET /api/v1/deal-intents/{id}"
+      }
+    ]);
     assert.deepEqual(body.readiness, {
       status: "ready", scope: "local_process_only", reason: { code: "local_process_available" },
       checked: {
@@ -38,12 +60,15 @@ test("manifest declares stable v1 read-only contract and capabilities", async ()
     assert.ok(new Ajv().compile(schema)(body));
     const schemaAjv = new Ajv();
     addFormats(schemaAjv);
+    const referencedSchemas = new Map();
     for (const capability of body.capabilities) {
       for (const reference of [capability.inputSchemaRef, capability.outputSchemaRef]) {
         const referencedSchema = JSON.parse(await readFile(new URL(`../${reference}`, import.meta.url)));
-        assert.ok(schemaAjv.compile(referencedSchema));
+        referencedSchemas.set(referencedSchema.$id, referencedSchema);
       }
     }
+    for (const referencedSchema of referencedSchemas.values()) schemaAjv.addSchema(referencedSchema);
+    for (const referencedSchema of referencedSchemas.values()) assert.ok(schemaAjv.getSchema(referencedSchema.$id));
   });
 });
 

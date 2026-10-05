@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crm-web.example.invalid/schemas/deal-intent-response.schema.json",
+  "title": "Synthetic deal intent result",
+  "type": "object",
+  "required": ["id", "domainApiVersion", "companyId", "exhibitionId", "summary", "status", "adapter", "createdAt", "replayed"],
+  "properties": {
+    "id": { "type": "string", "pattern": "^demo-intent-[0-9a-f-]{36}$" },
+    "domainApiVersion": { "const": "1.0.0" },
+    "companyId": { "type": "string", "pattern": "^demo-company-[0-9]{3}$" },
+    "exhibitionId": { "type": "string", "pattern": "^demo-expo-[0-9]{3}$" },
+    "summary": { "type": "string", "minLength": 1, "maxLength": 500 },
+    "status": { "const": "prepared" },
+    "adapter": {
+      "type": "object",
+      "required": ["name", "reference", "status"],
+      "properties": {
+        "name": { "const": "fake-weeek" },
+        "reference": { "type": "string", "pattern": "^fake-weeek-[0-9a-f-]{36}$" },
+        "status": { "enum": ["accepted", "rejected", "outcome_unknown", "not_found"] }
+      },
+      "additionalProperties": false
+    },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "replayed": { "type": "boolean" }
+  },
+  "additionalProperties": false
+}

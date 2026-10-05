@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crm-web.example.invalid/schemas/company-list.schema.json",
+  "title": "Synthetic visible companies response",
+  "type": "object",
+  "required": ["domainApiVersion", "items"],
+  "properties": {
+    "domainApiVersion": { "const": "1.0.0" },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "country", "exhibitionIds"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^demo-company-[0-9]{3}$" },
+          "name": { "type": "string", "minLength": 1 },
+          "country": { "type": "string", "minLength": 1 },
+          "exhibitionIds": { "type": "array", "items": { "type": "string", "pattern": "^demo-expo-[0-9]{3}$" } }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crm-web.example.invalid/schemas/deal-intent-query.schema.json",
+  "title": "Retrieve a synthetic deal intent",
+  "type": "object",
+  "properties": {},
+  "additionalProperties": false
+}

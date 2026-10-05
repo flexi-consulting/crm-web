@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crm-web.example.invalid/schemas/company.schema.json",
+  "title": "Synthetic company detail response",
+  "type": "object",
+  "required": ["domainApiVersion", "company"],
+  "properties": {
+    "domainApiVersion": { "const": "1.0.0" },
+    "company": { "$ref": "#/$defs/company" }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "company": {
+      "type": "object",
+      "required": ["id", "name", "country", "exhibitionIds"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^demo-company-[0-9]{3}$" },
+        "name": { "type": "string", "minLength": 1 },
+        "country": { "type": "string", "minLength": 1 },
+        "exhibitionIds": { "type": "array", "items": { "type": "string", "pattern": "^demo-expo-[0-9]{3}$" } }
+      },
+      "additionalProperties": false
+    }
+  }
+}
