@@ -3,7 +3,7 @@
   "$id": "https://crm-web.example.invalid/schemas/manifest.schema.json",
   "title": "C14 connected application manifest",
   "type": "object",
-  "required": ["serviceId", "release", "platformContractRange", "domainApiVersion", "capabilities", "compatibility", "endpoints"],
+  "required": ["serviceId", "release", "platformContractRange", "domainApiVersion", "capabilities", "readiness", "compatibility", "endpoints"],
   "properties": {
     "serviceId": { "const": "crm-web.exhibitions" },
     "release": {
@@ -23,6 +23,7 @@
       "minItems": 1,
       "items": { "$ref": "#/$defs/capability" }
     },
+    "readiness": { "$ref": "#/$defs/readiness" },
     "compatibility": {
       "type": "object",
       "required": ["deprecatedCapabilities"],
@@ -43,6 +44,41 @@
   },
   "additionalProperties": false,
   "$defs": {
+    "readiness": {
+      "type": "object",
+      "required": ["status", "scope", "reason", "checked"],
+      "properties": {
+        "status": { "enum": ["ready", "degraded", "blocked", "unavailable"] },
+        "scope": { "const": "local_process_only" },
+        "reason": {
+          "type": "object",
+          "required": ["code"],
+          "properties": { "code": { "type": "string", "minLength": 1 } },
+          "additionalProperties": false
+        },
+        "checked": {
+          "type": "object",
+          "required": ["serviceId", "release", "platformContractRange", "domainApiVersion"],
+          "properties": {
+            "serviceId": { "type": "string" },
+            "release": {
+              "type": "object",
+              "required": ["version", "sourceRevision", "environment"],
+              "properties": {
+                "version": { "type": "string" },
+                "sourceRevision": { "type": "string" },
+                "environment": { "type": "string" }
+              },
+              "additionalProperties": false
+            },
+            "platformContractRange": { "type": "string" },
+            "domainApiVersion": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
     "endpoint": {
       "type": "object",
       "required": ["method", "path"],

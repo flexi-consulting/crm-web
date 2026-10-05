@@ -27,6 +27,13 @@ test("manifest declares stable v1 read-only contract and capabilities", async ()
       inputSchemaRef: "schemas/catalog-query.schema.json", outputSchemaRef: "schemas/catalog.schema.json",
       effect: "read", requiredScopes: [], operationRef: "GET /api/v1/catalog"
     }]);
+    assert.deepEqual(body.readiness, {
+      status: "ready", scope: "local_process_only", reason: { code: "local_process_available" },
+      checked: {
+        serviceId: body.serviceId, release: body.release,
+        platformContractRange: body.platformContractRange, domainApiVersion: body.domainApiVersion
+      }
+    });
     const schema = JSON.parse(await readFile(new URL("../schemas/manifest.schema.json", import.meta.url)));
     assert.ok(new Ajv().compile(schema)(body));
     const schemaAjv = new Ajv();
@@ -66,6 +73,11 @@ test("readiness and catalog return the documented shape with synthetic records",
     assert.ok(ajv.compile(schema)(result));
     const filtered = await fetch(`${base}/api/v1/catalog?q=sample`).then((r) => r.json());
     assert.deepEqual(filtered.items.map((item) => item.id), ["demo-expo-001"]);
+    for (const query of ["?q=" + "x".repeat(121), "?unknown=value", "?q=sample&q=city"]) {
+      const invalid = await fetch(`${base}/api/v1/catalog${query}`);
+      assert.equal(invalid.status, 400);
+      assert.deepEqual(await invalid.json(), { error: "invalid_query" });
+    }
   });
 });
 

@@ -22,6 +22,21 @@ const manifest = {
     requiredScopes: [],
     operationRef: "GET /api/v1/catalog"
   }],
+  readiness: {
+    status: "ready",
+    scope: "local_process_only",
+    reason: { code: "local_process_available" },
+    checked: {
+      serviceId: "crm-web.exhibitions",
+      release: {
+        version: process.env.CRM_WEB_RELEASE_VERSION ?? "0.1.0",
+        sourceRevision: process.env.CRM_WEB_SOURCE_REVISION ?? "working-tree",
+        environment: process.env.CRM_WEB_ENVIRONMENT ?? "development"
+      },
+      platformContractRange: ">=1.0.0 <2.0.0",
+      domainApiVersion: "1.0.0"
+    }
+  },
   compatibility: { deprecatedCapabilities: [] },
   endpoints: {
     readiness: { method: "GET", path: "/api/v1/readiness" },
@@ -47,20 +62,15 @@ export function createServer() {
     }
     if (url.pathname === "/api/v1/manifest") return json(response, 200, manifest);
     if (url.pathname === "/api/v1/readiness") {
-      return json(response, 200, {
-        status: "ready",
-        scope: "local_process_only",
-        reason: { code: "local_process_available" },
-        checked: {
-          serviceId: manifest.serviceId,
-          release: manifest.release,
-          platformContractRange: manifest.platformContractRange,
-          domainApiVersion: manifest.domainApiVersion
-        }
-      });
+      return json(response, 200, manifest.readiness);
     }
     if (url.pathname === "/api/v1/catalog") {
-      const query = (url.searchParams.get("q") ?? "").trim().toLocaleLowerCase("en");
+      const params = [...url.searchParams.keys()];
+      const queryValues = url.searchParams.getAll("q");
+      if (params.some((key) => key !== "q") || queryValues.length > 1 || (queryValues[0] && [...queryValues[0]].length > 120)) {
+        return json(response, 400, { error: "invalid_query" });
+      }
+      const query = (queryValues[0] ?? "").trim().toLocaleLowerCase("en");
       const items = query
         ? catalog.filter((item) => `${item.name} ${item.city} ${item.country}`.toLocaleLowerCase("en").includes(query))
         : catalog;
