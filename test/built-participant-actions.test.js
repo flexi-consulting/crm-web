@@ -157,8 +157,46 @@ test("two catalog builds cannot create two deals for the same profile/event/comp
         actorId: "synthetic-actor", approved: true });
       const response = await post(base, `/api/v1/deal-reviews/${item.review.reviewId}/confirm`, { revision: item.review.revision });
       assert.equal(response.status, index === 0 ? 201 : 409);
-      if (index === 1) assert.equal((await response.json()).error, "participant_deal_exists");
+      if (index === 1) assert.equal((await response.json()).error, "review_stale");
     }
+    const second = builds[1];
+    const freshReview = await (await post(base, "/api/v1/deal-reviews", { buildId: second.build.buildId,
+      companyId: second.company.id, exhibitionId: "demo-expo-001", title: "Synthetic",
+      companyInn: "0000000001", contactName: "Example", dealComment: "Sample" })).json();
+    setApproval({ profileId: "demo-profile-a", reviewId: freshReview.reviewId, revision: freshReview.revision,
+      actorId: "synthetic-actor", approved: true });
+    const duplicate = await post(base, `/api/v1/deal-reviews/${freshReview.reviewId}/confirm`, { revision: freshReview.revision });
+    assert.equal(duplicate.status, 409);
+    assert.equal((await duplicate.json()).error, "participant_deal_exists");
     assert.equal(provider.operations.size, 1);
+  });
+});
+
+test("rebuild preserves the same profile/event/company prelead history for new review", async () => {
+  await fixture(async ({ base }) => {
+    const selected = [];
+    for (const key of ["catalog-rebuild-01", "catalog-rebuild-02"]) {
+      const build = await (await post(base, "/api/v1/catalog-builds", { exhibitionId: "demo-expo-001" }, { "idempotency-key": key })).json();
+      const company = (await fetch(`${base}/api/v1/catalog-builds/${build.buildId}/participants?classification=target`).then((response) => response.json())).items[0];
+      const response = await post(base, `${company.detailPath}/prelead`, {});
+      const binding = await response.json();
+      selected.push({ build, company, binding });
+      if (selected.length === 1) {
+        const note = await post(base, `/api/v1/preleads/${binding.prelead.id}/events`,
+          { type: "note_added", noteText: "Remember this synthetic interest", operationId: `op-${randomUUID()}` });
+        assert.equal(note.status, 201);
+      }
+    }
+    assert.equal(selected[0].binding.prelead.id, selected[1].binding.prelead.id);
+    assert.equal(selected[1].binding.replayed, false);
+    assert.deepEqual(selected[1].binding.prelead.sourceBuildIds, selected.map((item) => item.build.buildId));
+    const timeline = await fetch(`${base}/api/v1/preleads/${selected[1].binding.prelead.id}/timeline`).then((response) => response.json());
+    assert.equal(timeline.events.length, 1);
+    assert.equal(timeline.events[0].payload.noteText, "Remember this synthetic interest");
+    const second = selected[1];
+    const review = await post(base, "/api/v1/deal-reviews", { buildId: second.build.buildId, companyId: second.company.id,
+      exhibitionId: "demo-expo-001", title: "Synthetic", companyInn: "0000000001", contactName: "Example", dealComment: "Sample" });
+    assert.equal(review.status, 201);
+    assert.match((await review.json()).details.dealComment, /Remember this synthetic interest/);
   });
 });

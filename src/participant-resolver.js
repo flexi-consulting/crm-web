@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { catalog, companies, syntheticProfileCompanies } from "./fixtures.js";
 
-const builtId = (profileId, exhibitionId, companyId, buildId) => `built-prelead-${createHash("sha256").update(JSON.stringify([profileId, exhibitionId, companyId, buildId])).digest("hex").slice(0, 24)}`;
+const builtId = (profileId, exhibitionId, companyId) => `built-prelead-${createHash("sha256").update(JSON.stringify([profileId, exhibitionId, companyId])).digest("hex").slice(0, 24)}`;
 
 // One profile/event/company resolver for synthetic catalog actions. buildId pins a validated revision.
 export function createParticipantResolver({ catalogBuilds, preleadTimeline }) {
@@ -13,7 +13,7 @@ export function createParticipantResolver({ catalogBuilds, preleadTimeline }) {
       const result = catalogBuilds.readParticipants({ profileId, buildId, companyId });
       if (result.status !== 200 || result.body.exhibitionId !== exhibitionId) return null;
       return { exhibition, company: result.body.items[0], buildId,
-        preleadId: builtId(profileId, exhibitionId, companyId, buildId) };
+        preleadId: builtId(profileId, exhibitionId, companyId) };
     }
     if (!/^demo-company-[0-9]{3}$/.test(companyId) || !(syntheticProfileCompanies[profileId] ?? []).includes(companyId)) return null;
     const company = companies.find((item) => item.id === companyId && item.exhibitionIds.includes(exhibitionId));

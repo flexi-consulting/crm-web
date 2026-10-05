@@ -36,7 +36,7 @@ export function createDealReviewService({ confirmedDeals, preleadTimeline, parti
     const timeline = preleadTimeline.getTimeline({ profileId, preleadId });
     if (timeline.status !== 200 || timeline.body.prelead.companyId !== draft.companyId ||
         timeline.body.prelead.exhibitionId !== draft.exhibitionId ||
-        (timeline.body.prelead.buildId ?? null) !== (draft.buildId ?? null)) return null;
+        (draft.buildId ? !timeline.body.prelead.sourceBuildIds?.includes(draft.buildId) : Boolean(timeline.body.prelead.sourceBuildIds))) return null;
     const notes = timeline.body.events.filter((event) => event.type === "note_added").map((event) => event.payload.noteText);
     const details = {
       companyId: draft.companyId, exhibitionId: draft.exhibitionId,

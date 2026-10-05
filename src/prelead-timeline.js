@@ -50,6 +50,7 @@ export function createPreleadTimelineService({ preleads = syntheticPreleads } = 
       companyId: prelead.companyId,
       exhibitionId: prelead.exhibitionId,
       ...(prelead.buildId ? { buildId: prelead.buildId } : {}),
+      ...(prelead.sourceBuildIds ? { sourceBuildIds: [...prelead.sourceBuildIds] } : {}),
       stage: prelead.stage,
       disposition: prelead.events.some((event) => event.type === "deal_linked") ? "deal" : activeRejection(prelead) ? "rejected" : "active"
     };
@@ -66,18 +67,22 @@ export function createPreleadTimelineService({ preleads = syntheticPreleads } = 
 
   function ensurePrelead({ id, profileId, companyId, exhibitionId, buildId, stage }) {
     const existing = records.get(id);
-    if (existing) return existing.profileId === profileId && existing.companyId === companyId &&
-      existing.exhibitionId === exhibitionId && existing.buildId === buildId
-      ? { status: 200, body: { domainApiVersion: "1.0.0", prelead: publicPrelead(existing), replayed: true } }
-      : errorResult(409, "prelead_identity_conflict");
-    const prelead = { id, profileId, companyId, exhibitionId, buildId, stage, events: [] };
+    if (existing) {
+      if (existing.profileId !== profileId || existing.companyId !== companyId || existing.exhibitionId !== exhibitionId || !existing.sourceBuildIds)
+        return errorResult(409, "prelead_identity_conflict");
+      const replayed = existing.sourceBuildIds.includes(buildId);
+      if (!replayed) { existing.sourceBuildIds.push(buildId); existing.buildId = buildId; }
+      return { status: 200, body: { domainApiVersion: "1.0.0", prelead: publicPrelead(existing), replayed } };
+    }
+    const prelead = { id, profileId, companyId, exhibitionId, buildId, sourceBuildIds: [buildId], stage, events: [] };
     records.set(id, prelead);
     return { status: 201, body: { domainApiVersion: "1.0.0", prelead: publicPrelead(prelead), replayed: false } };
   }
 
   function linkConfirmedDeal({ profileId, companyId, exhibitionId, buildId = null, operationId, dealId }) {
     const prelead = [...records.values()].find((item) => item.profileId === profileId &&
-      item.companyId === companyId && item.exhibitionId === exhibitionId && (item.buildId ?? null) === buildId);
+      item.companyId === companyId && item.exhibitionId === exhibitionId &&
+      (buildId ? item.sourceBuildIds?.includes(buildId) : !item.sourceBuildIds));
     if (!prelead) return errorResult(404, "prelead_not_found", operationId);
     const existing = prelead.events.find((event) => event.type === "deal_linked");
     if (existing) return existing.operationId === operationId && existing.payload.dealId === dealId
