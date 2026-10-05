@@ -3,9 +3,9 @@
   "$id": "https://crm-web.example.invalid/schemas/s04-create-input.schema.json",
   "type": "object",
   "additionalProperties": false,
-  "required": ["idempotencyKey", "request"],
+  "required": ["reviewId", "revision"],
   "properties": {
-    "idempotencyKey": { "type": "string", "pattern": "^[A-Za-z0-9._:-]{8,128}$" },
-    "request": { "$ref": "https://crm-web.example.invalid/schemas/synthetic-confirmed-deal-request.schema.json" }
+    "reviewId": { "type": "string", "pattern": "^review-[0-9a-f-]{36}$" },
+    "revision": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
   }
 }

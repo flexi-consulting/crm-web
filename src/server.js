@@ -7,6 +7,7 @@ import { createPreleadTimelineService, normalizePreleadEventRequest } from "./pr
 import { createConfirmedDealService, normalizeConfirmedDealRequest } from "./confirmed-deals.js";
 import { createCatalogBuildService } from "./catalog-build.js";
 import { s01ParticipantCapability, readExhibitionParticipants } from "./s01-participants.js";
+import { createDealReviewService, normalizeDealReviewRequest } from "./deal-reviews.js";
 
 const manifest = {
   serviceId: "crm-web.exhibitions",
@@ -87,12 +88,16 @@ async function readJson(request) {
 
 export function createServer({
   resolveTrustedProfile,
+  resolveTrustedReviewReceipt,
+  allowUnsafeSyntheticConfirm = false,
   dealIntents = createDealIntentService(),
   preleadTimeline = createPreleadTimelineService(),
   confirmedDeals,
+  reviewService,
   catalogBuilds = createCatalogBuildService()
 } = {}) {
   const dealService = confirmedDeals ?? createConfirmedDealService({ preleadTimeline });
+  const dealReviews = reviewService ?? createDealReviewService({ confirmedDeals: dealService, preleadTimeline });
   async function trustedProfile(request, response, requiredScope) {
     if (!resolveTrustedProfile) {
       json(response, 503, { error: "trusted_profile_unavailable" });
@@ -117,6 +122,10 @@ export function createServer({
     const timelineEventMatch = url.pathname.match(/^\/api\/v1\/preleads\/(demo-prelead-[0-9]{3})\/events$/);
     const isAppendPreleadEvent = Boolean(timelineEventMatch) && request.method === "POST";
     const isConfirmDeal = url.pathname === "/api/v1/deals/confirm" && request.method === "POST";
+    const isPrepareReview = url.pathname === "/api/v1/deal-reviews" && request.method === "POST";
+    const reviewMatch = url.pathname.match(/^\/api\/v1\/deal-reviews\/(review-[0-9a-f-]{36})$/);
+    const reviewConfirmMatch = url.pathname.match(/^\/api\/v1\/deal-reviews\/(review-[0-9a-f-]{36})\/confirm$/);
+    const isConfirmReview = Boolean(reviewConfirmMatch) && request.method === "POST";
     const dealActionMatch = url.pathname.match(/^\/api\/v1\/deal-operations\/(op-[0-9a-f-]{36})\/(reconcile|repair)$/);
     const isDealAction = Boolean(dealActionMatch) && request.method === "POST";
     const isCatalogBuild = url.pathname === "/api/v1/catalog-builds" && request.method === "POST";
@@ -126,7 +135,7 @@ export function createServer({
     const isCatalogBuildPreview = Boolean(catalogBuildPreviewMatch) && request.method === "POST";
     const catalogPreviewMatch = url.pathname.match(/^\/api\/v1\/catalog-previews\/(preview-[a-f0-9]{24})$/);
     const isCatalogPreviewRead = Boolean(catalogPreviewMatch) && (request.method === "GET" || request.method === "HEAD");
-    if (request.method !== "GET" && request.method !== "HEAD" && !isCreateIntent && !isAppendPreleadEvent && !isConfirmDeal && !isDealAction && !isCatalogBuild && !isCatalogBuildPreview) {
+    if (request.method !== "GET" && request.method !== "HEAD" && !isCreateIntent && !isAppendPreleadEvent && !isConfirmDeal && !isPrepareReview && !isConfirmReview && !isDealAction && !isCatalogBuild && !isCatalogBuildPreview) {
       response.setHeader("allow", "GET, HEAD, POST");
       return json(response, 405, { error: "method_not_allowed" });
     }
@@ -179,6 +188,7 @@ export function createServer({
       return json(response, result.status, result.body);
     }
     if (isConfirmDeal) {
+      if (!allowUnsafeSyntheticConfirm) return json(response, 404, { error: "not_found" });
       const context = await trustedProfile(request, response, "crm.deals.confirm.synthetic");
       if (!context) return;
       const idempotencyKey = request.headers["idempotency-key"];
@@ -188,6 +198,35 @@ export function createServer({
       const normalized = normalizeConfirmedDealRequest(parsed.value);
       if (!normalized) return json(response, 400, { error: "invalid_confirmed_deal_request", operationId: parsed.value?.operationId });
       const result = await dealService.create({ profileId: context.profileId, idempotencyKey, request: normalized });
+      return json(response, result.status, result.body);
+    }
+    if (isPrepareReview) {
+      const context = await trustedProfile(request, response, "crm.deals.review.synthetic");
+      if (!context) return;
+      const parsed = await readJson(request);
+      if (parsed.error) return json(response, parsed.error === "content_type_required" ? 415 : 400, { error: parsed.error });
+      const draft = normalizeDealReviewRequest(parsed.value);
+      const result = dealReviews.prepare({ profileId: context.profileId, request: draft ?? parsed.value });
+      return json(response, result.status, result.body);
+    }
+    if (reviewMatch && (request.method === "GET" || request.method === "HEAD")) {
+      const context = await trustedProfile(request, response, "crm.deals.review.synthetic");
+      if (!context) return;
+      const result = dealReviews.get({ profileId: context.profileId, reviewId: reviewMatch[1] });
+      return json(response, result.status, result.body);
+    }
+    if (isConfirmReview) {
+      const context = await trustedProfile(request, response, "crm.deals.confirm.synthetic");
+      if (!context) return;
+      const parsed = await readJson(request);
+      if (parsed.error) return json(response, parsed.error === "content_type_required" ? 415 : 400, { error: parsed.error });
+      if (!parsed.value || typeof parsed.value !== "object" || Array.isArray(parsed.value) ||
+          Object.keys(parsed.value).some((key) => key !== "revision") || typeof parsed.value.revision !== "string") {
+        return json(response, 400, { error: "invalid_review_confirmation" });
+      }
+      let trustedReceipt;
+      try { trustedReceipt = await resolveTrustedReviewReceipt?.(request, context); } catch {}
+      const result = await dealReviews.confirm({ profileId: context.profileId, reviewId: reviewConfirmMatch[1], revision: parsed.value.revision, trustedReceipt });
       return json(response, result.status, result.body);
     }
     if (isDealAction) {

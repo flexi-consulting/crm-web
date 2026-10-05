@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crm-web.example.invalid/schemas/s04-review-output.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["domainApiVersion", "reviewId", "revision", "operationId", "details", "status"],
+  "properties": {
+    "domainApiVersion": { "const": "1.0.0" },
+    "reviewId": { "type": "string", "pattern": "^review-[0-9a-f-]{36}$" },
+    "revision": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "operationId": { "type": "string", "pattern": "^op-[0-9a-f-]{36}$" },
+    "status": { "enum": ["prepared", "pending", "created", "unknown", "rejected"] },
+    "dealId": { "type": "string", "pattern": "^demo-deal-[0-9a-f-]{36}$" },
+    "linkStatus": { "const": "linked" },
+    "details": {
+      "type": "object", "additionalProperties": false,
+      "required": ["companyId", "exhibitionId", "statusId", "title", "source", "dealType", "companyInn", "contactName", "dealComment", "notesCount"],
+      "properties": {
+        "companyId": { "type": "string" }, "exhibitionId": { "type": "string" },
+        "statusId": { "type": "string" }, "title": { "type": "string" },
+        "source": { "type": "string" }, "dealType": { "enum": ["direct", "partner"] },
+        "companyInn": { "type": "string" }, "contactName": { "type": "string" },
+        "dealComment": { "type": "string" }, "notesCount": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

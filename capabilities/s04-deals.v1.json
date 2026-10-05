@@ -3,10 +3,11 @@
   "version": "1.0.0",
   "description": "Synthetic participant deal creation and operation recovery.",
   "effect": "write",
-  "handlerBinding": "src/confirmed-deals.js#createConfirmedDealService",
+  "handlerBinding": "src/deal-reviews.js#createDealReviewService;src/confirmed-deals.js#createConfirmedDealService",
   "protocolVersion": "2025-06-18",
   "tools": [
-    { "name": "crm_deal_create_from_participant", "operation": "create", "scope": "crm.deals.confirm.synthetic", "inputSchemaRef": "schemas/s04-create-input.schema.json", "outputSchemaRef": "schemas/synthetic-deal-operation.schema.json", "httpBinding": "POST /api/v1/deals/confirm" },
+    { "name": "crm_deal_prepare_from_participant", "operation": "prepare", "scope": "crm.deals.review.synthetic", "inputSchemaRef": "schemas/s04-review-input.schema.json", "outputSchemaRef": "schemas/s04-review-output.schema.json", "httpBinding": "POST /api/v1/deal-reviews" },
+    { "name": "crm_deal_create_from_participant", "operation": "confirm", "scope": "crm.deals.confirm.synthetic", "inputSchemaRef": "schemas/s04-create-input.schema.json", "outputSchemaRef": "schemas/synthetic-deal-operation.schema.json", "httpBinding": "POST /api/v1/deal-reviews/{reviewId}/confirm" },
     { "name": "crm_deal_get_operation", "operation": "get", "scope": "crm.deals.operations.read.synthetic", "inputSchemaRef": "schemas/s04-operation-input.schema.json", "outputSchemaRef": "schemas/synthetic-deal-operation.schema.json", "httpBinding": "GET /api/v1/deal-operations/{operationId}" },
     { "name": "crm_deal_reconcile_operation", "operation": "reconcile", "scope": "crm.deals.operations.read.synthetic", "inputSchemaRef": "schemas/s04-operation-input.schema.json", "outputSchemaRef": "schemas/synthetic-deal-operation.schema.json", "httpBinding": "POST /api/v1/deal-operations/{operationId}/reconcile" },
     { "name": "crm_deal_repair_catalog_link", "operation": "repair", "scope": "crm.deals.links.repair.synthetic", "inputSchemaRef": "schemas/s04-operation-input.schema.json", "outputSchemaRef": "schemas/synthetic-deal-operation.schema.json", "httpBinding": "POST /api/v1/deal-operations/{operationId}/repair" }
