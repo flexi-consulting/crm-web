@@ -11,8 +11,14 @@
     "status": { "enum": ["pending", "created", "unknown", "rejected"] },
     "companyId": { "type": "string", "pattern": "^demo-company-[0-9]{3}$" },
     "exhibitionId": { "type": "string", "pattern": "^demo-expo-[0-9]{3}$" },
-    "dealId": { "type": "string", "pattern": "^demo-deal-[0-9a-f-]{36}$" },
+    "dealId": { "type": "string", "pattern": "^demo-deal-[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" },
     "linkStatus": { "const": "linked" },
     "replayed": { "type": "boolean" }
-  }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "const": "created" } }, "required": ["status"] },
+      "then": { "required": ["dealId"] }
+    }
+  ]
 }

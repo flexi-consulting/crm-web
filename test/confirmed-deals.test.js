@@ -78,6 +78,55 @@ test("unknown provider outcome reconciles before any retry and link repair never
   }, { provider });
 });
 
+test("malformed provider create or reconcile success remains unknown without a deal reference", async () => {
+  let creates = 0, reconcileResult = { status: "created", dealId: "not-a-synthetic-deal-id" };
+  const provider = {
+    async create() { creates++; return { status: "created", dealId: "bad-reference" }; },
+    async reconcile() { return reconcileResult; },
+    async repairLink() { throw new Error("must not run without a valid deal ID"); }
+  };
+  await withServer(async (base) => {
+    const created = await post(base, "demo-profile-a", request(8));
+    assert.equal(created.status, 202);
+    assert.equal((await created.json()).status, "unknown");
+    const reconciled = await fetch(`${base}/api/v1/deal-operations/${opId(8)}/reconcile`, { method: "POST", headers: profileHeaders("demo-profile-a") });
+    assert.equal(reconciled.status, 200);
+    const body = await reconciled.json();
+    assert.equal(body.status, "unknown");
+    assert.equal("dealId" in body, false);
+    const invalidSchema = (await schemaValidatorForOperation())({ domainApiVersion: "1.0.0", operationId: opId(8), status: "created", companyId: "demo-company-001", exhibitionId: "demo-expo-001", replayed: false });
+    assert.equal(invalidSchema, false);
+    assert.equal(creates, 1);
+  }, { provider });
+});
+
+test("reconcile and link provider exceptions return typed unavailable errors and preserve state", async () => {
+  let linkThrows = true;
+  const dealId = `demo-deal-${opId(9).slice(3)}`;
+  const provider = {
+    async create() { return { status: "created", dealId }; },
+    async reconcile() { throw new Error("private provider detail"); },
+    async repairLink() { if (linkThrows) throw new Error("private provider detail"); return true; }
+  };
+  await withServer(async (base) => {
+    const created = await post(base, "demo-profile-a", request(9));
+    assert.equal(created.status, 201);
+    const reconcile = await fetch(`${base}/api/v1/deal-operations/${opId(9)}/reconcile`, { method: "POST", headers: profileHeaders("demo-profile-a") });
+    assert.equal(reconcile.status, 503);
+    const reconcileBody = await reconcile.json();
+    assert.deepEqual(reconcileBody, { error: "provider_unavailable", operationId: opId(9), status: "created" });
+    assert.equal((await schemaValidator("synthetic-deal-operation-error"))(reconcileBody), true);
+
+    const repairFailed = await fetch(`${base}/api/v1/deal-operations/${opId(9)}/repair`, { method: "POST", headers: profileHeaders("demo-profile-a") });
+    assert.equal(repairFailed.status, 503);
+    assert.deepEqual(await repairFailed.json(), { error: "provider_unavailable", operationId: opId(9), status: "created" });
+    linkThrows = false;
+    const repairRetried = await fetch(`${base}/api/v1/deal-operations/${opId(9)}/repair`, { method: "POST", headers: profileHeaders("demo-profile-a") });
+    assert.equal(repairRetried.status, 200);
+    assert.equal((await repairRetried.json()).status, "created");
+  }, { provider });
+});
+
 test("operation state is isolated by trusted profile and scope", async () => {
   await withServer(async (base) => {
     const created = await post(base, "demo-profile-a", request(5));
@@ -91,10 +140,21 @@ test("operation state is isolated by trusted profile and scope", async () => {
 
 test("request and operation schemas describe the versioned wire contract", async () => {
   const ajv = new Ajv();
-  for (const name of ["synthetic-confirmed-deal-request", "synthetic-deal-operation"]) {
+  for (const name of ["synthetic-confirmed-deal-request", "synthetic-deal-operation", "synthetic-deal-operation-error"]) {
     const schema = JSON.parse(await readFile(new URL(`../schemas/${name}.schema.json`, import.meta.url)));
     ajv.addSchema(schema);
   }
   assert.equal(ajv.getSchema("https://crm-web.example.invalid/schemas/synthetic-confirmed-deal-request.schema.json")(request(7)), true);
   assert.equal(ajv.getSchema("https://crm-web.example.invalid/schemas/synthetic-deal-operation.schema.json")({ domainApiVersion: "1.0.0", operationId: opId(7), status: "created", companyId: "demo-company-001", exhibitionId: "demo-expo-001", dealId: `demo-deal-${opId(7).slice(3)}`, replayed: false }), true);
 });
+
+async function schemaValidator(name) {
+  const ajv = new Ajv();
+  const schema = JSON.parse(await readFile(new URL(`../schemas/${name}.schema.json`, import.meta.url)));
+  ajv.addSchema(schema);
+  return ajv.getSchema(`https://crm-web.example.invalid/schemas/${name}.schema.json`);
+}
+
+async function schemaValidatorForOperation() {
+  return schemaValidator("synthetic-deal-operation");
+}

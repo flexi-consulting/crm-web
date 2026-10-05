@@ -3,6 +3,7 @@ import { catalog, syntheticProfileCompanies, companies } from "./fixtures.js";
 
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const keyFor = (profileId, key) => `${profileId}\u0000${key}`;
+const isDealId = (value) => typeof value === "string" && /^demo-deal-[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value);
 
 // In-memory fake provider. Tests may inject an adapter with the same methods.
 export class FakeDealProvider {
@@ -57,7 +58,9 @@ export function createConfirmedDealService({ provider = new FakeDealProvider() }
       if (!same(prior.request, request)) return { status: 409, body: { error: "idempotency_conflict", operationId: request.operationId } };
       if (prior.status === "unknown") {
         const reconciled = await reconcileOne(prior);
-        return { status: 200, body: response(prior, true), ...(reconciled ? {} : {}) };
+        return reconciled.available
+          ? { status: 200, body: response(prior, true) }
+          : { status: 503, body: { error: "provider_unavailable", operationId: prior.operationId, status: prior.status } };
       }
       return { status: 200, body: response(prior, true) };
     }
@@ -72,8 +75,8 @@ export function createConfirmedDealService({ provider = new FakeDealProvider() }
     const task = (async () => {
       try {
         const result = await provider.create({ operationId: op.operationId, request: op.request });
-        op.status = result.status === "rejected" ? "rejected" : result.status === "created" ? "created" : "unknown";
-        op.dealId = result.dealId;
+        op.status = result.status === "rejected" ? "rejected" : result.status === "created" && isDealId(result.dealId) ? "created" : "unknown";
+        op.dealId = op.status === "created" ? result.dealId : undefined;
         return { status: op.status === "created" ? 201 : op.status === "rejected" ? 422 : 202, body: response(op) };
       } catch {
         op.status = "unknown";
@@ -84,10 +87,22 @@ export function createConfirmedDealService({ provider = new FakeDealProvider() }
     try { return await task; } finally { inFlight.delete(key); }
   }
   async function reconcileOne(op) {
-    const result = await provider.reconcile(op.operationId);
-    if (["created", "rejected", "unknown"].includes(result.status)) op.status = result.status;
-    if (result.dealId) op.dealId = result.dealId;
-    return result;
+    let result;
+    try { result = await provider.reconcile(op.operationId); }
+    catch { return { available: false }; }
+    if (!result || typeof result !== "object") {
+      op.status = "unknown"; op.dealId = undefined;
+      return { available: true, status: "unknown" };
+    }
+    if (result.status === "created" && isDealId(result.dealId)) {
+      op.status = "created"; op.dealId = result.dealId;
+    } else if (result.status === "rejected") {
+      op.status = "rejected"; op.dealId = undefined;
+    } else {
+      // An invalid or incomplete success is never evidence that a deal exists.
+      op.status = "unknown"; op.dealId = undefined;
+    }
+    return { available: true, status: op.status };
   }
   function ownedOperation(profileId, operationId) {
     const op = operations.get(operationId);
@@ -96,15 +111,20 @@ export function createConfirmedDealService({ provider = new FakeDealProvider() }
   async function reconcile({ profileId, operationId }) {
     const op = ownedOperation(profileId, operationId);
     if (!op) return { status: 404, body: { error: "operation_not_found", operationId } };
-    await reconcileOne(op);
+    const result = await reconcileOne(op);
+    if (!result.available) return { status: 503, body: { error: "provider_unavailable", operationId, status: op.status } };
     return { status: 200, body: response(op) };
   }
   async function repair({ profileId, operationId }) {
     const op = ownedOperation(profileId, operationId);
     if (!op) return { status: 404, body: { error: "operation_not_found", operationId } };
-    if (op.status === "unknown" || op.status === "pending") await reconcileOne(op);
+    if (op.status === "unknown" || op.status === "pending") {
+      const result = await reconcileOne(op);
+      if (!result.available) return { status: 503, body: { error: "provider_unavailable", operationId, status: op.status } };
+    }
     if (op.status !== "created" || !op.dealId) return { status: 409, body: { error: "created_deal_required", operationId } };
-    op.linked = await provider.repairLink(operationId, op.dealId);
+    try { op.linked = (await provider.repairLink(operationId, op.dealId)) === true; }
+    catch { return { status: 503, body: { error: "provider_unavailable", operationId, status: op.status } }; }
     return op.linked ? { status: 200, body: response(op) } : { status: 409, body: { error: "link_repair_failed", operationId } };
   }
   return { create, reconcile, repair };
