@@ -131,6 +131,7 @@ export function createServer({
     const isCatalogBuild = url.pathname === "/api/v1/catalog-builds" && request.method === "POST";
     const catalogBuildMatch = url.pathname.match(/^\/api\/v1\/catalog-builds\/(build-[a-f0-9]{24})$/);
     const isCatalogBuildRead = Boolean(catalogBuildMatch) && (request.method === "GET" || request.method === "HEAD");
+    const builtParticipantsMatch = url.pathname.match(/^\/api\/v1\/catalog-builds\/(build-[a-f0-9]{24})\/participants(?:\/(co-[a-f0-9]{20}))?$/);
     const catalogBuildPreviewMatch = url.pathname.match(/^\/api\/v1\/catalog-builds\/(build-[a-f0-9]{24})\/preview$/);
     const isCatalogBuildPreview = Boolean(catalogBuildPreviewMatch) && request.method === "POST";
     const catalogPreviewMatch = url.pathname.match(/^\/api\/v1\/catalog-previews\/(preview-[a-f0-9]{24})$/);
@@ -284,6 +285,22 @@ export function createServer({
       const context = await trustedProfile(request, response, "crm.catalog.build.read.synthetic");
       if (!context) return;
       const result = catalogBuilds.get({ profileId: context.profileId, buildId: catalogBuildMatch[1] });
+      return json(response, result.status, result.body);
+    }
+    if (builtParticipantsMatch && (request.method === "GET" || request.method === "HEAD")) {
+      const context = await trustedProfile(request, response, "crm.catalog.build.read.synthetic");
+      if (!context) return;
+      const keys = [...url.searchParams.keys()];
+      const queryValues = url.searchParams.getAll("q");
+      const classValues = url.searchParams.getAll("classification");
+      if (keys.some((key) => !["q", "classification"].includes(key)) || queryValues.length > 1 || classValues.length > 1 ||
+          (queryValues[0] && [...queryValues[0]].length > 120) ||
+          (classValues[0] && !["target", "near_target", "not_target"].includes(classValues[0])) ||
+          (builtParticipantsMatch[2] && keys.length > 0)) {
+        return json(response, 400, { error: "invalid_query", code: "BUILD_INVALID_QUERY" });
+      }
+      const result = catalogBuilds.readParticipants({ profileId: context.profileId, buildId: builtParticipantsMatch[1],
+        companyId: builtParticipantsMatch[2] ?? null, query: queryValues[0] ?? "", classification: classValues[0] ?? null });
       return json(response, result.status, result.body);
     }
     const intentMatch = url.pathname.match(/^\/api\/v1\/deal-intents\/(demo-intent-[0-9a-f-]{36})$/);

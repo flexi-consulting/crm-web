@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crm-web.example.invalid/schemas/built-participants-input.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["buildId"],
+  "properties": {
+    "buildId": { "type": "string", "pattern": "^build-[a-f0-9]{24}$" },
+    "q": { "type": "string", "maxLength": 120 },
+    "classification": { "enum": ["target", "near_target", "not_target"] }
+  }
+}
