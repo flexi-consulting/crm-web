@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crm-web.example.invalid/schemas/catalog-build-error.schema.json",
+  "title": "Synthetic catalog build typed error",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["error", "code"],
+  "properties": {
+    "error": { "type": "string" },
+    "code": { "enum": ["BUILD_SOURCE_MISSING", "BUILD_SOURCE_UNAVAILABLE", "BUILD_SOURCE_INVALID", "BUILD_DUPLICATE_SOURCE_ID", "BUILD_VALIDATION_FAILED", "BUILD_IDEMPOTENCY_CONFLICT", "BUILD_NOT_FOUND", "BUILD_INVALID_REQUEST", "BUILD_IDEMPOTENCY_KEY_REQUIRED", "BUILD_INVALID_QUERY"] }
+  }
+}

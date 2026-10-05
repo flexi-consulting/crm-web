@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crm-web.example.invalid/schemas/catalog-build-report.schema.json",
+  "title": "Synthetic catalog build validation report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "exhibitionId", "sourceRevision", "stages", "providerErrors", "validation"],
+  "properties": {
+    "schemaVersion": { "const": "1.0.0" }, "exhibitionId": { "type": "string", "pattern": "^demo-expo-[0-9]{3}$" }, "sourceRevision": { "type": "string" },
+    "stages": {
+      "type": "object", "additionalProperties": false,
+      "required": ["source", "dedup", "enrichment", "registry", "qualification", "artifact"],
+      "properties": {
+        "source": { "type": "object", "required": ["status", "imported"], "properties": { "status": { "const": "complete" }, "imported": { "type": "integer", "minimum": 0 } } },
+        "dedup": { "type": "object", "required": ["status", "removed"], "properties": { "status": { "const": "complete" }, "removed": { "type": "integer", "minimum": 0 } } },
+        "enrichment": { "type": "object", "required": ["status"], "properties": { "status": { "enum": ["complete", "partial"] } } },
+        "registry": { "type": "object", "required": ["status"], "properties": { "status": { "enum": ["complete", "partial"] } } },
+        "qualification": { "type": "object", "required": ["status"], "properties": { "status": { "const": "complete" } } },
+        "artifact": { "type": "object", "required": ["status"], "properties": { "status": { "const": "complete" } } }
+      }
+    },
+    "providerErrors": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["stage", "sourceRecordId", "code"], "properties": { "stage": { "enum": ["enrichment", "registry"] }, "sourceRecordId": { "type": "string", "pattern": "^src-[a-z0-9-]{1,48}$" }, "code": { "enum": ["ENRICHMENT_UNAVAILABLE", "REGISTRY_UNAVAILABLE"] } } } },
+    "validation": {
+      "type": "object", "additionalProperties": false, "required": ["valid", "issues", "counts"],
+      "properties": {
+        "valid": { "type": "boolean" }, "issues": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["code"], "properties": { "code": { "enum": ["unsafe_or_duplicate_company_id", "qualification_counts_mismatch", "source_counts_mismatch", "enrichment_counts_mismatch", "registry_counts_mismatch"] } } } },
+        "counts": { "type": "object", "additionalProperties": false, "required": ["sourceRecords", "uniqueCompanies", "duplicateRecords", "enrichmentFound", "enrichmentNotFound", "enrichmentUnavailable", "registryOk", "registryUnknown", "registrySanctioned", "registryNotFound", "registryInactive", "targets", "nearTargets", "notTargets"], "properties": { "sourceRecords": { "type": "integer" }, "uniqueCompanies": { "type": "integer" }, "duplicateRecords": { "type": "integer" }, "enrichmentFound": { "type": "integer" }, "enrichmentNotFound": { "type": "integer" }, "enrichmentUnavailable": { "type": "integer" }, "registryOk": { "type": "integer" }, "registryUnknown": { "type": "integer" }, "registrySanctioned": { "type": "integer" }, "registryNotFound": { "type": "integer" }, "registryInactive": { "type": "integer" }, "targets": { "type": "integer" }, "nearTargets": { "type": "integer" }, "notTargets": { "type": "integer" } } }
+      }
+    }
+  }
+}

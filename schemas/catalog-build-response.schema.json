@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crm-web.example.invalid/schemas/catalog-build-response.schema.json",
+  "title": "Synthetic catalog build response",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["buildId", "artifact", "report", "replayed"],
+  "properties": {
+    "buildId": { "type": "string", "pattern": "^build-[a-f0-9]{24}$" },
+    "artifact": { "$ref": "https://crm-web.example.invalid/schemas/catalog-build-artifact.schema.json" },
+    "report": { "$ref": "https://crm-web.example.invalid/schemas/catalog-build-report.schema.json" },
+    "replayed": { "type": "boolean" }
+  }
+}

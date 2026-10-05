@@ -5,6 +5,7 @@ import { catalog } from "./fixtures.js";
 import { createDealIntentService, isDealIntentRequest } from "./deal-intents.js";
 import { createPreleadTimelineService, normalizePreleadEventRequest } from "./prelead-timeline.js";
 import { createConfirmedDealService, normalizeConfirmedDealRequest } from "./confirmed-deals.js";
+import { createCatalogBuildService } from "./catalog-build.js";
 
 const manifest = {
   serviceId: "crm-web.exhibitions",
@@ -80,7 +81,8 @@ export function createServer({
   resolveTrustedProfile,
   dealIntents = createDealIntentService(),
   preleadTimeline = createPreleadTimelineService(),
-  confirmedDeals = createConfirmedDealService()
+  confirmedDeals = createConfirmedDealService(),
+  catalogBuilds = createCatalogBuildService()
 } = {}) {
   async function trustedProfile(request, response, requiredScope) {
     if (!resolveTrustedProfile) {
@@ -108,7 +110,10 @@ export function createServer({
     const isConfirmDeal = url.pathname === "/api/v1/deals/confirm" && request.method === "POST";
     const dealActionMatch = url.pathname.match(/^\/api\/v1\/deal-operations\/(op-[0-9a-f-]{36})\/(reconcile|repair)$/);
     const isDealAction = Boolean(dealActionMatch) && request.method === "POST";
-    if (request.method !== "GET" && request.method !== "HEAD" && !isCreateIntent && !isAppendPreleadEvent && !isConfirmDeal && !isDealAction) {
+    const isCatalogBuild = url.pathname === "/api/v1/catalog-builds" && request.method === "POST";
+    const catalogBuildMatch = url.pathname.match(/^\/api\/v1\/catalog-builds\/(build-[a-f0-9]{24})$/);
+    const isCatalogBuildRead = Boolean(catalogBuildMatch) && (request.method === "GET" || request.method === "HEAD");
+    if (request.method !== "GET" && request.method !== "HEAD" && !isCreateIntent && !isAppendPreleadEvent && !isConfirmDeal && !isDealAction && !isCatalogBuild) {
       response.setHeader("allow", "GET, HEAD, POST");
       return json(response, 405, { error: "method_not_allowed" });
     }
@@ -177,6 +182,25 @@ export function createServer({
       const result = dealActionMatch[2] === "repair"
         ? await confirmedDeals.repair({ profileId: context.profileId, operationId: dealActionMatch[1] })
         : await confirmedDeals.reconcile({ profileId: context.profileId, operationId: dealActionMatch[1] });
+      return json(response, result.status, result.body);
+    }
+    if (isCatalogBuild) {
+      const context = await trustedProfile(request, response, "crm.catalog.build.synthetic");
+      if (!context) return;
+      if (url.searchParams.size > 0) return json(response, 400, { error: "invalid_query", code: "BUILD_INVALID_QUERY" });
+      const idempotencyKey = request.headers["idempotency-key"];
+      if (typeof idempotencyKey !== "string" || !/^[A-Za-z0-9._:-]{8,128}$/.test(idempotencyKey)) return json(response, 400, { error: "valid_idempotency_key_required", code: "BUILD_IDEMPOTENCY_KEY_REQUIRED" });
+      const parsed = await readJson(request);
+      if (parsed.error) return json(response, parsed.error === "content_type_required" ? 415 : 400, { error: parsed.error, code: "BUILD_INVALID_REQUEST" });
+      if (!parsed.value || typeof parsed.value !== "object" || Array.isArray(parsed.value) || Object.keys(parsed.value).length !== 1 || typeof parsed.value.exhibitionId !== "string" || !/^demo-expo-[0-9]{3}$/.test(parsed.value.exhibitionId)) return json(response, 400, { error: "invalid_catalog_build_request", code: "BUILD_INVALID_REQUEST" });
+      const result = await catalogBuilds.build({ profileId: context.profileId, idempotencyKey, exhibitionId: parsed.value.exhibitionId });
+      return json(response, result.status, result.body);
+    }
+    if (isCatalogBuildRead) {
+      if (url.searchParams.size > 0) return json(response, 400, { error: "invalid_query", code: "BUILD_INVALID_QUERY" });
+      const context = await trustedProfile(request, response, "crm.catalog.build.read.synthetic");
+      if (!context) return;
+      const result = catalogBuilds.get({ profileId: context.profileId, buildId: catalogBuildMatch[1] });
       return json(response, result.status, result.body);
     }
     const intentMatch = url.pathname.match(/^\/api\/v1\/deal-intents\/(demo-intent-[0-9a-f-]{36})$/);
