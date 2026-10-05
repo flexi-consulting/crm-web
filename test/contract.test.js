@@ -29,6 +29,11 @@ test("manifest declares stable v1 read-only contract and capabilities", async ()
         effect: "read", requiredScopes: [], operationRef: "GET /api/v1/catalog"
       },
       {
+        id: "crm.companies.read", version: "1.0.0", required: true,
+        inputSchemaRef: "schemas/company-query.schema.json", outputSchemaRef: "schemas/company-list.schema.json",
+        effect: "read", requiredScopes: ["crm.companies.read"], operationRef: "GET /api/v1/companies"
+      },
+      {
         id: "crm.exhibitions.participants.read", version: "1.0.0", required: true,
         inputSchemaRef: "schemas/s01-participants-input.schema.json", outputSchemaRef: "schemas/s01-participants-output.schema.json",
         errorsSchemaRef: "schemas/s01-participants-errors.schema.json", descriptorRef: "capabilities/s01-exhibition-participants.v1.json",

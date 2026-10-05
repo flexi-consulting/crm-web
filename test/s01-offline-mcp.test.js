@@ -43,7 +43,9 @@ test("descriptor is versioned, resolves every schema and binds UI/API/MCP to one
   const ajv = new Ajv();
   addFormats(ajv);
   const validateOutput = ajv.compile(outputSchema);
-  await fixture(async ({ base, mcp }) => {
+  await fixture(async ({ base, mcp, mcpServer }) => {
+    const listed = JSON.parse(await mcpServer.receive({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }));
+    assert.deepEqual(listed.result.tools[0].inputSchema, resolvedSchemas.input);
     const api = await fetch(`${base}/api/v1/companies`).then((response) => response.json());
     assert.ok(validateOutput(api), JSON.stringify(validateOutput.errors));
     assert.ok(validateOutput(await mcp.readParticipants()), JSON.stringify(validateOutput.errors));
