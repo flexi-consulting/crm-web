@@ -1,5 +1,15 @@
 # CRM Web
 
+## Private legacy import review (draft)
+
+After the frozen backup and untouched owner review packet are verified, an operator can prepare an owner-only decision queue outside Git:
+
+```sh
+node scripts/legacy-import-decision-packet.mjs PRIVATE_BACKUP_DIR PRIVATE_PROFILE_REVIEW_JSON NEW_PRIVATE_OUTPUT_JSON
+```
+
+The command verifies every backed-up object and the exact profile-review packet. It records source row indexes and hashes for duplicate/unsafe IDs and schema-invalid fields, plus blank reviewer decisions. The output is mode `0600`; stdout contains counts only. A structural projection uses a clearly synthetic profile and never writes D1, contacts Weeek, assigns a real profile, or grants import approval. Reviewers must independently prove the old account owner and the current Control Plane profile before completing a separate approved mapping. Relative or otherwise invalid old URLs and inconsistent classification flags require source-specific decisions; the queue does not silently rewrite them.
+
 The offline old `USER_ID` to trusted profile audit is documented in [Legacy profile authority](docs/LEGACY-PROFILE-AUTHORITY.md). It yields private binding candidates only; it cannot authorize an import or a live web session.
 
 Independent CRM and exhibitions web service. This work is a local synthetic API/domain-logic foundation. Catalog and company reads use fixtures; the exhibition extension adds a hidden synthetic catalog-build pipeline; the sales extension prepares in-memory intents and includes an unadvertised synthetic confirmed-deal state machine behind a fake provider. None of these routes writes to a live CRM or scrapes live sites. Mutating deal-intent, prelead timeline, confirmed-deal, and catalog-build routes are omitted from the published manifest, so the agent cannot discover them as capabilities.
