@@ -4,6 +4,7 @@ import { createS04D1Repository } from "./s04-d1-repository.js";
 import { createS04D1ConfirmedDeals } from "./s04-d1-confirmed-deals.js";
 import { createDealReviewService } from "./deal-reviews.js";
 import { normalizePreleadEventRequest } from "./prelead-timeline.js";
+import { renderBuiltCatalogBrowser, browserHeaders } from "./built-catalog-browser.js";
 
 const reply = (status, body) => new Response(JSON.stringify(body), { status, headers: {
   "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff"
@@ -64,6 +65,23 @@ export function createBuiltCatalogD1HttpHandler({ db, enabled = false, provider,
     const authorize = (scope) => context.scopes.includes(scope) ? null : reply(403, { error: "required_scope_missing" });
     const malformedQuery = () => url.searchParams.size > 0 ? reply(400, { error: "invalid_query" }) : null;
     try {
+      const browserMatch = path.match(/^\/catalogs\/(build-[a-f0-9]{24})(?:\/participants\/(co-[a-f0-9]{20}))?$/);
+      if (browserMatch && request.method === "GET") {
+        const denied = authorize("crm.catalog.build.read.synthetic"); if (denied) return denied;
+        const query = url.searchParams.getAll("q"), statuses = url.searchParams.getAll("classification");
+        if ([...url.searchParams.keys()].some((key) => !["q", "classification"].includes(key)) ||
+            query.length > 1 || statuses.length > 1 || browserMatch[2] && url.searchParams.size > 0 ||
+            (statuses[0] && !["target", "near_target", "not_target"].includes(statuses[0])))
+          return reply(400, { error: "invalid_query" });
+        const result = await built.catalogBuilds.readParticipants({ profileRef: context.profileId,
+          buildId: browserMatch[1], companyId: browserMatch[2] ?? null,
+          query: query[0] ?? "", classification: statuses[0] || null });
+        return result.status === 200
+          ? new Response(renderBuiltCatalogBrowser(result.body, { query: query[0] ?? "",
+            classification: statuses[0] || null, companyId: browserMatch[2] ?? null }),
+          { status: 200, headers: browserHeaders })
+          : reply(result.status, result.body);
+      }
       if (path === "/api/v1/catalog-builds" && request.method === "POST") {
         const denied = authorize("crm.catalog.build.synthetic"); if (denied) return denied;
         const invalidQuery = malformedQuery(); if (invalidQuery) return invalidQuery;

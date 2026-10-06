@@ -96,6 +96,30 @@ test("opt-in public-shaped D1 HTTP routes and offline MCP share one durable S01/
     validate("built-participants-output", list.body);
     const company = list.body.items[0];
     assert.deepEqual((await request(worker.base, "GET", company.detailPath)).body.items, [company]);
+    const browserPath = `/catalogs/${buildId}`;
+    const browser = await fetch(`${worker.base}${browserPath}?classification=target`,
+      { headers: { "x-test-profile": "demo-profile-a" } });
+    const browserHtml = await browser.text();
+    assert.equal(browser.status, 200);
+    assert.match(browser.headers.get("content-type"), /text\/html/);
+    assert.equal(browser.headers.get("cache-control"), "private, no-store");
+    assert.match(browserHtml, new RegExp(`/catalogs/${buildId}/participants/${company.id}`));
+    assert.match(browserHtml, new RegExp(company.name));
+    assert.match(browserHtml, /Ревизия источника/);
+    const cardBrowser = await fetch(`${worker.base}${browserPath}/participants/${company.id}`);
+    const cardHtml = await cardBrowser.text();
+    assert.equal(cardBrowser.status, 200);
+    assert.match(cardHtml, new RegExp(company.name));
+    assert.match(cardHtml, /ИНН/);
+    assert.equal((await fetch(`${worker.base}${browserPath}/participants/${company.id}`,
+      { headers: { "x-test-profile": "demo-profile-b" } })).status, 404);
+    assert.equal((await fetch(`${worker.base}${browserPath}`,
+      { headers: { "x-test-scopes": "" } })).status, 403);
+    assert.equal((await fetch(`${worker.base}${browserPath}`, { headers: { "x-test-disable": "true" } })).status, 404);
+    assert.equal((await fetch(`${worker.base}${browserPath}?q=a&q=b`)).status, 400);
+    assert.equal((await fetch(`${worker.base}${browserPath}?classification=unknown`)).status, 400);
+    assert.equal((await fetch(`${worker.base}${browserPath}/participants/${company.id}?q=a`)).status, 400);
+    assert.equal((await fetch(`${worker.base}${browserPath}?q=${"x".repeat(121)}`)).status, 400);
     const mcpList = await request(worker.base, "POST", "/__offline-mcp", { contract: "s01",
       arguments: { buildId, classification: "target" } });
     assert.deepEqual(mcpList.body.result.structuredContent, list.body);
