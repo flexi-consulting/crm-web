@@ -6,7 +6,7 @@ import { auditLegacyProfileAuthority } from "../src/legacy-profile-authority.js"
 
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 async function outsideGit(path) {
-  let dir = dirname(resolve(path));
+  let dir = await realpath(dirname(resolve(path)));
   while (true) {
     try { await lstat(join(dir, ".git")); throw new Error("private_output_in_git"); }
     catch (error) { if (error?.message === "private_output_in_git") throw error;

@@ -65,7 +65,7 @@ export function auditLegacyProfileAuthority({ manifest, authority, mapping, note
     catalogOwnerBindingMissing: 0, catalogAuthorityMismatch: 0,
     noteCandidates: notes.candidates.length, noteBindingCandidates: 0,
     noteQuarantined: notes.quarantine.length, noteSourceMismatch: 0,
-    noteOwnerBindingMissing: 0, noteAuthorityMismatch: 0,
+    noteOwnerBindingMissing: 0, noteProfileUnverified: 0, noteAuthorityMismatch: 0,
     unusedBindings: [...bindings.keys()].filter((oldOwner) => !ownerNamespaces.has(oldOwner)).length };
   for (const status of catalogStatus.values()) {
     if (status === "binding_candidate_consistent") totals.catalogBindingCandidates++;
@@ -85,6 +85,7 @@ export function auditLegacyProfileAuthority({ manifest, authority, mapping, note
       totals.noteSourceMismatch++; continue;
     }
     if (!binding) { totals.noteOwnerBindingMissing++; continue; }
+    if (!note.trustedProfileRef) { totals.noteProfileUnverified++; continue; }
     if (principals.get(binding.principalId) !== binding.profileId ||
         note.trustedProfileRef !== binding.profileId) {
       totals.noteAuthorityMismatch++; continue;

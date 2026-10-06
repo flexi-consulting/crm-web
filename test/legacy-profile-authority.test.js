@@ -55,6 +55,14 @@ test("path alone, changed source revision and mismatched trusted profile never l
   assert.equal(totals.noteBindingCandidates, 0);
 });
 
+test("a source candidate without trusted profile evidence remains unverified", () => {
+  const value = fixture();
+  value.notes.candidates[0].trustedProfileRef = null;
+  const totals = auditLegacyProfileAuthority(value).totals;
+  assert.equal(totals.noteProfileUnverified, 1);
+  assert.equal(totals.noteBindingCandidates, 0);
+});
+
 test("ambiguous or conflicting authority and duplicate notes fail closed", () => {
   const manyToOne = fixture();
   manyToOne.mapping.bindings[1].profileId = "profile-a";
