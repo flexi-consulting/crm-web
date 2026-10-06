@@ -1,11 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import Ajv from "ajv/dist/2020.js";
+import addFormats from "ajv-formats";
 import vm from "node:vm";
 import { readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { createServer } from "../src/server.js";
 import { createCatalogBuildService, createSyntheticSourceAdapter, createSyntheticEnrichmentAdapter, createSyntheticRegistryAdapter, normalizeEnrichment, normalizeRegistry, qualify } from "../src/catalog-build.js";
 import { renderCatalogPreview } from "../src/catalog-preview.js";
+import { queryCatalogV11, renderCatalogV11, createCatalogV11ReadHandler,
+  createCatalogV11SearchHandler, createCatalogV11D1Repository } from "../src/catalog-query-v11.js";
+import initSqlJs from "sql.js";
 
 const scopes = ["crm.catalog.build.synthetic", "crm.catalog.build.read.synthetic", "crm.catalog.preview.synthetic", "crm.catalog.preview.read.synthetic"];
 const headers = (profileId, granted = scopes) => ({ "x-test-profile": profileId, "x-test-scopes": granted.join(" ") });
@@ -28,7 +33,8 @@ async function postBuild(base, profile, idempotencyKey, exhibitionId = "demo-exp
 }
 
 async function validators(...names) {
-  const ajv = new Ajv();
+  const ajv = new Ajv({ strict: false });
+  addFormats(ajv);
   for (const name of names) ajv.addSchema(JSON.parse(await readFile(new URL(`../schemas/${name}.schema.json`, import.meta.url))));
   return Object.fromEntries(names.map((name) => [name, ajv.getSchema(`https://crm-web.example.invalid/schemas/${name}.schema.json`)]));
 }
@@ -65,6 +71,216 @@ test("synthetic build imports, deduplicates, enriches, qualifies, and reconciles
     assert.equal(fetched.status, 200);
     assert.deepEqual((await fetched.json()).artifact, body.artifact);
   });
+});
+
+test("S-01 v1.1 metadata schema preserves synthetic legacy filter fields with explicit units and nullable years", async () => {
+  const ajv = new Ajv({ strict: false });
+  const schema = JSON.parse(await readFile(new URL("../schemas/catalog-build-artifact-v1.1.schema.json", import.meta.url)));
+  const validate = ajv.compile(schema);
+  const company = {
+    id: "co-0123456789abcdef0123", name: "Synthetic Boundary Maker",
+    source: { sourceRecordId: "src-synthetic-boundary", country: "Fictionland", booth: "A-14",
+      href: "https://example.invalid/synthetic", category: "Synthetic category",
+      description: "Synthetic source description", segment: "synthetic segment", duplicateSourceRecordIds: [] },
+    enrichment: { status: "found", inn: "0000000001", ogrn: null, revenueRub: 100_000_000,
+      revenueYear: 2025, profitRub: -1, profitYear: 2024, activity: "unknown",
+      website: null, provenance: { provider: "legacy-ex-snapshot", fixtureRef: "synthetic-source-row-01" } },
+    registry: { status: "unknown", provenance: { source: "synthetic-registry", fixtureRef: "synthetic-registry-01" } },
+    qualification: { classification: "unknown", target: false, nearTarget: false,
+      reason: "legacy_classification_unverified" }
+  };
+  const artifact = { schemaVersion: "1.1.0", exhibitionId: "synthetic-current-source-shape",
+    sourceRevision: "synthetic-source-revision-01", companies: [company] };
+  assert.equal(validate(artifact), true, JSON.stringify(validate.errors));
+  const withoutFinancialYear = structuredClone(artifact);
+  withoutFinancialYear.companies[0].enrichment.revenueYear = null;
+  withoutFinancialYear.companies[0].enrichment.profitRub = null;
+  withoutFinancialYear.companies[0].enrichment.profitYear = null;
+  assert.equal(validate(withoutFinancialYear), true, JSON.stringify(validate.errors));
+  const wrongUnit = structuredClone(artifact);
+  wrongUnit.companies[0].enrichment.profitRub = 0.5;
+  assert.equal(validate(wrongUnit), false, "money uses integer whole-RUB storage");
+  const unknownYear = structuredClone(artifact);
+  unknownYear.companies[0].enrichment.profitYear = 1899;
+  assert.equal(validate(unknownYear), false, "years stay in the documented bounded domain");
+  const leakedField = structuredClone(artifact);
+  leakedField.companies[0].source.email = "synthetic@example.invalid";
+  assert.equal(validate(leakedField), false, "schema remains allowlist based");
+
+  const rows = [
+    { ...structuredClone(company), name: "Below Revenue", enrichment: { ...company.enrichment, revenueRub: 99_999_999, profitRub: -1 }, source: { ...company.source, category: "Synthetic apparel" } },
+    { ...structuredClone(company), id: "co-1123456789abcdef0123", name: "Revenue Boundary", enrichment: { ...company.enrichment, revenueRub: 100_000_000, profitRub: 0 }, source: { ...company.source, country: "RU", category: "Synthetic lingerie" } },
+    { ...structuredClone(company), id: "co-2123456789abcdef0123", name: "Revenue Upper Boundary", enrichment: { ...company.enrichment, revenueRub: 1_500_000_000, profitRub: 30_000_000 } },
+    { ...structuredClone(company), id: "co-3123456789abcdef0123", name: "Revenue Above", enrichment: { ...company.enrichment, revenueRub: 1_500_000_001, profitRub: 200_000_000 } },
+    { ...structuredClone(company), id: "co-4123456789abcdef0123", name: "Unknown Finance", enrichment: { ...company.enrichment, revenueRub: null, profitRub: null } }
+  ];
+  const queryArtifact = { ...artifact, companies: rows };
+  const names = args => queryCatalogV11(queryArtifact, args).items.map(row => row.name).sort();
+  assert.deepEqual(names({ revenueBand: "0-100" }), ["Below Revenue"]);
+  assert.deepEqual(names({ revenueBand: "100-1500" }), ["Revenue Boundary", "Revenue Upper Boundary"]);
+  assert.deepEqual(names({ revenueBand: "1500+" }), ["Revenue Above"]);
+  assert.deepEqual(names({ profitBand: "loss" }), ["Below Revenue"]);
+  assert.deepEqual(names({ profitBand: "0-30" }), ["Revenue Boundary"]);
+  assert.deepEqual(names({ profitBand: "30-200" }), ["Revenue Upper Boundary"]);
+  assert.deepEqual(names({ profitBand: "200+" }), ["Revenue Above"]);
+  assert.deepEqual(names({ query: "apparel" }), ["Below Revenue"]);
+  assert.deepEqual(names({ country: "fictionland" }), ["Below Revenue", "Revenue Above", "Revenue Upper Boundary", "Unknown Finance"]);
+  assert.deepEqual(names({ country: "RU", classification: "unknown" }), ["Revenue Boundary"]);
+  assert.deepEqual(queryCatalogV11(artifact, { revenueBand: "unsafe" }), { status: "invalid_query" });
+  const filtered = queryCatalogV11(queryArtifact, { revenueBand: "100-1500", profitBand: "30-200" });
+  const view = renderCatalogV11({ artifact: queryArtifact, result: filtered,
+    filters: { revenueBand: "100-1500", profitBand: "30-200" } });
+  assert.equal(view.status, "ok");
+  assert.match(view.html, /<option value="100-1500" selected>/);
+  assert.match(view.html, /<option value="30-200" selected>/);
+  assert.match(view.html, /<option value="RU"/);
+  assert.match(view.html, /Стенд: A-14/);
+  assert.match(view.html, /Найдено: 1/);
+  const countryView = renderCatalogV11({ artifact: queryArtifact,
+    result: queryCatalogV11(queryArtifact, { country: "RU" }), filters: { country: "RU" } });
+  assert.match(countryView.html, /<option value="RU" selected>/);
+  assert.match(countryView.html, /Найдено: 1/);
+  const hostile = structuredClone(queryArtifact);
+  hostile.companies = [{ ...structuredClone(company), name: '<img src=x onerror="bad">',
+    source: { ...company.source, category: "<script>bad</script>", description: "<b>bad</b>",
+      booth: "<script>bad</script>", href: "https://example.invalid/a\\\" onmouseover=bad" } }];
+  const safeView = renderCatalogV11({ artifact: hostile, result: queryCatalogV11(hostile), filters: {} });
+  assert.equal(safeView.html.includes("<img src=x"), false);
+  assert.equal(safeView.html.includes("<script>bad</script>"), false);
+  assert.match(safeView.html, /Стенд: &lt;script&gt;bad&lt;\/script&gt;/);
+  assert.equal(safeView.html.includes('onmouseover=bad'), false);
+
+  const calls = [];
+  const handler = createCatalogV11ReadHandler({
+    repository: { async getArtifact(scope) {
+      calls.push(scope);
+      return scope.profileId === "demo-profile-a" ? queryArtifact : null;
+    } },
+    resolveTrustedProfile: async request => request.headers.get("x-test-profile") === "unavailable"
+      ? (() => { throw new Error("identity unavailable"); })()
+      : ({ profileId: request.headers.get("x-test-profile"), scopes: request.headers.get("x-test-scope")?.split(" ") ?? [] })
+  });
+  const fetchHandler = (profileId, scope = "crm.catalog.read", path = "/catalogs/synthetic-current-source-shape?revenueBand=100-1500&profitBand=30-200") =>
+    handler(new Request(`https://crm.example.invalid${path}`, { headers: { "x-test-profile": profileId, "x-test-scope": scope } }));
+  assert.equal((await fetchHandler("demo-profile-a")).status, 200);
+  const countryResponse = await fetchHandler("demo-profile-a", "crm.catalog.read",
+    "/catalogs/synthetic-current-source-shape?country=RU");
+  assert.equal(countryResponse.status, 200);
+  const countryHtml = await countryResponse.text();
+  assert.match(countryHtml, /<option value="RU" selected>/);
+  assert.match(countryHtml, /Стенд: A-14/);
+  assert.equal((await fetchHandler("demo-profile-a", "")).status, 403);
+  assert.equal((await fetchHandler("demo-profile-b")).status, 404);
+  assert.equal((await fetchHandler("unavailable")).status, 503);
+  assert.equal((await fetchHandler("demo-profile-a", "crm.catalog.read", "/catalogs/synthetic-current-source-shape?revenueBand=unsafe")).status, 400);
+  assert.equal((await fetchHandler("demo-profile-a", "crm.catalog.read", "/catalogs/synthetic-current-source-shape?query=a&query=b")).status, 400);
+  assert.ok(calls.every(scope => scope.profileId !== "demo-profile-b" || scope.exhibitionId === "synthetic-current-source-shape"));
+
+  const search = createCatalogV11SearchHandler({ repository: {
+    async getArtifact(scope) {
+      calls.push(scope);
+      return scope.profileId === "demo-profile-a" ? queryArtifact : null;
+    }
+  }, resolveTrustedProfile: async request => request.headers.get("x-test-profile") === "unavailable"
+    ? (() => { throw new Error("identity unavailable"); })()
+    : ({ profileId: request.headers.get("x-test-profile"), scopes: request.headers.get("x-test-scope")?.split(" ") ?? [] }) });
+  const searchRequest = (profileId, query = "", scope = "crm.catalog.read") => search(new Request(
+    `https://crm.example.invalid/api/v1/catalogs/synthetic-current-source-shape/entries${query}`,
+    { headers: { "x-test-profile": profileId, "x-test-scope": scope } }));
+  const searchResponse = await searchRequest("demo-profile-a", "?query=Unknown%20Finance&limit=1");
+  assert.equal(searchResponse.status, 200);
+  const searchBody = await searchResponse.json();
+  const { "s01-catalog-search-output": validateSearch } = await validators("s01-catalog-search-input", "s01-catalog-search-output", "s01-catalog-search-errors");
+  assert.equal(validateSearch(searchBody), true);
+  assert.equal(searchBody.total, 1);
+  assert.equal(searchBody.items.length, 1);
+  assert.deepEqual(Object.keys(searchBody.items[0]).sort(), ["activity", "booth", "category", "classification", "country", "description", "id", "name", "profitRub", "profitYear", "revenueRub", "revenueYear", "segment", "website"].sort());
+  assert.equal("inn" in searchBody.items[0], false);
+  assert.equal("ogrn" in searchBody.items[0], false);
+  assert.equal("sourceRecordId" in searchBody.items[0], false);
+  assert.equal((await searchRequest("demo-profile-a", "?profileId=demo-profile-b")).status, 400);
+  assert.equal((await searchRequest("demo-profile-a", "?limit=101")).status, 400);
+  assert.equal((await searchRequest("demo-profile-a", "?offset=20001")).status, 400);
+  assert.equal((await searchRequest("demo-profile-a", "?query=x&query=y")).status, 400);
+  assert.equal((await searchRequest("demo-profile-a", "", "")).status, 403);
+  assert.equal((await searchRequest("demo-profile-b")).status, 404);
+  assert.equal((await searchRequest("unavailable")).status, 503);
+});
+
+test("S-01 v1.1 D1 repository persists durable profile-scoped artifacts and verifies content hash", async () => {
+  class D1Statement {
+    constructor(db, sql, values = []) { this.db = db; this.sql = sql; this.values = values; }
+    bind(...values) { return new D1Statement(this.db, this.sql, values); }
+    async first() {
+      const statement = this.db.prepare(this.sql);
+      try { statement.bind(this.values); return statement.step() ? statement.getAsObject() : null; }
+      finally { statement.free(); }
+    }
+    async run() { this.db.run(this.sql, this.values); return { meta: { changes: this.db.getRowsModified() } }; }
+  }
+  class LocalD1 { constructor(db) { this.db = db; } prepare(sql) { return new D1Statement(this.db, sql); } }
+  const SQL = await initSqlJs();
+  const db = new SQL.Database();
+  db.run(await readFile(new URL("../migrations/0010_catalog_v11_artifacts.sql", import.meta.url), "utf8"));
+  const repo = createCatalogV11D1Repository(new LocalD1(db), () => "2026-10-06T00:00:00.000Z");
+  const artifact = { schemaVersion: "1.1.0", exhibitionId: "synthetic-current-source-shape",
+    sourceRevision: "synthetic-revision-1", companies: [{ id: "co-0123456789abcdef0123", name: "Synthetic durable row",
+      source: { sourceRecordId: "src-synthetic-durable", country: "Fictionland", booth: null, href: null,
+        category: "Synthetic category", description: null, segment: null, duplicateSourceRecordIds: [] },
+      enrichment: { status: "not_found", inn: null, ogrn: null, revenueRub: null, revenueYear: null,
+        profitRub: null, profitYear: null, activity: "unknown", website: null,
+        provenance: { provider: "synthetic", fixtureRef: "synthetic-durable" } },
+      registry: { status: "unknown", provenance: { source: "synthetic", fixtureRef: "synthetic-durable" } },
+      qualification: { classification: "unknown", target: false, nearTarget: false, reason: "synthetic_unverified" } }] };
+  assert.equal((await repo.saveArtifact({ profileId: "demo-profile-a",
+    artifact: { ...artifact, companies: [{ id: "co-0123456789abcdef0123", name: "incomplete" }] } })).status,
+  "invalid_artifact");
+  assert.equal((await repo.saveArtifact({ profileId: "demo-profile-a", artifact })).status, "stored");
+  assert.equal((await repo.saveArtifact({ profileId: "demo-profile-a", artifact })).status, "replay");
+  assert.deepEqual(await repo.getArtifact({ profileId: "demo-profile-a", exhibitionId: artifact.exhibitionId }), artifact);
+  assert.equal(await repo.getArtifact({ profileId: "demo-profile-b", exhibitionId: artifact.exhibitionId }), null);
+  const revisionTwo = { ...artifact, sourceRevision: "synthetic-revision-2" };
+  assert.equal((await repo.saveArtifact({ profileId: "demo-profile-a", artifact: revisionTwo })).status, "stored");
+  assert.equal((await repo.getArtifact({ profileId: "demo-profile-a", exhibitionId: artifact.exhibitionId })).sourceRevision,
+    "synthetic-revision-2");
+  const persistedHandler = createCatalogV11ReadHandler({ repository: repo,
+    resolveTrustedProfile: async () => ({ profileId: "demo-profile-a", scopes: ["crm.catalog.read"] }) });
+  const persistedSearch = createCatalogV11SearchHandler({ repository: repo,
+    resolveTrustedProfile: async () => ({ profileId: "demo-profile-a", scopes: ["crm.catalog.read"] }) });
+  const page = await persistedHandler(new Request(`https://crm.example.invalid/catalogs/${artifact.exhibitionId}`));
+  assert.equal(page.status, 200);
+  assert.match(await page.text(), /Synthetic durable row/);
+  const jsonResult = await persistedSearch(new Request(`https://crm.example.invalid/api/v1/catalogs/${artifact.exhibitionId}/entries?limit=10`));
+  assert.equal(jsonResult.status, 200);
+  assert.deepEqual((await jsonResult.json()).items.map(item => item.name), ["Synthetic durable row"]);
+  const server = createServer({ catalogV11Repository: repo,
+    resolveCatalogV11TrustedProfile: async () => ({ profileId: "demo-profile-a", scopes: ["crm.catalog.read"] }) });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const address = server.address();
+    const transported = await fetch(`http://127.0.0.1:${address.port}/catalogs/${artifact.exhibitionId}`);
+    assert.equal(transported.status, 200);
+    assert.match(transported.headers.get("content-type"), /text\/html/);
+    assert.match(await transported.text(), /Synthetic durable row/);
+    const structured = await fetch(`http://127.0.0.1:${address.port}/api/v1/catalogs/${artifact.exhibitionId}/entries?limit=10`);
+    assert.equal(structured.status, 200);
+    assert.match(structured.headers.get("content-type"), /application\/json/);
+    assert.deepEqual((await structured.json()).items.map(item => item.name), ["Synthetic durable row"]);
+  } finally { await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
+  db.run("UPDATE crm_catalog_v11_artifacts SET artifact_json=? WHERE profile_ref=?",
+    [JSON.stringify({ ...revisionTwo, sourceRevision: "forged" }), "demo-profile-a"]);
+  await assert.rejects(repo.getArtifact({ profileId: "demo-profile-a", exhibitionId: artifact.exhibitionId }), /integrity check failed/);
+  const unavailable = await createCatalogV11ReadHandler({ repository: repo,
+    resolveTrustedProfile: async () => ({ profileId: "demo-profile-a", scopes: ["crm.catalog.read"] }) })
+    (new Request(`https://crm.example.invalid/catalogs/${artifact.exhibitionId}`));
+  assert.equal(unavailable.status, 503);
+  assert.equal((await unavailable.json()).error, "catalog_unavailable");
+  const malformedJson = JSON.stringify({ ...revisionTwo, companies: [{ id: "co-0123456789abcdef0123", name: "incomplete" }] });
+  const malformedSha = createHash("sha256").update(malformedJson).digest("hex");
+  db.run("UPDATE crm_catalog_v11_artifacts SET artifact_json=?,content_sha=? WHERE profile_ref=?",
+    [malformedJson, malformedSha, "demo-profile-a"]);
+  await assert.rejects(repo.getArtifact({ profileId: "demo-profile-a", exhibitionId: artifact.exhibitionId }), /artifact is invalid/);
+  db.close();
 });
 
 test("build artifacts and reports are deterministic; same key replays without another adapter call", async () => {

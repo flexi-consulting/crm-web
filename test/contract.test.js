@@ -6,8 +6,8 @@ import { readFile } from "node:fs/promises";
 import { createServer } from "../src/server.js";
 import { catalog } from "../src/fixtures.js";
 
-async function withServer(run) {
-  const server = createServer();
+async function withServer(run, options = {}) {
+  const server = createServer(options);
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
   try { await run(`http://127.0.0.1:${address.port}`); }
@@ -41,6 +41,13 @@ test("manifest declares stable v1 read-only contract and capabilities", async ()
         effect: "read", requiredScopes: ["crm.companies.read"], operationRef: "GET /api/v1/companies"
       },
       {
+        id: "crm.exhibitions.catalog.search", version: "1.0.0", required: true,
+        inputSchemaRef: "schemas/s01-catalog-search-input.schema.json", outputSchemaRef: "schemas/s01-catalog-search-output.schema.json",
+        errorsSchemaRef: "schemas/s01-catalog-search-errors.schema.json", descriptorRef: "capabilities/s01-exhibition-catalog-search.v1.json",
+        handlerBinding: "src/catalog-query-v11.js#createCatalogV11SearchHandler", mcpTool: { name: "crm_exhibitions_catalog_search", protocolVersion: "2025-06-18" },
+        effect: "read", requiredScopes: ["crm.catalog.read"], operationRef: "GET /api/v1/catalogs/{exhibitionId}/entries"
+      },
+      {
         id: "crm.company.read", version: "1.0.0", required: false,
         inputSchemaRef: "schemas/company-query.schema.json", outputSchemaRef: "schemas/company.schema.json",
         effect: "read", requiredScopes: ["crm.companies.read"], operationRef: "GET /api/v1/companies/{id}"
@@ -51,6 +58,11 @@ test("manifest declares stable v1 read-only contract and capabilities", async ()
     assert.equal(s01.descriptorRef, "capabilities/s01-exhibition-participants.v1.json");
     assert.equal(s01.handlerBinding, "src/s01-participants.js#readExhibitionParticipants");
     assert.deepEqual(s01.requiredScopes, ["crm.companies.read"]);
+    const catalogSearch = body.capabilities.find((capability) => capability.id === "crm.exhibitions.catalog.search");
+    assert.ok(catalogSearch);
+    assert.equal(catalogSearch.handlerBinding, "src/catalog-query-v11.js#createCatalogV11SearchHandler");
+    assert.equal(catalogSearch.operationRef, "GET /api/v1/catalogs/{exhibitionId}/entries");
+    assert.deepEqual(catalogSearch.requiredScopes, ["crm.catalog.read"]);
     assert.equal(body.capabilities.some((capability) => capability.id.startsWith("crm.deal_intents.")), false);
     assert.equal(body.capabilities.some((capability) => capability.id.startsWith("crm.deals.")), false);
     assert.deepEqual(body.readiness, {
@@ -73,6 +85,15 @@ test("manifest declares stable v1 read-only contract and capabilities", async ()
     }
     for (const referencedSchema of referencedSchemas.values()) schemaAjv.addSchema(referencedSchema);
     for (const referencedSchema of referencedSchemas.values()) assert.ok(schemaAjv.getSchema(referencedSchema.$id));
+  }, { catalogV11Repository: { async getArtifact() { return null; } },
+    resolveCatalogV11TrustedProfile: async () => ({ profileId: "synthetic-profile", scopes: ["crm.catalog.read"] }) });
+});
+
+test("manifest omits profile catalog search when its repository and route are not mounted", async () => {
+  await withServer(async (base) => {
+    const body = await fetch(`${base}/api/v1/manifest`).then((response) => response.json());
+    assert.equal(body.capabilities.some((capability) => capability.id === "crm.exhibitions.catalog.search"), false);
+    assert.equal(Object.hasOwn(body.endpoints, "catalogSearch"), false);
   });
 });
 

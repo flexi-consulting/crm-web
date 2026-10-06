@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crm-web.example.invalid/schemas/s01-catalog-search-output.schema.json",
+  "title": "Profile-scoped exhibition catalog search result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["domainApiVersion", "artifactVersion", "exhibitionId", "sourceRevision", "total", "limit", "offset", "items"],
+  "properties": {
+    "domainApiVersion": { "const": "1.0.0" },
+    "artifactVersion": { "const": "1.1.0" },
+    "exhibitionId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,79}$" },
+    "sourceRevision": { "type": "string", "minLength": 1 },
+    "total": { "type": "integer", "minimum": 0 },
+    "limit": { "type": "integer", "minimum": 1, "maximum": 100 },
+    "offset": { "type": "integer", "minimum": 0, "maximum": 20000 },
+    "items": { "type": "array", "maxItems": 100, "items": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "name", "country", "booth", "category", "description", "segment", "revenueRub", "revenueYear", "profitRub", "profitYear", "activity", "website", "classification"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^co-[a-f0-9]{20}$" },
+        "name": { "type": "string", "minLength": 1 },
+        "country": { "type": "string", "minLength": 1 },
+        "booth": { "type": ["string", "null"], "maxLength": 80 },
+        "category": { "type": ["string", "null"], "maxLength": 240 },
+        "description": { "type": ["string", "null"], "maxLength": 2000 },
+        "segment": { "type": ["string", "null"], "maxLength": 120 },
+        "revenueRub": { "type": ["integer", "null"], "minimum": 0 },
+        "revenueYear": { "type": ["integer", "null"], "minimum": 1900, "maximum": 2200 },
+        "profitRub": { "type": ["integer", "null"] },
+        "profitYear": { "type": ["integer", "null"], "minimum": 1900, "maximum": 2200 },
+        "activity": { "enum": ["manufacturer", "distributor", "service", "unknown"] },
+        "website": { "type": ["string", "null"], "format": "uri" },
+        "classification": { "enum": ["target", "near_target", "not_target", "unknown"] }
+      }
+    } }
+  }
+}
