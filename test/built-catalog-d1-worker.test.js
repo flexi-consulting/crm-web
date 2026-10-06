@@ -281,6 +281,91 @@ test("private byte receipt and reviewed row decisions restore one invented EX ca
   }
 });
 
+test("multi-catalog reviewed restore resumes after a lost receipt without duplicate builds", async () => {
+  const root = mkdtempSync(join(tmpdir(), "crm-private-d1-resume-"));
+  let worker;
+  try {
+    const sourceRoot = join(root, "source-users"), backup = join(root, "private-backup");
+    const entries = [
+      { eventKey: "resume-expo-a", row: { id: "EX001", n: "Invented Resume A", s: "A-01", t: 0, nt: 0, ru: 1 } },
+      { eventKey: "resume-expo-b", row: { id: "EX002", n: "Invented Resume B", s: "B-01", t: 1, nt: 0,
+        inn: "0000000001", ru: 1 } }
+    ];
+    for (const item of entries) {
+      const deployed = join(sourceRoot, "invented-owner", "projects", "invented-project",
+        "deploy", item.eventKey);
+      mkdirSync(deployed, { recursive: true });
+      writeFileSync(join(deployed, "index.html"),
+        `<script>const EX = ${JSON.stringify([item.row])};const EVENT_KEY = '${item.eventKey}';</script>`);
+    }
+    const data = join(sourceRoot, "invented-owner", "projects", "invented-project", "data");
+    mkdirSync(data, { recursive: true });
+    writeFileSync(join(data, "enriched.json"), JSON.stringify([{ n: "Invented resume source" }]));
+    await captureLegacyCatalogs({ sourceRoot, outputDir: backup });
+    const manifest = await verifyLegacyCatalogBackup(backup);
+    const records = manifest.records.filter((record) => record.kind === "deployed_html");
+    const hash = (value) => createHash("sha256").update(value).digest("hex");
+    const profileBinding = { status: "confirmed", issuer: "control-plane", legacyUserId: "invented-owner",
+      principalId: "synthetic-principal", profileId: "demo-profile-a", evidenceSha256: "c".repeat(64) };
+    const packet = { version: 1, status: "private_review_required", approvedForImport: false,
+      manifestSha256: manifest.manifestSha256, owners: [{ legacyUserId: "invented-owner",
+        catalogs: records.map(record => ({ sourcePath: record.sourcePath,
+          sourceSha256: record.objectSha256, eventKey: record.eventKey })) }] };
+    const catalogs = [];
+    for (const record of records) {
+      const raw = readFileSync(join(backup, "objects", record.objectSha256));
+      const sourceRows = parseLegacyExHtml(raw).entries;
+      const decisions = { version: 1, status: "reviewed", packetSha256: hash(JSON.stringify(packet)),
+        manifestSha256: manifest.manifestSha256, sourcePath: record.sourcePath,
+        sourceSha256: record.objectSha256, eventKey: record.eventKey,
+        legacyUserId: "invented-owner", profileId: profileBinding.profileId,
+        principalId: profileBinding.principalId, profileBindingEvidenceSha256: profileBinding.evidenceSha256,
+        reviewerEvidenceSha256: "d".repeat(64), rows: sourceRows.map((row, index) => ({ index,
+          rowSha256: hash(JSON.stringify(row)), outcome: "include", replacement: row,
+          evidenceSha256: "e".repeat(64) })) };
+      catalogs.push({ sourcePath: record.sourcePath, sourceSha256: record.objectSha256,
+        profileBinding, decisions });
+    }
+    const reviewBundleFile = join(root, "private-review-bundle.json");
+    writeFileSync(reviewBundleFile, JSON.stringify({ version: 1, manifestSha256: manifest.manifestSha256,
+      packet, catalogs }));
+    const db = join(root, "d1");
+    for (const migration of ["migrations/0001_s04_domain.sql", "migrations/0002_built_catalog.sql",
+      "migrations/0003_weeek_deal_identity.sql", "migrations/0004_legacy_catalog_refs.sql"]) {
+      const applied = spawnSync(node, [wrangler, "d1", "execute", "CRM_DB", "--config", config,
+        "--local", "--persist-to", db, "--file", migration, "--yes", "--json"], { cwd, encoding: "utf8" });
+      assert.equal(applied.status, 0, applied.stderr || applied.stdout);
+    }
+    worker = await startWorker(db);
+    let loseOneReceipt = true;
+    const fetchWithLostReceipt = async (url, options) => {
+      const response = await fetch(url, options);
+      const body = JSON.parse(options.body);
+      if (loseOneReceipt && body.eventKey === "resume-expo-b") {
+        loseOneReceipt = false;
+        return new Response(JSON.stringify({ error: "synthetic_lost_receipt" }), { status: 503 });
+      }
+      return response;
+    };
+    await assert.rejects(restoreLegacyCatalogsLocal({ backupDir: backup, reviewBundleFile,
+      endpoint: `${worker.base}/`, fetchImpl: fetchWithLostReceipt }), /legacy_local_d1_import_failed/);
+    const resumed = await restoreLegacyCatalogsLocal({ backupDir: backup, reviewBundleFile,
+      endpoint: `${worker.base}/` });
+    assert.equal(resumed.length, 2);
+    assert.ok(resumed.every(receipt => receipt.status === "replay"));
+    for (const item of entries) {
+      const linked = await call(worker.base, "/catalog/resolve-legacy",
+        { eventKey: item.eventKey, legacyId: item.row.id });
+      assert.equal(linked.status, 200);
+      assert.equal(linked.body.buildId, resumed.find(receipt => receipt.sourceSha256 ===
+        records.find(record => record.eventKey === item.eventKey).objectSha256).buildId);
+    }
+  } finally {
+    if (worker) await stopWorker(worker.child);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("invented legacy EX snapshot keeps event/id links through D1 rebuild, note and reviewed deal", async () => {
   const root = mkdtempSync(join(tmpdir(), "crm-legacy-ex-d1-"));
   let worker;
