@@ -16,7 +16,7 @@ async function withFixture(run, resolveTrustedProfile = () => context("demo-prof
   try { await run({ base, catalogBuilds, mcp: createOfflineBuiltCatalogMcp({ catalogBuilds, resolveTrustedProfile }) }); }
   finally { await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); }
 }
-const mcpCall = async (mcp, args) => JSON.parse(await mcp.receive({ jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "crm_built_catalog_participants_read", arguments: args, _meta: { capabilityVersion: "1.0.0" } } }));
+const mcpCall = async (mcp, args) => JSON.parse(await mcp.receive({ jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "crm_built_catalog_participants_read", arguments: args, _meta: { capabilityVersion: "1.1.0" } } }));
 
 test("S-02 validated build becomes S-01 participant list/card with one stable object reference", async () => {
   await withFixture(async ({ base, catalogBuilds, mcp }) => {
@@ -42,6 +42,7 @@ test("S-02 validated build becomes S-01 participant list/card with one stable ob
     assert.deepEqual(rpc.result.structuredContent, search);
     assert.equal(rpc.result.content[0].text, JSON.stringify(search));
     const descriptor = JSON.parse(await readFile(new URL("../capabilities/s02-built-participants.v1.json", import.meta.url)));
+    assert.equal(descriptor.version, "1.1.0");
     const schema = JSON.parse(await readFile(new URL(`../${descriptor.outputSchemaRef}`, import.meta.url)));
     const validate = new Ajv().compile(schema);
     assert.ok(validate(api), JSON.stringify(validate.errors));

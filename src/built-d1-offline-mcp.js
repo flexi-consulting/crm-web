@@ -16,7 +16,7 @@ const exactKeys = (value, allowed) => object(value) && Object.keys(value).every(
 const validBuilt = (args) => exactKeys(args, ["buildId", "q", "classification"]) &&
   /^build-[a-f0-9]{24}$/.test(args.buildId ?? "") &&
   (args.q === undefined || typeof args.q === "string" && [...args.q].length <= 120) &&
-  (args.classification === undefined || ["target", "near_target", "not_target"].includes(args.classification));
+  (args.classification === undefined || ["target", "near_target", "not_target", "unknown"].includes(args.classification));
 const validTimeline = (args) => exactKeys(args, ["preleadId"]) && /^built-prelead-[a-f0-9]{24}$/.test(args.preleadId ?? "");
 const validNote = (args) => exactKeys(args, ["preleadId", "operationId", "noteText"]) &&
   /^built-prelead-[a-f0-9]{24}$/.test(args.preleadId ?? "") && /^op-[0-9a-f-]{36}$/.test(args.operationId ?? "") &&

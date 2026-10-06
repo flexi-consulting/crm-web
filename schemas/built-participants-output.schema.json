@@ -18,7 +18,7 @@
         "source": { "type": "object" },
         "enrichment": { "type": "object" },
         "registry": { "type": "object" },
-        "qualification": { "type": "object", "required": ["classification", "target", "nearTarget", "reason"], "properties": { "classification": { "enum": ["target", "near_target", "not_target"] }, "target": { "type": "boolean" }, "nearTarget": { "type": "boolean" }, "reason": { "type": "string" } } },
+        "qualification": { "type": "object", "required": ["classification", "target", "nearTarget", "reason"], "properties": { "classification": { "enum": ["target", "near_target", "not_target", "unknown"] }, "target": { "type": "boolean" }, "nearTarget": { "type": "boolean" }, "reason": { "type": "string" } } },
         "detailPath": { "type": "string", "pattern": "^/api/v1/catalog-builds/build-[a-f0-9]{24}/participants/co-[a-f0-9]{20}$" }
       }
     } }
