@@ -67,6 +67,41 @@ test("synthetic build imports, deduplicates, enriches, qualifies, and reconciles
   });
 });
 
+test("S-01 v1.1 metadata schema preserves synthetic legacy filter fields with explicit units and nullable years", async () => {
+  const ajv = new Ajv({ strict: false });
+  const schema = JSON.parse(await readFile(new URL("../schemas/catalog-build-artifact-v1.1.schema.json", import.meta.url)));
+  const validate = ajv.compile(schema);
+  const company = {
+    id: "co-0123456789abcdef0123", name: "Synthetic Boundary Maker",
+    source: { sourceRecordId: "src-synthetic-boundary", country: "Fictionland", booth: null,
+      href: "https://example.invalid/synthetic", category: "Synthetic category",
+      description: "Synthetic source description", segment: "synthetic segment", duplicateSourceRecordIds: [] },
+    enrichment: { status: "found", inn: "0000000001", ogrn: null, revenueRub: 100_000_000,
+      revenueYear: 2025, profitRub: -1, profitYear: 2024, activity: "unknown",
+      website: null, provenance: { provider: "legacy-ex-snapshot", fixtureRef: "synthetic-source-row-01" } },
+    registry: { status: "unknown", provenance: { source: "synthetic-registry", fixtureRef: "synthetic-registry-01" } },
+    qualification: { classification: "unknown", target: false, nearTarget: false,
+      reason: "legacy_classification_unverified" }
+  };
+  const artifact = { schemaVersion: "1.1.0", exhibitionId: "synthetic-current-source-shape",
+    sourceRevision: "synthetic-source-revision-01", companies: [company] };
+  assert.equal(validate(artifact), true, JSON.stringify(validate.errors));
+  const withoutFinancialYear = structuredClone(artifact);
+  withoutFinancialYear.companies[0].enrichment.revenueYear = null;
+  withoutFinancialYear.companies[0].enrichment.profitRub = null;
+  withoutFinancialYear.companies[0].enrichment.profitYear = null;
+  assert.equal(validate(withoutFinancialYear), true, JSON.stringify(validate.errors));
+  const wrongUnit = structuredClone(artifact);
+  wrongUnit.companies[0].enrichment.profitRub = 0.5;
+  assert.equal(validate(wrongUnit), false, "money uses integer whole-RUB storage");
+  const unknownYear = structuredClone(artifact);
+  unknownYear.companies[0].enrichment.profitYear = 1899;
+  assert.equal(validate(unknownYear), false, "years stay in the documented bounded domain");
+  const leakedField = structuredClone(artifact);
+  leakedField.companies[0].source.email = "synthetic@example.invalid";
+  assert.equal(validate(leakedField), false, "schema remains allowlist based");
+});
+
 test("build artifacts and reports are deterministic; same key replays without another adapter call", async () => {
   let sourceCalls = 0, enrichCalls = 0, registryCalls = 0;
   const sourceFixtures = createSyntheticSourceAdapter();
