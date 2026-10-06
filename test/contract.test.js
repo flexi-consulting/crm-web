@@ -6,8 +6,8 @@ import { readFile } from "node:fs/promises";
 import { createServer } from "../src/server.js";
 import { catalog } from "../src/fixtures.js";
 
-async function withServer(run) {
-  const server = createServer();
+async function withServer(run, options = {}) {
+  const server = createServer(options);
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
   try { await run(`http://127.0.0.1:${address.port}`); }
@@ -85,6 +85,15 @@ test("manifest declares stable v1 read-only contract and capabilities", async ()
     }
     for (const referencedSchema of referencedSchemas.values()) schemaAjv.addSchema(referencedSchema);
     for (const referencedSchema of referencedSchemas.values()) assert.ok(schemaAjv.getSchema(referencedSchema.$id));
+  }, { catalogV11Repository: { async getArtifact() { return null; } },
+    resolveCatalogV11TrustedProfile: async () => ({ profileId: "synthetic-profile", scopes: ["crm.catalog.read"] }) });
+});
+
+test("manifest omits profile catalog search when its repository and route are not mounted", async () => {
+  await withServer(async (base) => {
+    const body = await fetch(`${base}/api/v1/manifest`).then((response) => response.json());
+    assert.equal(body.capabilities.some((capability) => capability.id === "crm.exhibitions.catalog.search"), false);
+    assert.equal(Object.hasOwn(body.endpoints, "catalogSearch"), false);
   });
 });
 
