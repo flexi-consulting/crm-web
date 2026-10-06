@@ -6,7 +6,8 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:net";
-import { captureLegacyCatalogs, restoreLegacyCatalogsLocal } from "../src/private-legacy-handoff.js";
+import { captureLegacyCatalogs, restoreLegacyCatalogsLocal, verifyLegacyCatalogBackup,
+  parseLegacyExHtml } from "../src/private-legacy-handoff.js";
 
 const wrangler = new URL("../node_modules/wrangler/bin/wrangler.js", import.meta.url).pathname;
 const node = process.env.CRM_S04_WRANGLER_NODE || process.execPath;
@@ -232,13 +233,29 @@ test("private byte receipt and explicit mapping restore one invented EX catalog 
     writeFileSync(join(data, "enriched.json"), JSON.stringify([{ n: "Invented input" }]));
     const backup = join(root, "private-backup");
     assert.equal((await captureLegacyCatalogs({ sourceRoot, outputDir: backup })).files, 2);
-    const manifest = JSON.parse(readFileSync(join(backup, "manifest.json"), "utf8"));
+    const manifest = await verifyLegacyCatalogBackup(backup);
     const catalog = manifest.records.find((item) => item.kind === "deployed_html");
-    const mappingFile = join(root, "private-mapping.json");
-    writeFileSync(mappingFile, JSON.stringify({ version: 1, catalogs: [{
-      sourcePath: catalog.sourcePath, sourceSha256: catalog.objectSha256,
-      profileRef: "demo-profile-a", eventKey: "demo-expo-001", resolutions: {}
-    }] }));
+    const raw = readFileSync(join(backup, "objects", catalog.objectSha256));
+    const parsed = parseLegacyExHtml(raw);
+    const hash = (value) => createHash("sha256").update(value).digest("hex");
+    const profileBinding = { status: "confirmed", issuer: "control-plane", legacyUserId: "invented-source-profile",
+      principalId: "synthetic-principal", profileId: "demo-profile-a", evidenceSha256: "c".repeat(64) };
+    const packet = { version: 1, status: "private_review_required", approvedForImport: false,
+      manifestSha256: manifest.manifestSha256, owners: [{ legacyUserId: profileBinding.legacyUserId,
+        catalogs: [{ sourcePath: catalog.sourcePath, sourceSha256: catalog.objectSha256,
+          eventKey: parsed.eventKey }] }] };
+    const decisions = { version: 1, status: "reviewed", packetSha256: hash(JSON.stringify(packet)),
+      manifestSha256: manifest.manifestSha256, sourcePath: catalog.sourcePath,
+      sourceSha256: catalog.objectSha256, eventKey: parsed.eventKey,
+      legacyUserId: profileBinding.legacyUserId, profileId: profileBinding.profileId,
+      principalId: profileBinding.principalId, profileBindingEvidenceSha256: profileBinding.evidenceSha256,
+      reviewerEvidenceSha256: "d".repeat(64), rows: parsed.entries.map((row, index) => ({ index,
+        rowSha256: hash(JSON.stringify(row)), outcome: "include", replacement: row,
+        evidenceSha256: "e".repeat(64) })) };
+    const reviewBundleFile = join(root, "private-review-bundle.json");
+    writeFileSync(reviewBundleFile, JSON.stringify({ version: 1, manifestSha256: manifest.manifestSha256,
+      packet, catalogs: [{ sourcePath: catalog.sourcePath, sourceSha256: catalog.objectSha256,
+        profileBinding, decisions }] }));
     const db = join(root, "d1");
     for (const migration of ["migrations/0001_s04_domain.sql", "migrations/0002_built_catalog.sql",
       "migrations/0003_weeek_deal_identity.sql", "migrations/0004_legacy_catalog_refs.sql"]) {
@@ -248,11 +265,11 @@ test("private byte receipt and explicit mapping restore one invented EX catalog 
     }
     worker = await startWorker(db);
     const receipts = await restoreLegacyCatalogsLocal({ backupDir: backup,
-      mappingFile, endpoint: `${worker.base}/` });
+      reviewBundleFile, endpoint: `${worker.base}/` });
     assert.equal(receipts.length, 1);
     assert.equal(receipts[0].status, "stored");
     const replay = await restoreLegacyCatalogsLocal({ backupDir: backup,
-      mappingFile, endpoint: `${worker.base}/` });
+      reviewBundleFile, endpoint: `${worker.base}/` });
     assert.equal(replay[0].status, "replay");
     const linked = await call(worker.base, "/catalog/resolve-legacy",
       { eventKey: "demo-expo-001", legacyId: "EX001" });

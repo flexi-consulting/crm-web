@@ -3,9 +3,11 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, writeFile, readFile, stat, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createHash } from "node:crypto";
 import { projectLegacyExSnapshot } from "../src/legacy-ex-snapshot.js";
 import { captureLegacyCatalogs, verifyLegacyCatalogBackup, prepareLegacyRestore,
-  restoreLegacyCatalogsLocal } from "../src/private-legacy-handoff.js";
+  restoreLegacyCatalogsLocal, parseLegacyExHtml } from "../src/private-legacy-handoff.js";
+import { importReviewedLegacyExSnapshot } from "../src/legacy-import-approval.js";
 
 const invented = [
   { id: "LNG001", n: "Invented Loom", s: "A-01", t: 1, nt: 0,
@@ -14,6 +16,7 @@ const invented = [
   { id: "13С11", n: "Invented Cyrillic ID", s: "A-03", t: 0, nt: 0, ru: 1 }
 ];
 const html = (rows) => `<html><script>const EX = ${JSON.stringify(rows)};\nconst EVENT_KEY = 'invented-expo-2026';</script></html>`;
+const hash = (value) => createHash("sha256").update(value).digest("hex");
 
 test("private capture copies exact HTML and source JSON bytes and quarantines all ID conflicts", async () => {
   const root = await mkdtemp(join(tmpdir(), "crm-private-handoff-"));
@@ -40,34 +43,42 @@ test("private capture copies exact HTML and source JSON bytes and quarantines al
     const report = JSON.parse(await readFile(join(backup, "identity-quarantine.json"), "utf8"));
     assert.deepEqual(report.catalogs[0].duplicates, [{ id: "LNG001", indices: [0, 1] }]);
     assert.equal(report.catalogs[0].unsafe[0].id, "13С11");
-    const mappingFile = join(root, "private-mapping.json");
-    const base = { version: 1, catalogs: [{ sourcePath: catalog.sourcePath,
-      sourceSha256: catalog.objectSha256, profileRef: "demo-profile-a",
-      eventKey: "invented-expo-2026", resolutions: {} }] };
-    await writeFile(mappingFile, JSON.stringify(base));
+    const parsed = parseLegacyExHtml(rawHtml);
+    const manifestSha256 = manifest.manifestSha256;
+    const profileBinding = { status: "confirmed", issuer: "control-plane", legacyUserId: "invented-profile",
+      principalId: "synthetic-principal", profileId: "demo-profile-a", evidenceSha256: "c".repeat(64) };
+    const packet = { version: 1, status: "private_review_required", approvedForImport: false, manifestSha256,
+      owners: [{ legacyUserId: "invented-profile", catalogs: [{ sourcePath: catalog.sourcePath,
+        sourceSha256: catalog.objectSha256, eventKey: "invented-expo-2026" }] }] };
+    const decisions = { version: 1, status: "reviewed", packetSha256: hash(JSON.stringify(packet)),
+      manifestSha256, sourcePath: catalog.sourcePath, sourceSha256: catalog.objectSha256,
+      eventKey: "invented-expo-2026", legacyUserId: "invented-profile", profileId: "demo-profile-a",
+      principalId: "synthetic-principal", profileBindingEvidenceSha256: profileBinding.evidenceSha256,
+      reviewerEvidenceSha256: "d".repeat(64), rows: parsed.entries.map((row, index) => ({ index,
+        rowSha256: hash(JSON.stringify(row)), outcome: "include", replacement: { ...row,
+          id: index === 0 ? "LNG001" : index === 1 ? "LNG002" : "CYR011" }, evidenceSha256: "e".repeat(64) })) };
+    const reviewBundleFile = join(root, "private-review-bundle.json");
+    await writeFile(reviewBundleFile, JSON.stringify({ version: 1, manifestSha256, packet,
+      catalogs: [{ sourcePath: catalog.sourcePath, sourceSha256: catalog.objectSha256,
+        profileBinding, decisions }] }));
     let calls = 0;
     const fakeFetch = async (_url, options) => {
       calls++;
+      assert.equal(new URL(_url).pathname, "/catalog/import-reviewed-legacy");
       const input = JSON.parse(options.body);
-      const projected = projectLegacyExSnapshot({ profileRef: options.headers["x-test-profile"],
-        eventKey: input.eventKey, entries: input.entries });
-      return new Response(JSON.stringify({ status: "stored", buildId: projected.build.buildId,
-        sourceRevision: projected.build.artifact.sourceRevision }), { status: 201 });
+      const { sourceBytesBase64, ...review } = input;
+      const saved = await importReviewedLegacyExSnapshot({ repository: { async saveBuild(build) {
+        return { status: "stored", buildId: build.build.buildId };
+      } }, ...review, sourceBytes: Buffer.from(sourceBytesBase64, "base64") });
+      return new Response(JSON.stringify(saved), { status: saved.status === "stored" ? 201 : 422 });
     };
-    await assert.rejects(restoreLegacyCatalogsLocal({ backupDir: backup,
-      mappingFile, endpoint: "http://127.0.0.1:8787/", fetchImpl: fakeFetch }),
-    /legacy_identity_resolution_required/);
-    assert.equal(calls, 0);
-    base.catalogs[0].resolutions = { "0": "LNG001", "1": "LNG002", "2": "CYR011" };
-    await writeFile(mappingFile, JSON.stringify(base));
-    const ready = await prepareLegacyRestore({ backupDir: backup, mappingFile });
-    assert.deepEqual(ready[0].entries.map((item) => item.id), ["LNG001", "LNG002", "CYR011"]);
     const receipts = await restoreLegacyCatalogsLocal({ backupDir: backup,
-      mappingFile, endpoint: "http://127.0.0.1:8787/", fetchImpl: fakeFetch });
+      reviewBundleFile, endpoint: "http://127.0.0.1:8787/", fetchImpl: fakeFetch });
     assert.equal(receipts.length, 1);
+    assert.equal(receipts[0].status, "stored");
     assert.equal(calls, 1);
     await assert.rejects(restoreLegacyCatalogsLocal({ backupDir: backup,
-      mappingFile, endpoint: "https://public.example.invalid/", fetchImpl: fakeFetch }),
+      reviewBundleFile, endpoint: "https://public.example.invalid/", fetchImpl: fakeFetch }),
     /local_d1_endpoint_required/);
     assert.equal(calls, 1);
     const object = join(backup, "objects", catalog.objectSha256);

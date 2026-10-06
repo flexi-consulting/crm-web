@@ -221,23 +221,44 @@ export async function prepareLegacyRestore({ backupDir, mappingFile }) {
   return ready;
 }
 
-export async function restoreLegacyCatalogsLocal({ backupDir, mappingFile, endpoint,
+export async function restoreLegacyCatalogsLocal({ backupDir, reviewBundleFile, endpoint,
   fetchImpl = globalThis.fetch }) {
-  const ready = await prepareLegacyRestore({ backupDir, mappingFile });
+  await outsideGitWorkspace(resolve(reviewBundleFile));
+  const manifest = await verifyLegacyCatalogBackup(backupDir);
+  const bundle = JSON.parse(await readFile(resolve(reviewBundleFile), "utf8"));
+  if (bundle.version !== 1 || bundle.manifestSha256 !== manifest.manifestSha256 ||
+      !bundle.packet || bundle.packet.manifestSha256 !== manifest.manifestSha256 ||
+      bundle.packet.approvedForImport !== false || bundle.packet.status !== "private_review_required" ||
+      !Array.isArray(bundle.catalogs)) throw new Error("legacy_review_bundle_invalid");
+  const html = manifest.records.filter((record) => record.kind === "deployed_html");
+  const byPath = new Map(bundle.catalogs.map((item) => [item.sourcePath, item]));
+  if (byPath.size !== html.length || bundle.catalogs.length !== html.length)
+    throw new Error("legacy_review_bundle_incomplete");
   const url = new URL(endpoint);
   if (url.protocol !== "http:" || !["127.0.0.1", "localhost", "[::1]"].includes(url.hostname) ||
       url.pathname !== "/" || url.search || url.hash) throw new Error("local_d1_endpoint_required");
   const results = [];
-  for (const item of ready) {
-    const response = await fetchImpl(new URL("/catalog/import-legacy", url), { method: "POST",
-      headers: { "content-type": "application/json", "x-test-profile": item.profileRef },
-      body: JSON.stringify({ eventKey: item.eventKey, entries: item.entries }) });
+  for (const record of html) {
+    const review = byPath.get(record.sourcePath);
+    if (!review || review.sourceSha256 !== record.objectSha256 || !review.profileBinding || !review.decisions)
+      throw new Error("legacy_review_bundle_invalid");
+    const sourceBytes = await readFile(join(resolve(backupDir), "objects", record.objectSha256));
+    const response = await fetchImpl(new URL("/catalog/import-reviewed-legacy", url), { method: "POST",
+      headers: { "content-type": "application/json", "x-test-profile": review.profileBinding.profileId },
+      body: JSON.stringify({ packet: bundle.packet, manifestSha256: manifest.manifestSha256,
+        sourceSha256: record.objectSha256, sourcePath: record.sourcePath,
+        eventKey: record.eventKey, profileBinding: review.profileBinding,
+        decisions: review.decisions, sourceBytesBase64: sourceBytes.toString("base64") }) });
     if (![200, 201].includes(response.status)) throw new Error("legacy_local_d1_import_failed");
     const body = await response.json();
-    if (!["stored", "replay"].includes(body.status) || body.buildId !== item.expectedBuildId ||
-        body.sourceRevision !== item.expectedRevision)
+    if (!["stored", "replay"].includes(body.status) ||
+        typeof body.buildId !== "string" || typeof body.sourceRevision !== "string" ||
+        body.sourceRevision.length < 1 || body.sourceRevision.length > 200 ||
+        !Number.isSafeInteger(body.imported) || body.imported < 1 ||
+        !Number.isSafeInteger(body.excluded) || body.excluded < 0)
       throw new Error("legacy_local_d1_receipt_invalid");
-    results.push({ sourceSha256: item.sourceSha256, buildId: body.buildId, status: body.status });
+    results.push({ sourceSha256: record.objectSha256, buildId: body.buildId,
+      sourceRevision: body.sourceRevision, status: body.status });
   }
   return results;
 }
