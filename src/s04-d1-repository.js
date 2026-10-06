@@ -71,8 +71,7 @@ export function createS04D1Repository(db) {
       const row = await db.prepare(`SELECT review_id, profile_ref, revision, actor_ref, issuer_ref,
         issued_at, expires_at FROM s04_review_receipts WHERE receipt_id = ?`).bind(receiptId).first();
       return row?.review_id === reviewId && row.profile_ref === profileRef && row.revision === revision &&
-        row.actor_ref === actorRef && row.issuer_ref === issuerRef &&
-        row.issued_at === issuedAt && row.expires_at === expiresAt
+        row.actor_ref === actorRef && row.issuer_ref === issuerRef
         ? { status: "replay" } : { status: "receipt_conflict" };
     }
   }

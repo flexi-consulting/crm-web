@@ -50,7 +50,8 @@ export function renderBuiltCatalogBrowser(data, { query = "", classification = n
       .filter(Boolean).join("");
     return shell(title, `<nav><a href="${base}">← Каталог</a></nav><h1>${escape(title)}</h1>${meta}
       <article class="card"><dl>${details}</dl><nav>${link(item.source.href, "Профиль выставки")}
-      ${link(item.enrichment.website, "Сайт компании")}</nav></article>`);
+      ${link(item.enrichment.website, "Сайт компании")}</nav></article>
+      <p><a href="${base}/participants/${item.id}/deal">Подготовить сделку</a></p>`);
   }
   const cards = items.map((item) => `<article class="card"><h2><a href="${pathFor(buildId, item.id)}">${escape(item.name)}</a></h2>
     <p>${escape(labels[item.qualification.classification] ?? "Статус не подтверждён")}</p>

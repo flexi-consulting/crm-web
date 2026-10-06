@@ -1,6 +1,8 @@
 import { createCrmConnectedBrowserHandler, createCrmControlPlaneClient } from "./connected-browser-bff.js";
 import { createCrmBrowserD1Store } from "./connected-browser-d1-store.js";
 import { createBuiltCatalogD1HttpHandler } from "./built-catalog-d1-http.js";
+import { createWeeekHttpTransport } from "./weeek-http-transport.js";
+import { createWeeekCorrelationProvider } from "./weeek-correlation-provider.js";
 
 const unavailable = () => new Response(JSON.stringify({ error: "connected_browser_unavailable" }), {
   status: 503, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" }
@@ -10,7 +12,25 @@ const notFound = () => new Response(JSON.stringify({ error: "not_found" }), {
 });
 
 /** Opt-in Worker composition. No test headers can become a trusted profile or approval. */
-export function createCrmConnectedWorkerHandler({ fetcher = fetch, now = () => Date.now() } = {}) {
+const hex = (bytes) => Array.from(new Uint8Array(bytes), (value) => value.toString(16).padStart(2, "0")).join("");
+async function approvalReceipt(identity, reviewId, revision, now) {
+  if (!identity?.profileId || !identity?.principalId || !identity?.sessionId ||
+      !/^review-[0-9a-f-]{36}$/.test(reviewId ?? "") || typeof revision !== "string") return null;
+  const timestamp = now();
+  // Keep retries of one confirmation stable within the receipt lifetime, but
+  // give a later human confirmation a fresh durable receipt after expiry.
+  const receiptWindow = Math.floor(timestamp / (5 * 60_000));
+  const stable = [identity.profileId, identity.principalId, identity.sessionId,
+    reviewId, revision, receiptWindow].join("\0");
+  const receiptId = `crm-review-${hex(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(stable)))}`;
+  const issued = new Date(timestamp).toISOString();
+  return { profileId: identity.profileId, reviewId, revision, actorId: identity.principalId,
+    issuerId: "crm-connected-browser-cp-session-v1", receiptId, approved: true,
+    issuedAt: issued, expiresAt: new Date(Date.parse(issued) + 5 * 60_000).toISOString() };
+}
+
+export function createCrmConnectedWorkerHandler({ fetcher = fetch, now = () => Date.now(),
+  resolveWeeekToken, resolveWeeekStatusIds, resolveLeadStatusId } = {}) {
   return async (request, env) => {
     if (env?.CRM_CONNECTED_BROWSER_ENABLED !== "true") return notFound();
     try {
@@ -21,11 +41,24 @@ export function createCrmConnectedWorkerHandler({ fetcher = fetch, now = () => D
       const client = createCrmControlPlaneClient({ issuer, allowedIssuerOrigins: [issuer],
         serviceKey: env.CRM_CONNECTED_CP_SERVICE_KEY, fetcher });
       const store = createCrmBrowserD1Store(env.CRM_DB, { now });
-      // The domain adapter requires a provider port, but the connected boundary permits GET only.
+      const transport = createWeeekHttpTransport({ fetchImpl: fetcher,
+        resolveToken: async (profileId) => {
+          if (typeof resolveWeeekToken !== "function") throw new Error("weeek_credential_binding_unavailable");
+          return resolveWeeekToken(profileId, env);
+        } });
+      const provider = createWeeekCorrelationProvider({ transport,
+        resolveStatusIds: async (profileId) => {
+          if (typeof resolveWeeekStatusIds !== "function") throw new Error("weeek_status_binding_unavailable");
+          return resolveWeeekStatusIds(profileId, env);
+        } });
       const read = (received, identity) => createBuiltCatalogD1HttpHandler({ db: env.CRM_DB,
-        enabled: true, now: () => new Date(now()).toISOString(),
-        provider: { async create() { throw new Error("connected_browser_write_forbidden"); } },
-        resolveTrustedProfile: () => identity })(received);
+        enabled: true, now: () => new Date(now()).toISOString(), provider,
+        resolveLeadStatusId: async (profileId) => {
+          if (typeof resolveLeadStatusId !== "function") return undefined;
+          return resolveLeadStatusId(profileId, env);
+        }, resolveTrustedProfile: () => identity,
+        resolveTrustedReviewReceipt: (_request, trusted, reviewId, revision) =>
+          approvalReceipt(trusted, reviewId, revision, now) })(received);
       const browser = createCrmConnectedBrowserHandler({ enabled: true, issuer,
         allowedIssuerOrigins: [issuer], publicOrigin, redirectUri, defaultReturnPath, store,
         exchangeCode: client.exchangeCode, introspect: client.introspect,

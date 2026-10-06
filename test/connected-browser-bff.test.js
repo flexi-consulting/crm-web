@@ -95,7 +95,7 @@ test("switch and CP outage deny browser reads without stale grant", async () => 
   assert.equal(f.calls.filter(([kind]) => kind === "domain").length, 0);
 });
 
-test("browser cannot supply bearer/profile or send deal mutation through read boundary", async () => {
+test("browser cannot supply bearer/profile or send a deal command without same-origin CSRF", async () => {
   const f = fixture();
   const { session } = await signIn(f);
   assert.equal((await f.handler(request(`/catalogs/${build}?profileId=profile_B`,
@@ -103,7 +103,7 @@ test("browser cannot supply bearer/profile or send deal mutation through read bo
   assert.equal((await f.handler(request(`/catalogs/${build}`,
     { headers: { cookie: session, authorization: `Bearer ${token}` } }))).status, 400);
   assert.equal((await f.handler(request(`/api/v1/deal-reviews/${`review-${"d".repeat(36)}`}/confirm`,
-    { method: "POST", headers: { cookie: session } }))).status, 404);
+    { method: "POST", headers: { cookie: session } }))).status, 403);
   assert.equal(f.calls.filter(([kind]) => kind === "domain").length, 0);
 });
 

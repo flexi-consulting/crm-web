@@ -15,3 +15,8 @@ CRM_CONNECTED_CP_SERVICE_KEY = "local-test-service-key-12345678901234567890"
 binding = "CRM_DB"
 database_name = "crm-web-connected-browser-local"
 database_id = "00000000-0000-4000-8000-000000000005"
+
+[[d1_databases]]
+binding = "WEEEK_FIXTURE_DB"
+database_name = "crm-web-weeek-http-fixture-local"
+database_id = "00000000-0000-4000-8000-000000000007"

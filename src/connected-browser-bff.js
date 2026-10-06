@@ -1,16 +1,18 @@
 import { activeIdentity, createConnectedCrmReadBoundary } from "./connected-profile-session.js";
+import { renderS04DealReview, renderS04DealOutcome } from "./s04-deal-browser.js";
 
 const AUDIENCE = "crm-web";
 const PENDING = "__Host-crm-connected-pending";
 const SESSION = "__Host-crm-connected-session";
 const AUTH_PATH = "/v1/connected-app-sessions/authorize";
 const MODES = Object.freeze({ catalog: { scope: "crm.catalog.read" },
-  deals: { scope: "crm.deals.read" } });
+  deals: { scope: "crm.deals.read" }, dealCreate: { scope: "crm.deals.create" } });
 const CATALOG_PATH = /^\/catalogs\/build-[a-f0-9]{24}(?:\/participants\/co-[a-f0-9]{20})?$/;
+const DEAL_CREATE_PATH = /^\/catalogs\/build-[a-f0-9]{24}\/participants\/co-[a-f0-9]{20}\/deal$/;
 const DEAL_PATH = /^\/api\/v1\/(?:deal-reviews\/review-|deal-operations\/op-)[0-9a-f-]{36}$/;
 const returnAllowed = (mode, path) => mode === "catalog" ? CATALOG_PATH.test(path) :
-  path === "/deals" || DEAL_PATH.test(path);
-const modeForPath = (path) => CATALOG_PATH.test(path) ? "catalog" :
+  mode === "dealCreate" ? DEAL_CREATE_PATH.test(path) : path === "/deals" || DEAL_PATH.test(path);
+const modeForPath = (path) => DEAL_CREATE_PATH.test(path) ? "dealCreate" : CATALOG_PATH.test(path) ? "catalog" :
   path === "/deals" || DEAL_PATH.test(path) ? "deals" : null;
 const encoder = new TextEncoder();
 const random = () => {
@@ -23,6 +25,34 @@ const digest = async (value) => hex(await crypto.subtle.digest("SHA-256", encode
 const base64url = (bytes) => btoa(String.fromCharCode(...new Uint8Array(bytes))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 const challenge = async (verifier) => base64url(await crypto.subtle.digest("SHA-256", encoder.encode(verifier)));
 const safeHex = (value) => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+const FORM_ROUTES = Object.freeze({
+  "/deal-workflow/prepare": { kind: "prepare", fields: ["buildId", "companyId", "exhibitionId", "title", "companyInn", "contactName", "dealComment"] },
+  "/deal-workflow/confirm": { kind: "confirm", fields: ["reviewId", "revision"] },
+  "/deal-workflow/reconcile": { kind: "reconcile", fields: ["operationId"] }
+});
+const API_ROUTES = [
+  { pattern: /^\/api\/v1\/deal-reviews$/, kind: "prepare" },
+  { pattern: /^\/api\/v1\/deal-reviews\/(review-[0-9a-f-]{36})\/confirm$/, kind: "confirm" },
+  { pattern: /^\/api\/v1\/deal-operations\/(op-[0-9a-f-]{36})\/reconcile$/, kind: "reconcile" }
+];
+const domainScopes = (scopes) => scopes.flatMap((scope) => scope === "crm.catalog.read"
+  ? ["crm.catalog.build.read.synthetic"] : scope === "crm.deals.read"
+    ? ["crm.deals.review.synthetic", "crm.deals.operations.read.synthetic"] :
+      scope === "crm.deals.create" ? ["crm.deals.review.synthetic", "crm.deals.confirm.synthetic", "crm.deals.operations.read.synthetic"] : []);
+async function readForm(request, expected) {
+  if (request.headers.get("content-type")?.split(";")[0].trim().toLowerCase() !== "application/x-www-form-urlencoded") return null;
+  const raw = await request.text();
+  if (new TextEncoder().encode(raw).length > 8_192) return null;
+  const params = new URLSearchParams(raw), values = Object.create(null);
+  for (const [key, value] of params) {
+    if (Object.hasOwn(values, key)) return null;
+    values[key] = value;
+  }
+  if (Object.keys(values).length !== expected.length + 1 || !Object.hasOwn(values, "_csrf") ||
+      expected.some((key) => !Object.hasOwn(values, key))) return null;
+  const csrfToken = values._csrf; delete values._csrf;
+  return { csrfToken, values };
+}
 const cookie = (name, value, age, sameSite = "Strict") =>
   `${name}=${value}; Path=/; Max-Age=${age}; HttpOnly; Secure; SameSite=${sameSite}`;
 const error = (status, code) => new Response(JSON.stringify({ error: code }), { status,
@@ -155,6 +185,75 @@ export function createCrmConnectedBrowserHandler({ enabled = false, issuer, allo
       return redirect(`${publicOrigin}${transaction.returnPath}`, [cookie(PENDING, "", 0, "Lax"),
         cookie(SESSION, newHandle, age)]);
     }
+    const formRoute = FORM_ROUTES[url.pathname];
+    const apiRoute = API_ROUTES.map((entry) => ({ ...entry, match: entry.pattern.exec(url.pathname) }))
+      .find((entry) => entry.match);
+    if (formRoute || apiRoute) {
+      if (request.method !== "POST") return error(405, "method_not_allowed");
+      if (url.searchParams.size || request.headers.has("authorization")) return error(400, "invalid_command_request");
+      const handle = readCookie(request, SESSION);
+      const session = handle ? await store.getSession(await digest(handle)) : null;
+      if (!safeHex(session?.token)) return error(401, "connected_session_required");
+      if (request.headers.get("origin") !== publicOrigin) return error(403, "csrf_required");
+      let payload, csrfToken, html = Boolean(formRoute);
+      if (formRoute) {
+        const form = await readForm(request, formRoute.fields);
+        if (!form) return error(400, "invalid_form_request");
+        ({ csrfToken, values: payload } = form);
+      } else {
+        if (request.headers.get("content-type")?.split(";")[0].trim().toLowerCase() !== "application/json")
+          return error(415, "content_type_required");
+        const raw = await request.text();
+        if (new TextEncoder().encode(raw).length > 16_384) return error(400, "request_too_large");
+        try { payload = JSON.parse(raw); } catch { return error(400, "invalid_json"); }
+        csrfToken = request.headers.get("x-csrf-token");
+      }
+      if (request.headers.get("origin") !== publicOrigin || !safeHex(csrfToken) || csrfToken !== session.csrf)
+        return error(403, "csrf_required");
+      let identity;
+      try { identity = activeIdentity(await introspect({ token: session.token, audience: AUDIENCE }), issuer, Math.floor(now() / 1000)); }
+      catch { return error(503, "connected_identity_unavailable"); }
+      if (!identity) return error(401, "connected_session_inactive");
+      if (!identity.scopes.includes(MODES.dealCreate.scope)) return error(403, "required_scope_missing");
+      let domainPath, commandBody;
+      if (formRoute?.kind === "prepare") {
+        domainPath = "/api/v1/deal-reviews";
+        commandBody = payload;
+      } else if (formRoute?.kind === "confirm") {
+        if (!/^review-[0-9a-f-]{36}$/.test(payload.reviewId ?? "") || typeof payload.revision !== "string")
+          return error(400, "invalid_review_confirmation");
+        domainPath = `/api/v1/deal-reviews/${payload.reviewId}/confirm`;
+        commandBody = { revision: payload.revision };
+      } else if (formRoute?.kind === "reconcile") {
+        if (!/^op-[0-9a-f-]{36}$/.test(payload.operationId ?? "")) return error(400, "invalid_operation_id");
+        domainPath = `/api/v1/deal-operations/${payload.operationId}/reconcile`;
+        commandBody = {};
+      } else if (apiRoute.kind === "prepare") {
+        domainPath = "/api/v1/deal-reviews";
+        commandBody = payload;
+      } else if (apiRoute.kind === "confirm") {
+        domainPath = `/api/v1/deal-reviews/${apiRoute.match[1]}/confirm`;
+        commandBody = payload;
+      } else {
+        domainPath = `/api/v1/deal-operations/${apiRoute.match[1]}/reconcile`;
+        commandBody = payload;
+      }
+      const trusted = { profileId: identity.profileId, scopes: domainScopes(identity.scopes),
+        principalId: identity.principalId, sessionId: identity.sessionId };
+      let result;
+      try {
+        result = await handleScopedRequest(new Request(`${publicOrigin}${domainPath}`, { method: "POST",
+          headers: { "content-type": "application/json", "x-crm-csrf-token": session.csrf },
+          body: JSON.stringify(commandBody) }), trusted);
+      } catch { return error(503, "domain_unavailable"); }
+      if (!html) return result;
+      let body;
+      try { body = await result.clone().json(); } catch { return error(503, "domain_response_invalid"); }
+      const pageResponse = formRoute.kind === "prepare" && result.status < 400
+        ? renderS04DealReview({ review: body, csrfToken: session.csrf })
+        : renderS04DealOutcome({ result: body, csrfToken: session.csrf });
+      return new Response(pageResponse.body, { status: result.status, headers: pageResponse.headers });
+    }
     if (url.pathname === "/auth/connected/logout" && request.method === "POST") {
       const handle = readCookie(request, SESSION);
       const record = handle ? await store.getSession(await digest(handle)) : null;
@@ -186,6 +285,16 @@ export function createCrmConnectedBrowserHandler({ enabled = false, issuer, allo
         return redirect(`${publicOrigin}/auth/connected/start?from=deals`);
       return page('<h1>Сделки</h1><p>Откройте ссылку на конкретный статус сделки из каталога или уведомления.</p><p><a href="/auth/connected/start?from=catalog">Каталоги</a></p>');
     }
+    if (DEAL_CREATE_PATH.test(url.pathname)) {
+      if (url.searchParams.size) return error(400, "invalid_query");
+      let createIdentity;
+      try { createIdentity = activeIdentity(await introspect({ token: session.token, audience: AUDIENCE }),
+        issuer, Math.floor(now() / 1000)); }
+      catch { return error(503, "connected_identity_unavailable"); }
+      if (!createIdentity) return error(401, "connected_session_inactive");
+      if (!createIdentity.scopes.includes(MODES.dealCreate.scope))
+        return redirect(`${publicOrigin}/auth/connected/start?${new URLSearchParams({ from: "dealCreate", returnTo: url.pathname })}`);
+    }
     if (url.pathname === "/auth/connected/session") {
       if (url.searchParams.size) return error(400, "invalid_query");
       let identity;
@@ -200,6 +309,7 @@ export function createCrmConnectedBrowserHandler({ enabled = false, issuer, allo
     }
     const headers = new Headers(request.headers);
     headers.delete("cookie");
+    headers.set("x-crm-csrf-token", session.csrf);
     headers.set("authorization", `Bearer ${session.token}`);
     return scopedRead(new Request(request, { headers }));
   };

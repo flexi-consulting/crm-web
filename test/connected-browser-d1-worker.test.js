@@ -42,12 +42,16 @@ async function stop(child) {
 function migrate(root) {
   for (const file of ["0001_s04_domain.sql", "0002_built_catalog.sql", "0003_weeek_deal_identity.sql",
     "0004_legacy_catalog_refs.sql", "0005_connected_browser_sessions.sql",
-    "0006_connected_browser_mode.sql"]) {
+    "0006_connected_browser_mode.sql", "0007_connected_browser_s04_commands.sql"]) {
     const result = spawnSync(node, [wrangler, "d1", "execute", "CRM_DB", "--config", config,
       "--local", "--persist-to", root, "--file", `migrations/${file}`, "--yes", "--json"],
     { cwd, encoding: "utf8" });
     assert.equal(result.status, 0, result.stderr || result.stdout);
   }
+  const providerFixture = spawnSync(node, [wrangler, "d1", "execute", "WEEEK_FIXTURE_DB", "--config", config,
+    "--local", "--persist-to", root, "--file", "test/fixtures/weeek-http-provider.sql", "--yes", "--json"],
+  { cwd, encoding: "utf8" });
+  assert.equal(providerFixture.status, 0, providerFixture.stderr || providerFixture.stdout);
 }
 const cookie = (response, name) => response.headers.getSetCookie()
   .map((part) => part.split(";")[0]).find((part) => part.startsWith(`${name}=`));
@@ -99,7 +103,7 @@ test("Worker Fetch uses atomic D1 browser handoff and real profile-scoped catalo
     assert.equal((await call(worker.base, `/catalogs/${buildId}`, { headers: {
       cookie: session, authorization: `Bearer ${"b".repeat(64)}` } })).status, 400);
     assert.equal((await call(worker.base, "/api/v1/deal-reviews/review-11111111-1111-1111-1111-111111111111/confirm",
-      { method: "POST", headers: { cookie: session } })).status, 404);
+      { method: "POST", headers: { cookie: session } })).status, 403);
     const metadata = await call(worker.base, "/auth/connected/session", { headers: { cookie: session } });
     assert.equal(metadata.status, 200);
     const csrf = (await metadata.json()).csrfToken;
@@ -156,6 +160,110 @@ test("Worker Fetch uses atomic D1 browser handoff and real profile-scoped catalo
     assert.equal((await call(worker.base, "/auth/connected/start")).status, 200);
     const catalogStart = await call(worker.base, "/auth/connected/start?from=catalog");
     assert.equal(new URL(catalogStart.headers.get("location")).searchParams.get("scope"), "crm.catalog.read");
+  } finally {
+    if (worker) await stop(worker.child);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("browser S-04 confirms through D1 and Weeek HTTP, then reconciles an accepted timeout without a second POST", async () => {
+  const root = mkdtempSync(join(tmpdir(), "crm-connected-s04-browser-"));
+  let worker;
+  try {
+    migrate(root);
+    worker = await start(root);
+    const seeded = await (await call(worker.base, "/__seed")).json();
+    const dealPath = `/catalogs/${seeded.buildId}/participants/${seeded.companyId}/deal`;
+    const stepUp = await call(worker.base, dealPath);
+    assert.equal(stepUp.status, 303);
+    const stepUpUrl = new URL(stepUp.headers.get("location"));
+    assert.equal(stepUpUrl.pathname, "/auth/connected/start");
+    assert.equal(stepUpUrl.searchParams.get("from"), "dealCreate");
+    assert.equal(stepUpUrl.searchParams.get("returnTo"), dealPath);
+    await call(worker.base, "/__cp-control?mode=deal_create");
+    const authorization = await call(worker.base, `${stepUpUrl.pathname}${stepUpUrl.search}`);
+    assert.equal(authorization.status, 303, await authorization.clone().text());
+    const target = new URL(authorization.headers.get("location"));
+    assert.equal(target.searchParams.get("scope"), "crm.deals.create");
+    const pending = cookie(authorization, "__Host-crm-connected-pending");
+    const callbackPath = `/auth/connected/callback?code=${"c".repeat(64)}&state=${target.searchParams.get("state")}` +
+      `&iss=${encodeURIComponent("https://cp.example.invalid")}`;
+    const callback = await call(worker.base, callbackPath, { headers: { cookie: pending } });
+    assert.equal(callback.status, 303);
+    assert.equal(callback.headers.get("location"), `https://crm.example.invalid${dealPath}`);
+    const session = cookie(callback, "__Host-crm-connected-session");
+    const formPage = await call(worker.base, dealPath, { headers: { cookie: session } });
+    assert.equal(formPage.status, 200, `${await formPage.clone().text()}\n${worker.getLogs()}`);
+    const formHtml = await formPage.text();
+    assert.match(formHtml, /Подготовить сводку/);
+    const csrf = formHtml.match(/name="_csrf" value="([a-f0-9]{64})"/)?.[1];
+    assert.ok(csrf);
+
+    const draft = { buildId: seeded.buildId, companyId: seeded.companyId, exhibitionId: seeded.exhibitionId,
+      title: `Встреча с ${seeded.companyName}`, companyInn: "7701234567", contactName: "Synthetic Contact",
+      dealComment: "Discuss the catalog participation." };
+    const apiPrepare = await call(worker.base, "/api/v1/deal-reviews", { method: "POST",
+      headers: { cookie: session, origin: "https://crm.example.invalid", "x-csrf-token": csrf,
+        "content-type": "application/json" }, body: JSON.stringify(draft) });
+    assert.equal(apiPrepare.status, 201);
+    assert.equal((await apiPrepare.json()).status, "prepared");
+    assert.equal((await call(worker.base, "/api/v1/deal-reviews", { method: "POST",
+      headers: { cookie: session, "content-type": "application/json", "x-csrf-token": csrf },
+      body: JSON.stringify(draft) })).status, 403, "JSON mutation requires exact Origin");
+
+    const prepare = await call(worker.base, "/deal-workflow/prepare", { method: "POST",
+      headers: { cookie: session, origin: "https://crm.example.invalid",
+        "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ ...draft, _csrf: csrf }) });
+    assert.equal(prepare.status, 201);
+    const reviewHtml = await prepare.text();
+    assert.match(reviewHtml, /Проверьте данные сделки/);
+    assert.match(reviewHtml, /status-lead-A/);
+    const reviewId = reviewHtml.match(/name="reviewId" value="(review-[0-9a-f-]{36})"/)?.[1];
+    const revision = reviewHtml.match(/name="revision" value="([0-9a-f]{64})"/)?.[1];
+    assert.ok(reviewId && revision);
+    const confirmationForm = new URLSearchParams({ _csrf: csrf, reviewId, revision });
+    assert.equal((await call(worker.base, "/deal-workflow/confirm", { method: "POST",
+      headers: { cookie: session, origin: "https://evil.example.invalid",
+        "content-type": "application/x-www-form-urlencoded" }, body: confirmationForm })).status, 403);
+    assert.equal((await (await call(worker.base, "/__cp-count")).json()).weeekCreatePosts, 0);
+
+    const uncertain = await call(worker.base, "/deal-workflow/confirm", { method: "POST",
+      headers: { cookie: session, origin: "https://crm.example.invalid",
+        "content-type": "application/x-www-form-urlencoded" }, body: confirmationForm });
+    assert.equal(uncertain.status, 202);
+    const uncertainHtml = await uncertain.text();
+    assert.match(uncertainHtml, /Результат уточняется/);
+    assert.match(uncertainHtml, /Повторного запроса на создание не будет/);
+    const operationId = uncertainHtml.match(/name="operationId" value="(op-[0-9a-f-]{36})"/)?.[1];
+    assert.ok(operationId);
+    assert.equal((await (await call(worker.base, "/__cp-count")).json()).weeekCreatePosts, 1);
+
+    await stop(worker.child);
+    worker = await start(root);
+    await call(worker.base, "/__cp-control?mode=deal_create");
+    // The recovery form survives restart and reconciles the existing unknown operation.
+    const recovered = await call(worker.base, "/deal-workflow/reconcile", { method: "POST",
+      headers: { cookie: session, origin: "https://crm.example.invalid",
+        "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ _csrf: csrf, operationId }) });
+    assert.equal(recovered.status, 200, await recovered.clone().text());
+    assert.match(await recovered.text(), /Сделка создана/);
+    // A delayed duplicate of the explicit confirmation observes the durable result.
+    const duplicateConfirm = await call(worker.base, "/deal-workflow/confirm", { method: "POST",
+      headers: { cookie: session, origin: "https://crm.example.invalid",
+        "content-type": "application/x-www-form-urlencoded" }, body: confirmationForm });
+    assert.equal(duplicateConfirm.status, 200);
+    assert.match(await duplicateConfirm.text(), /Сделка создана/);
+    const operation = await call(worker.base, `/api/v1/deal-operations/${operationId}`,
+      { headers: { cookie: session } });
+    assert.equal(operation.status, 200);
+    const savedOperation = await operation.json();
+    assert.equal(savedOperation.status, "created");
+    assert.equal(savedOperation.linkStatus, "linked");
+    assert.equal(savedOperation.dealId, "weeek_deal_opaque_001");
+    const counts = await (await call(worker.base, "/__cp-count")).json();
+    assert.equal(counts.weeekCreatePosts, 1);
+    assert.equal(counts.foreignEgress, 0);
   } finally {
     if (worker) await stop(worker.child);
     rmSync(root, { recursive: true, force: true });
