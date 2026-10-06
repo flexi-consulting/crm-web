@@ -64,7 +64,9 @@ test("reviewed legacy projection persists through local D1 Worker with exact ref
     { id: "SYN002", n: "Invented Excluded Company", s: "B-02", t: 0, nt: 1,
       ru: 1, rev: null, href: "https://example.invalid/two" },
   ];
-  const manifestSha256 = "a".repeat(64), sourceSha256 = "b".repeat(64);
+  const manifestSha256 = "a".repeat(64);
+  const sourceBytes = Buffer.from(`const EVENT_KEY = '${eventKey}';\nconst EX = ${JSON.stringify(entries)};\n`);
+  const sourceSha256 = sha256(sourceBytes);
   const sourcePath = "legacy-owner/catalog.html", legacyUserId = "legacy-owner";
   const profileBinding = { status: "confirmed", issuer: "control-plane", legacyUserId,
     principalId: "synthetic-principal", profileId: "demo-profile-a", evidenceSha256: "c".repeat(64) };
@@ -78,7 +80,8 @@ test("reviewed legacy projection persists through local D1 Worker with exact ref
       rowSha256: sha256(JSON.stringify(row)), outcome: index === 0 ? "include" : "exclude",
       ...(index === 0 ? { replacement: row } : { reason: "synthetic duplicate excluded by reviewer" }),
       evidenceSha256: "e".repeat(64) })) };
-  const request = { packet, manifestSha256, sourceSha256, sourcePath, eventKey, profileBinding, entries, decisions };
+  const request = { packet, manifestSha256, sourceSha256, sourcePath, eventKey, profileBinding,
+    sourceBytesBase64: sourceBytes.toString("base64"), decisions };
   try {
     for (const migration of ["migrations/0001_s04_domain.sql", "migrations/0002_built_catalog.sql",
       "migrations/0003_weeek_deal_identity.sql", "migrations/0004_legacy_catalog_refs.sql"]) {
@@ -91,6 +94,10 @@ test("reviewed legacy projection persists through local D1 Worker with exact ref
       ...request, decisions: { ...decisions, sourceSha256: "f".repeat(64) } });
     assert.equal(rejected.status, 422);
     assert.equal(rejected.body.status, "review_decisions_unverified");
+    const tamperedBytes = await call(worker.base, "/catalog/import-reviewed-legacy", {
+      ...request, sourceBytesBase64: Buffer.from("changed source").toString("base64") });
+    assert.equal(tamperedBytes.status, 422);
+    assert.equal(tamperedBytes.body.status, "source_bytes_mismatch");
     const imported = await call(worker.base, "/catalog/import-reviewed-legacy", request);
     assert.equal(imported.status, 201, JSON.stringify(imported.body));
     assert.equal(imported.body.imported, 1);

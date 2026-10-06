@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { projectLegacyExSnapshot } from "./legacy-ex-snapshot.js";
+import { parseLegacyExHtml } from "./private-legacy-handoff.js";
 
 const sha = (value) => createHash("sha256").update(value).digest("hex");
 const shaOk = (value) => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
@@ -22,12 +23,18 @@ function decisionMap(decisions, rowCount, expectedKeys, name) {
 // Validates an explicit offline review against a separately verified backup
 // and owner packet. This function only projects; it never persists or imports.
 export function prepareApprovedLegacyImport({ packet, manifestSha256, sourceSha256,
-  sourcePath, eventKey, profileBinding, entries, decisions }) {
+  sourcePath, eventKey, profileBinding, sourceBytes, decisions }) {
   if (!packet || packet.version !== 1 || packet.approvedForImport !== false ||
       packet.status !== "private_review_required" || !shaOk(manifestSha256) ||
       packet.manifestSha256 !== manifestSha256 || !shaOk(sourceSha256) ||
-      !Array.isArray(packet.owners) || !Array.isArray(entries))
+      !Array.isArray(packet.owners) || !(sourceBytes instanceof Uint8Array))
     return { status: "review_packet_invalid" };
+  const bytes = Buffer.from(sourceBytes);
+  if (sha(bytes) !== sourceSha256) return { status: "source_bytes_mismatch" };
+  let parsed;
+  try { parsed = parseLegacyExHtml(bytes); } catch { return { status: "source_html_invalid" }; }
+  if (parsed.eventKey !== eventKey) return { status: "source_event_mismatch" };
+  const entries = parsed.entries;
   const owner = packet.owners.find((candidate) => candidate.catalogs?.some((catalog) =>
     catalog.sourcePath === sourcePath && catalog.sourceSha256 === sourceSha256 && catalog.eventKey === eventKey));
   if (!owner) return { status: "source_not_in_review_packet" };

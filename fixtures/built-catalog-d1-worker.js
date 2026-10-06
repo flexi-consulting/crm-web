@@ -68,6 +68,7 @@ export default {
         let sourceBytes;
         try { sourceBytes = Buffer.from(sourceBytesBase64, "base64"); }
         catch { return respond(400, { error: "invalid_source_bytes" }); }
+        try { sourceBytes = Buffer.from(sourceBytesBase64, "base64"); } catch { return respond(400, { error: "invalid_source_bytes" }); }
         result = await importReviewedLegacyExSnapshot({ repository: built, ...review, sourceBytes });
         return respond(result.status === "stored" ? 201 : result.status === "replay" ? 200 : 422, result);
       }
