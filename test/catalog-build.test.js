@@ -6,7 +6,7 @@ import { readFile } from "node:fs/promises";
 import { createServer } from "../src/server.js";
 import { createCatalogBuildService, createSyntheticSourceAdapter, createSyntheticEnrichmentAdapter, createSyntheticRegistryAdapter, normalizeEnrichment, normalizeRegistry, qualify } from "../src/catalog-build.js";
 import { renderCatalogPreview } from "../src/catalog-preview.js";
-import { queryCatalogV11, renderCatalogV11 } from "../src/catalog-query-v11.js";
+import { queryCatalogV11, renderCatalogV11, createCatalogV11ReadHandler } from "../src/catalog-query-v11.js";
 
 const scopes = ["crm.catalog.build.synthetic", "crm.catalog.build.read.synthetic", "crm.catalog.preview.synthetic", "crm.catalog.preview.read.synthetic"];
 const headers = (profileId, granted = scopes) => ({ "x-test-profile": profileId, "x-test-scopes": granted.join(" ") });
@@ -137,6 +137,26 @@ test("S-01 v1.1 metadata schema preserves synthetic legacy filter fields with ex
   assert.equal(safeView.html.includes("<img src=x"), false);
   assert.equal(safeView.html.includes("<script>bad</script>"), false);
   assert.equal(safeView.html.includes('onmouseover=bad'), false);
+
+  const calls = [];
+  const handler = createCatalogV11ReadHandler({
+    repository: { async getArtifact(scope) {
+      calls.push(scope);
+      return scope.profileId === "demo-profile-a" ? queryArtifact : null;
+    } },
+    resolveTrustedProfile: async request => request.headers.get("x-test-profile") === "unavailable"
+      ? (() => { throw new Error("identity unavailable"); })()
+      : ({ profileId: request.headers.get("x-test-profile"), scopes: request.headers.get("x-test-scope")?.split(" ") ?? [] })
+  });
+  const fetchHandler = (profileId, scope = "crm.catalog.read", path = "/catalogs/synthetic-current-source-shape?revenueBand=100-1500&profitBand=30-200") =>
+    handler(new Request(`https://crm.example.invalid${path}`, { headers: { "x-test-profile": profileId, "x-test-scope": scope } }));
+  assert.equal((await fetchHandler("demo-profile-a")).status, 200);
+  assert.equal((await fetchHandler("demo-profile-a", "")).status, 403);
+  assert.equal((await fetchHandler("demo-profile-b")).status, 404);
+  assert.equal((await fetchHandler("unavailable")).status, 503);
+  assert.equal((await fetchHandler("demo-profile-a", "crm.catalog.read", "/catalogs/synthetic-current-source-shape?revenueBand=unsafe")).status, 400);
+  assert.equal((await fetchHandler("demo-profile-a", "crm.catalog.read", "/catalogs/synthetic-current-source-shape?query=a&query=b")).status, 400);
+  assert.ok(calls.every(scope => scope.profileId !== "demo-profile-b" || scope.exhibitionId === "synthetic-current-source-shape"));
 });
 
 test("build artifacts and reports are deterministic; same key replays without another adapter call", async () => {

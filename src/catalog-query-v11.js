@@ -68,3 +68,47 @@ export function renderCatalogV11({ artifact, result, filters = {} }) {
     <button type="submit">Показать</button></form><p>Найдено: ${result.total}</p>${cards || "<p>Ничего не найдено.</p>"}</main></html>`;
   return { status: "ok", html };
 }
+
+const reply = (status, body) => new Response(JSON.stringify(body), { status, headers: {
+  "content-type": "application/json; charset=utf-8", "cache-control": "private, no-store",
+  "x-content-type-options": "nosniff"
+} });
+
+export function createCatalogV11ReadHandler({ repository, resolveTrustedProfile }) {
+  if (typeof repository?.getArtifact !== "function" || typeof resolveTrustedProfile !== "function")
+    throw new TypeError("catalog v1.1 repository and trusted profile resolver required");
+  return async function handle(request) {
+    const url = new URL(request.url);
+    const match = url.pathname.match(/^\/catalogs\/([a-z0-9][a-z0-9-]{0,79})$/);
+    if (!match || request.method !== "GET") return reply(404, { error: "not_found" });
+    let context;
+    try { context = await resolveTrustedProfile(request); } catch {
+      return reply(503, { error: "trusted_profile_unavailable" });
+    }
+    if (!context || typeof context.profileId !== "string" || !context.profileId || !Array.isArray(context.scopes))
+      return reply(503, { error: "trusted_profile_unavailable" });
+    if (!context.scopes.includes("crm.catalog.read")) return reply(403, { error: "required_scope_missing" });
+    const params = [...url.searchParams.keys()];
+    if (params.some(key => !["query", "classification", "country", "revenueBand", "profitBand"].includes(key)) ||
+        params.some(key => url.searchParams.getAll(key).length !== 1))
+      return reply(400, { error: "invalid_query" });
+    const filters = { query: url.searchParams.get("query") ?? "",
+      classification: url.searchParams.get("classification") || null,
+      country: url.searchParams.has("country") ? url.searchParams.get("country") : null,
+      revenueBand: url.searchParams.get("revenueBand") || null,
+      profitBand: url.searchParams.get("profitBand") || null };
+    let artifact;
+    try { artifact = await repository.getArtifact({ profileId: context.profileId, exhibitionId: match[1] }); }
+    catch { return reply(503, { error: "catalog_unavailable" }); }
+    if (!artifact) return reply(404, { error: "catalog_not_found" });
+    const result = queryCatalogV11(artifact, filters);
+    if (result.status !== "ok") return reply(400, { error: "invalid_query" });
+    const view = renderCatalogV11({ artifact, result, filters });
+    if (view.status !== "ok") return reply(503, { error: "catalog_unavailable" });
+    return new Response(view.html, { status: 200, headers: {
+      "content-type": "text/html; charset=utf-8", "cache-control": "private, no-store",
+      "x-content-type-options": "nosniff", "referrer-policy": "same-origin",
+      "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+    } });
+  };
+}
