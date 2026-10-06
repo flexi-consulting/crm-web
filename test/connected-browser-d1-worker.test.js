@@ -245,6 +245,19 @@ test("browser S-04 confirms through D1 and Weeek HTTP, then reconciles an accept
     assert.equal((await (await call(worker.base, "/__cp-count")).json()).weeekCreatePosts, 0,
       "a create scope without a trusted approval receipt cannot reach Weeek");
 
+    await call(worker.base, "/__expire-approval");
+    await call(worker.base, "/__cp-control?mode=expired_unconsumed");
+    const replacementApproval = await call(worker.base, "/deal-workflow/confirm", { method: "POST",
+      headers: { cookie: session, origin: "https://crm.example.invalid",
+        "content-type": "application/x-www-form-urlencoded" }, body: confirmationForm });
+    assert.equal(replacementApproval.status, 409, await replacementApproval.clone().text());
+    assert.match(await replacementApproval.text(), /cp\.example\.invalid\/v1\/connected-app-approvals\/review\?intent=/);
+    const replacementCounts = await (await call(worker.base, "/__cp-count")).json();
+    assert.equal(replacementCounts.approvalPrepareCalls, 2,
+      "an expired unconsumed intent is replaced and requires a new human confirmation");
+    assert.equal(replacementCounts.approvalConsumeCalls, 3);
+    assert.equal(replacementCounts.weeekCreatePosts, 0);
+
     await call(worker.base, "/__cp-control?mode=receipt_approved_response_lost");
     const lostReceiptResponse = await call(worker.base, "/deal-workflow/confirm", { method: "POST",
       headers: { cookie: session, origin: "https://crm.example.invalid",
@@ -268,9 +281,9 @@ test("browser S-04 confirms through D1 and Weeek HTTP, then reconciles an accept
     const operationId = uncertainHtml.match(/name="operationId" value="(op-[0-9a-f-]{36})"/)?.[1];
     assert.ok(operationId);
     const afterReceiptRecovery = await (await call(worker.base, "/__cp-count")).json();
-    assert.equal(afterReceiptRecovery.approvalPrepareCalls, 1,
+    assert.equal(afterReceiptRecovery.approvalPrepareCalls, 2,
       "receipt recovery must reuse the expired consumed intent instead of requesting another approval");
-    assert.equal(afterReceiptRecovery.approvalConsumeCalls, 3);
+    assert.equal(afterReceiptRecovery.approvalConsumeCalls, 5);
     assert.equal(afterReceiptRecovery.weeekCreatePosts, 1);
 
     await stop(worker.child);

@@ -6,6 +6,7 @@ const issuer = "https://cp.example.invalid";
 let cpMode = "active", cpCalls = 0, foreignEgress = 0, clockOffset = 0;
 let approvalPrepareCalls = 0, approvalConsumeCalls = 0;
 let lostApproval = null;
+let expiredIntentId = null;
 let weeekDb;
 const cpFetch = async (url, options) => {
   if (url.startsWith("https://api.weeek.net/public/v1/")) {
@@ -74,6 +75,9 @@ const cpFetch = async (url, options) => {
     if (cpMode === "receipt_approved" && lostApproval &&
         body.intentId === lostApproval.intentId && body.consumerRequestId === lostApproval.consumerRequestId)
       return Response.json(lostApproval.response, { status: 200 });
+    if (cpMode === "expired_unconsumed") return body.intentId === expiredIntentId
+      ? Response.json({ error: "approval not available" }, { status: 403 })
+      : Response.json({ error: "human approval required" }, { status: 403 });
     if (!["receipt_approved", "receipt_approved_response_lost"].includes(cpMode))
       return Response.json({ error: "human approval required" }, { status: 403 });
     const canonical = (value) => Array.isArray(value) ? value.map(canonical) : value && typeof value === "object"
@@ -98,7 +102,7 @@ const cpFetch = async (url, options) => {
     ? { active: false } : { active: true, iss: issuer, aud: "crm-web", sub: "principal_A",
       profileId: "profile_A", sessionId: "session_A", nbf: now - 10, exp: now + 300,
       scopes: cpMode === "catalog_only" ? ["crm.catalog.read"] :
-        ["deal_create", "deal_create_no_approval", "deal_create_approved_fixture", "receipt_approved",
+        ["deal_create", "deal_create_no_approval", "deal_create_approved_fixture", "expired_unconsumed", "receipt_approved",
           "receipt_approved_response_lost"].includes(cpMode)
           ? ["crm.deals.create"] :
         cpMode === "deals_only" ? ["crm.deals.read"] :
@@ -144,6 +148,9 @@ export default {
       return Response.json({ clockOffset });
     }
     if (url.pathname === "/__expire-approval") {
+      const current = await env.CRM_DB.prepare("SELECT intent_id FROM crm_cp_approval_intents WHERE profile_ref=?")
+        .bind("profile_A").first();
+      expiredIntentId = current?.intent_id ?? null;
       await env.CRM_DB.prepare("UPDATE crm_cp_approval_intents SET expires_at=? WHERE profile_ref=?")
         .bind(Math.floor(Date.now() / 1000) - 1, "profile_A").run();
       return Response.json({ expired: true });
