@@ -110,6 +110,34 @@ export function createCrmControlPlaneClient({ issuer, allowedIssuerOrigins, serv
       });
       if (!response.ok) throw new Error("connected_identity_unavailable");
       return response.json();
+    },
+    async prepareApproval({ token, operation, sourceRevision }) {
+      const response = await fetcher(`${issuer}/v1/connected-app-approvals/prepare`, {
+        method: "POST", redirect: "manual", signal: AbortSignal.timeout(5000),
+        headers: { authorization, "content-type": "application/json" },
+        body: JSON.stringify({ appToken: token, audience: AUDIENCE, command: "crm.deals.create",
+          sourceRevision, operation })
+      });
+      if (response.status !== 201) throw new Error("connected_approval_prepare_unavailable");
+      const result = await response.json();
+      const target = new URL(result?.approvalUrl);
+      if (result?.version !== 1 || !safeHex(result.intentId) ||
+          target.origin !== issuer || target.pathname !== "/v1/connected-app-approvals/review" ||
+          target.searchParams.getAll("intent").length !== 1 || target.searchParams.get("intent") !== result.intentId ||
+          [...target.searchParams.keys()].some((key) => key !== "intent"))
+        throw new Error("connected_approval_response_invalid");
+      return result;
+    },
+    async consumeApproval({ token, intentId, consumerRequestId, operation, sourceRevision }) {
+      const response = await fetcher(`${issuer}/v1/connected-app-approvals/consume`, {
+        method: "POST", redirect: "manual", signal: AbortSignal.timeout(5000),
+        headers: { authorization, "content-type": "application/json" },
+        body: JSON.stringify({ appToken: token, audience: AUDIENCE, command: "crm.deals.create",
+          sourceRevision, operation, intentId, consumerRequestId })
+      });
+      let result;
+      try { result = await response.json(); } catch { throw new Error("connected_approval_response_invalid"); }
+      return { status: response.status, body: result };
     }
   };
 }
@@ -243,15 +271,25 @@ export function createCrmConnectedBrowserHandler({ enabled = false, issuer, allo
       let result;
       try {
         result = await handleScopedRequest(new Request(`${publicOrigin}${domainPath}`, { method: "POST",
-          headers: { "content-type": "application/json", "x-crm-csrf-token": session.csrf },
+          // Server-internal request only: lets the domain adapter present the current
+          // CP app token when it asks CP for a human approval intent/receipt.
+          // This header is never copied into a browser response.
+          headers: { "content-type": "application/json", "x-crm-csrf-token": session.csrf,
+            authorization: `Bearer ${session.token}` },
           body: JSON.stringify(commandBody) }), trusted);
       } catch { return error(503, "domain_unavailable"); }
       if (!html) return result;
+      if (result.status === 303 && result.headers.get("location")) {
+        const target = new URL(result.headers.get("location"));
+        if (target.origin !== issuer || target.pathname !== "/v1/connected-app-approvals/review")
+          return error(503, "approval_destination_invalid");
+        return redirect(target.href);
+      }
       let body;
       try { body = await result.clone().json(); } catch { return error(503, "domain_response_invalid"); }
       const pageResponse = formRoute.kind === "prepare" && result.status < 400
         ? renderS04DealReview({ review: body, csrfToken: session.csrf })
-        : renderS04DealOutcome({ result: body, csrfToken: session.csrf });
+        : renderS04DealOutcome({ result: body, csrfToken: session.csrf, approvalIssuer: issuer });
       return new Response(pageResponse.body, { status: result.status, headers: pageResponse.headers });
     }
     if (url.pathname === "/auth/connected/logout" && request.method === "POST") {

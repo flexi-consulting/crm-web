@@ -202,9 +202,22 @@ export function createBuiltCatalogD1HttpHandler({ db, enabled = false, provider,
         const parsed = await input(request); if (parsed.error) return reply(parsed.status, { error: parsed.error });
         if (!parsed.value || Object.keys(parsed.value).length !== 1 || typeof parsed.value.revision !== "string")
           return reply(400, { error: "invalid_review_confirmation" });
+        const review = await built.reviewService.get({ profileId: context.profileId, reviewId: confirmMatch[1] });
+        if (review.status !== 200) return reply(review.status, review.body);
+        if (review.body.revision !== parsed.value.revision)
+          return reply(409, { error: "review_stale" });
+        // Once CRM has durably reserved a provider operation, reconciliation
+        // must work even if CP is unavailable or the approval intent expired.
+        if (["unknown", "created"].includes(review.body.status)) {
+          const replay = await built.reviewService.confirm({ profileId: context.profileId,
+            reviewId: confirmMatch[1], revision: parsed.value.revision });
+          return reply(replay.status, replay.body);
+        }
         let trustedReceipt;
         try { trustedReceipt = await resolveTrustedReviewReceipt?.(request, context,
-          confirmMatch[1], parsed.value.revision); } catch {}
+          confirmMatch[1], parsed.value.revision, review.body); } catch {}
+        if (typeof resolveTrustedReviewReceipt === "function" && !trustedReceipt)
+          return reply(503, { error: "approval_authority_unavailable" });
         const result = await built.reviewService.confirm({ profileId: context.profileId,
           reviewId: confirmMatch[1], revision: parsed.value.revision, trustedReceipt });
         return reply(result.status, result.body);

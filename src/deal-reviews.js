@@ -93,6 +93,7 @@ export function createDealReviewService({ confirmedDeals, preleadTimeline, parti
     const operation = await confirmedDeals.get({ profileId, operationId: review.operationId });
     return { status: 200, body: { domainApiVersion: "1.0.0", reviewId: id,
       revision: review.revision, operationId: review.operationId,
+      requestHash: review.requestHash,
       details: review.snapshot.details,
       status: operation.status === 200 ? operation.body.status : "prepared",
       ...(operation.status === 200 && operation.body.dealId ? { dealId: operation.body.dealId } : {}),
@@ -113,6 +114,10 @@ export function createDealReviewService({ confirmedDeals, preleadTimeline, parti
       }
       return { ...previous, body: { ...previous.body, replayed: true } };
     }
+    if (trustedReceipt?.approvalPending === true &&
+        typeof trustedReceipt.approvalUrl === "string" && trustedReceipt.approvalUrl.startsWith("https://"))
+      return { status: 409, body: { error: "human_approval_required", approvalUrl: trustedReceipt.approvalUrl,
+        reviewId: id, revision } };
     if (!trustedReceipt || trustedReceipt.profileId !== profileId || trustedReceipt.reviewId !== id ||
         trustedReceipt.revision !== revision || !requiredText(trustedReceipt.actorId, 160) ||
         !requiredText(trustedReceipt.receiptId, 160) || !requiredText(trustedReceipt.issuerId, 160) ||

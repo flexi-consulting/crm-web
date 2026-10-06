@@ -42,8 +42,21 @@ export function renderS04DealReview({ review, csrfToken }) {
   return shell("Проверка сделки", `<h1>Проверьте данные сделки</h1><section class="card">${detailsMarkup(review.details)}</section><p>После подтверждения запись будет отправлена в Weeek. Если ответ потеряется, система сначала проверит результат и не отправит повторный запрос на создание.</p><form method="post" action="/deal-workflow/confirm">${hidden("_csrf", csrfToken)}${hidden("reviewId", review.reviewId)}${hidden("revision", review.revision)}<button type="submit">Подтверждаю создание сделки</button></form>`);
 }
 
-export function renderS04DealOutcome({ result, csrfToken }) {
+export function renderS04DealOutcome({ result, csrfToken, approvalIssuer }) {
   const status = result?.status;
+  if (result?.error === "human_approval_required" && /^review-[0-9a-f-]{36}$/.test(result.reviewId ?? "") &&
+      /^[a-f0-9]{64}$/.test(result.revision ?? "") && csrf(csrfToken)) {
+    let approvalUrl;
+    try {
+      approvalUrl = new URL(result.approvalUrl);
+      if (approvalUrl.protocol !== "https:" || approvalUrl.origin !== approvalIssuer ||
+          approvalUrl.pathname !== "/v1/connected-app-approvals/review" ||
+          approvalUrl.searchParams.getAll("intent").length !== 1 || [...approvalUrl.searchParams.keys()].some((key) => key !== "intent"))
+        approvalUrl = null;
+    } catch { approvalUrl = null; }
+    if (!approvalUrl) return shell("Подтверждение недоступно", "<h1>Не удалось открыть подтверждение</h1><p>Проверьте связь с Control Plane.</p>");
+    return shell("Подтверждение сделки", `<h1>Сначала подтвердите точные данные в Control Plane</h1><p>Откройте страницу Control Plane. Она покажет данные операции перед подтверждением. После подтверждения вернитесь сюда и отдельно отправьте команду создания.</p><p><a rel="noreferrer" href="${escape(approvalUrl.href)}">Проверить и подтвердить действие в Control Plane</a></p><form method="post" action="/deal-workflow/confirm">${hidden("_csrf", csrfToken)}${hidden("reviewId", result.reviewId)}${hidden("revision", result.revision)}<button type="submit">Я подтвердил в Control Plane — создать сделку</button></form>`);
+  }
   if (status === "unknown" && /^op-[0-9a-f-]{36}$/.test(result.operationId ?? ""))
     return shell("Результат сделки уточняется", `<h1>Результат уточняется</h1><p>Weeek мог принять запрос, но ответ пока не подтверждён. Повторного запроса на создание не будет. Запустите только сверку результата.</p><form method="post" action="/deal-workflow/reconcile">${hidden("_csrf", csrfToken)}${hidden("operationId", result.operationId)}<button type="submit">Сверить с Weeek</button></form>`);
   if (status === "created" && /^op-[0-9a-f-]{36}$/.test(result.operationId ?? ""))

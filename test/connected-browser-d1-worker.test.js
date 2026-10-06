@@ -42,7 +42,8 @@ async function stop(child) {
 function migrate(root) {
   for (const file of ["0001_s04_domain.sql", "0002_built_catalog.sql", "0003_weeek_deal_identity.sql",
     "0004_legacy_catalog_refs.sql", "0005_connected_browser_sessions.sql",
-    "0006_connected_browser_mode.sql", "0007_connected_browser_s04_commands.sql"]) {
+    "0006_connected_browser_mode.sql", "0007_connected_browser_s04_commands.sql",
+    "0008_cp_approval_intents.sql"]) {
     const result = spawnSync(node, [wrangler, "d1", "execute", "CRM_DB", "--config", config,
       "--local", "--persist-to", root, "--file", `migrations/${file}`, "--yes", "--json"],
     { cwd, encoding: "utf8" });
@@ -231,11 +232,14 @@ test("browser S-04 confirms through D1 and Weeek HTTP, then reconciles an accept
     const unapproved = await call(worker.base, "/deal-workflow/confirm", { method: "POST",
       headers: { cookie: session, origin: "https://crm.example.invalid",
         "content-type": "application/x-www-form-urlencoded" }, body: confirmationForm });
-    assert.equal(unapproved.status, 403, await unapproved.clone().text());
+    assert.equal(unapproved.status, 409, await unapproved.clone().text());
+    const approvalPage = await unapproved.text();
+    assert.match(approvalPage, /Проверить и подтвердить действие в Control Plane/);
+    assert.match(approvalPage, /cp\.example\.invalid\/v1\/connected-app-approvals\/review\?intent=/);
     assert.equal((await (await call(worker.base, "/__cp-count")).json()).weeekCreatePosts, 0,
       "a create scope without a trusted approval receipt cannot reach Weeek");
 
-    await call(worker.base, "/__cp-control?mode=deal_create_approved_fixture");
+    await call(worker.base, "/__cp-control?mode=receipt_approved");
     const uncertain = await call(worker.base, "/deal-workflow/confirm", { method: "POST",
       headers: { cookie: session, origin: "https://crm.example.invalid",
         "content-type": "application/x-www-form-urlencoded" }, body: confirmationForm });

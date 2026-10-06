@@ -54,6 +54,33 @@ export function createS04D1Repository(db) {
       requestHash: row.request_hash, operationId: row.operation_id, snapshot };
   }
 
+  async function getCpApprovalIntent({ profileRef, reviewId }) {
+    return db.prepare(`SELECT profile_ref,review_id,revision,operation_id,request_hash,intent_id,approval_url,expires_at,created_at
+      FROM crm_cp_approval_intents WHERE profile_ref=? AND review_id=?`)
+      .bind(profileRef, reviewId).first();
+  }
+
+  async function saveCpApprovalIntent({ profileRef, reviewId, revision, operationId, requestHash,
+    intentId, approvalUrl, expiresAt, createdAt }) {
+    if (![profileRef, reviewId, revision, operationId, requestHash, intentId, approvalUrl]
+      .every((value) => typeof value === "string" && value) ||
+        !Number.isSafeInteger(expiresAt) || !Number.isSafeInteger(createdAt)) return { status: "invalid" };
+    try {
+      const saved = await db.prepare(`INSERT INTO crm_cp_approval_intents
+        (profile_ref,review_id,revision,operation_id,request_hash,intent_id,approval_url,expires_at,created_at)
+        VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(profile_ref,review_id) DO UPDATE SET
+          revision=excluded.revision,operation_id=excluded.operation_id,request_hash=excluded.request_hash,
+          intent_id=excluded.intent_id,approval_url=excluded.approval_url,expires_at=excluded.expires_at,
+          created_at=excluded.created_at WHERE crm_cp_approval_intents.expires_at <= excluded.created_at`)
+        .bind(profileRef, reviewId, revision, operationId, requestHash, intentId, approvalUrl, expiresAt, createdAt).run();
+      const row = await getCpApprovalIntent({ profileRef, reviewId });
+      if (!row) return { status: "storage_unavailable" };
+      return row.revision === revision && row.operation_id === operationId && row.request_hash === requestHash
+        ? { status: Number(saved?.meta?.changes ?? 0) === 1 ? "saved" : "existing", intent: row }
+        : { status: "conflict" };
+    } catch { return { status: "storage_unavailable" }; }
+  }
+
   async function recordTrustedReceipt({ profileRef, reviewId, revision, receiptId,
     actorRef, issuerRef, issuedAt, expiresAt }) {
     if (![profileRef, reviewId, revision, receiptId, actorRef, issuerRef, issuedAt, expiresAt]
@@ -195,6 +222,6 @@ export function createS04D1Repository(db) {
     }
   }
 
-  return { getPreleadContext, createReview, getReview, recordTrustedReceipt,
+  return { getPreleadContext, createReview, getReview, getCpApprovalIntent, saveCpApprovalIntent, recordTrustedReceipt,
     reserve, getOperation, findParticipantOperation, recordCreated, linkVerifiedDeal };
 }

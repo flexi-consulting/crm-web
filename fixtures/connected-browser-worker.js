@@ -4,6 +4,7 @@ import { createBuiltCatalogD1Repository } from "../src/built-catalog-d1.js";
 
 const issuer = "https://cp.example.invalid";
 let cpMode = "active", cpCalls = 0, foreignEgress = 0, clockOffset = 0;
+let approvalPrepareCalls = 0, approvalConsumeCalls = 0;
 let weeekDb;
 const cpFetch = async (url, options) => {
   if (url.startsWith("https://api.weeek.net/public/v1/")) {
@@ -39,20 +40,55 @@ const cpFetch = async (url, options) => {
     }
     throw new Error("unexpected_weeek_path");
   }
-  if (!url.startsWith(`${issuer}/v1/connected-app-sessions/`) || options.redirect !== "manual") {
+  if (!url.startsWith(`${issuer}/v1/connected-app-sessions/`) &&
+      !url.startsWith(`${issuer}/v1/connected-app-approvals/`) || options.redirect !== "manual") {
     foreignEgress++;
     throw new Error("unexpected_egress");
   }
   cpCalls++;
   if (cpMode === "outage") throw new Error("synthetic_cp_outage");
   const now = Math.floor(Date.now() / 1000);
+  const approvalRoute = new URL(url).pathname;
+  if (approvalRoute.endsWith("/prepare")) {
+    approvalPrepareCalls++;
+    if (options.headers?.authorization !== "Bearer local-test-service-key-12345678901234567890")
+      return Response.json({ error: "unauthorized" }, { status: 401 });
+    const body = JSON.parse(options.body);
+    if (body.audience !== "crm-web" || body.command !== "crm.deals.create" ||
+        body.appToken !== "b".repeat(64) || !/^[a-f0-9]{64}$/.test(body.sourceRevision))
+      return Response.json({ error: "invalid request" }, { status: 400 });
+    const intentId = `${String(approvalPrepareCalls).padStart(64, "0")}`;
+    return Response.json({ version: 1, intentId,
+      approvalUrl: `${issuer}/v1/connected-app-approvals/review?intent=${intentId}`, expiresAt: now + 600 }, { status: 201 });
+  }
+  if (approvalRoute.endsWith("/consume")) {
+    approvalConsumeCalls++;
+    if (options.headers?.authorization !== "Bearer local-test-service-key-12345678901234567890")
+      return Response.json({ error: "unauthorized" }, { status: 401 });
+    const body = JSON.parse(options.body);
+    if (body.audience !== "crm-web" || body.command !== "crm.deals.create" ||
+        body.appToken !== "b".repeat(64) || !/^op-[a-f0-9-]{36}$/.test(body.consumerRequestId) ||
+        !/^[a-f0-9]{64}$/.test(body.sourceRevision))
+      return Response.json({ error: "invalid request" }, { status: 400 });
+    if (cpMode !== "receipt_approved") return Response.json({ error: "human approval required" }, { status: 403 });
+    const canonical = (value) => Array.isArray(value) ? value.map(canonical) : value && typeof value === "object"
+      ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonical(value[key])])) : value;
+    const requestHash = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256",
+      new TextEncoder().encode(JSON.stringify({ audience: "crm-web", clientId: "crm-web",
+        commandId: "crm.deals.create", operation: canonical(body.operation), sourceRevision: body.sourceRevision })))),
+    (byte) => byte.toString(16).padStart(2, "0")).join("");
+    return Response.json({ version: 1, receipt: { receiptId: "c".repeat(64), audience: "crm-web",
+      clientId: "crm-web", command: "crm.deals.create", requestHash, sourceRevision: body.sourceRevision,
+      principalId: "principal_A", profileId: "profile_A", approvedAt: now - 5, consumedAt: now,
+      operation: body.operation } }, { status: 201 });
+  }
   if (url.endsWith("/exchange")) return new Response(JSON.stringify({ token: "b".repeat(64),
     expiresAt: now + 300 }), { status: 201 });
   if (url.endsWith("/introspect")) return new Response(JSON.stringify(cpMode === "revoked"
     ? { active: false } : { active: true, iss: issuer, aud: "crm-web", sub: "principal_A",
       profileId: "profile_A", sessionId: "session_A", nbf: now - 10, exp: now + 300,
       scopes: cpMode === "catalog_only" ? ["crm.catalog.read"] :
-        ["deal_create", "deal_create_no_approval", "deal_create_approved_fixture"].includes(cpMode)
+        ["deal_create", "deal_create_no_approval", "deal_create_approved_fixture", "receipt_approved"].includes(cpMode)
           ? ["crm.deals.create"] :
         cpMode === "deals_only" ? ["crm.deals.read"] :
           ["crm.catalog.read", "crm.deals.read"] }), { status: 200 });
@@ -61,16 +97,6 @@ const cpFetch = async (url, options) => {
 };
 const connected = createCrmConnectedWorkerHandler({ fetcher: cpFetch,
   now: () => Date.now() + clockOffset,
-  // Only this isolated fixture can issue an approval receipt. Production
-  // composition has no receipt issuer and therefore fails closed.
-  resolveTrustedReviewReceipt: async ({ identity, reviewId, revision }) => {
-    if (cpMode !== "deal_create_approved_fixture") return null;
-    const issuedAt = new Date(Date.now() + clockOffset).toISOString();
-    return { profileId: identity.profileId, reviewId, revision, actorId: identity.principalId,
-      issuerId: "synthetic-test-approval-issuer",
-      receiptId: `fixture-approval-${reviewId}-${revision}`, approved: true,
-      issuedAt, expiresAt: new Date(Date.parse(issuedAt) + 60_000).toISOString() };
-  },
   resolveWeeekToken: async (profileId) => profileId === "profile_A" ? "synthetic-weeek-token" : null,
   resolveWeeekStatusIds: async (profileId) => profileId === "profile_A" ? ["status-lead-A"] : [],
   resolveLeadStatusId: async (profileId) => profileId === "profile_A" ? "status-lead-A" : null });
@@ -99,7 +125,8 @@ export default {
     }
     if (url.pathname === "/__cp-count") {
       const count = await weeekDb.prepare("SELECT COUNT(*) AS n FROM weeek_fixture_calls WHERE method = 'POST'").first();
-      return Response.json({ cpCalls, foreignEgress, weeekCreatePosts: count?.n ?? 0 });
+      return Response.json({ cpCalls, foreignEgress, approvalPrepareCalls, approvalConsumeCalls,
+        weeekCreatePosts: count?.n ?? 0 });
     }
     if (url.pathname === "/__clock-offset") {
       clockOffset = Number(url.searchParams.get("milliseconds") ?? 0);

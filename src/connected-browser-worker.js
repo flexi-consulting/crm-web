@@ -3,6 +3,7 @@ import { createCrmBrowserD1Store } from "./connected-browser-d1-store.js";
 import { createBuiltCatalogD1HttpHandler } from "./built-catalog-d1-http.js";
 import { createWeeekHttpTransport } from "./weeek-http-transport.js";
 import { createWeeekCorrelationProvider } from "./weeek-correlation-provider.js";
+import { createConnectedAppDealApproval } from "./connected-app-approval.js";
 
 const unavailable = () => new Response(JSON.stringify({ error: "connected_browser_unavailable" }), {
   status: 503, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" }
@@ -27,6 +28,11 @@ export function createCrmConnectedWorkerHandler({ fetcher = fetch, now = () => D
       const defaultReturnPath = env.CRM_CONNECTED_DEFAULT_CATALOG_PATH;
       const client = createCrmControlPlaneClient({ issuer, allowedIssuerOrigins: [issuer],
         serviceKey: env.CRM_CONNECTED_CP_SERVICE_KEY, fetcher });
+      const resolveDealApproval = typeof resolveTrustedReviewReceipt === "function"
+        ? ({ request: receivedRequest, identity, reviewId, revision, review }) =>
+          resolveTrustedReviewReceipt({ request: receivedRequest, identity, reviewId, revision, review, env })
+        : createConnectedAppDealApproval({ db: env.CRM_DB, issuer,
+          prepareApproval: client.prepareApproval, consumeApproval: client.consumeApproval, now });
       const store = createCrmBrowserD1Store(env.CRM_DB, { now });
       const transport = createWeeekHttpTransport({ fetchImpl: fetcher,
         resolveToken: async (profileId) => {
@@ -44,10 +50,8 @@ export function createCrmConnectedWorkerHandler({ fetcher = fetch, now = () => D
           if (typeof resolveLeadStatusId !== "function") return undefined;
           return resolveLeadStatusId(profileId, env);
         }, resolveTrustedProfile: () => identity,
-        resolveTrustedReviewReceipt: typeof resolveTrustedReviewReceipt === "function"
-          ? (receivedRequest, trusted, reviewId, revision) =>
-            resolveTrustedReviewReceipt({ request: receivedRequest, identity: trusted, reviewId, revision, env })
-          : undefined })(received);
+        resolveTrustedReviewReceipt: (receivedRequest, trusted, reviewId, revision, review) =>
+          resolveDealApproval({ request: receivedRequest, identity: trusted, reviewId, revision, review }) })(received);
       const browser = createCrmConnectedBrowserHandler({ enabled: true, issuer,
         allowedIssuerOrigins: [issuer], publicOrigin, redirectUri, defaultReturnPath, store,
         exchangeCode: client.exchangeCode, introspect: client.introspect,
