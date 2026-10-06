@@ -1,13 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import Ajv from "ajv/dist/2020.js";
+import addFormats from "ajv-formats";
 import vm from "node:vm";
 import { readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { createServer } from "../src/server.js";
 import { createCatalogBuildService, createSyntheticSourceAdapter, createSyntheticEnrichmentAdapter, createSyntheticRegistryAdapter, normalizeEnrichment, normalizeRegistry, qualify } from "../src/catalog-build.js";
 import { renderCatalogPreview } from "../src/catalog-preview.js";
 import { queryCatalogV11, renderCatalogV11, createCatalogV11ReadHandler,
-  createCatalogV11D1Repository } from "../src/catalog-query-v11.js";
+  createCatalogV11SearchHandler, createCatalogV11D1Repository } from "../src/catalog-query-v11.js";
 import initSqlJs from "sql.js";
 
 const scopes = ["crm.catalog.build.synthetic", "crm.catalog.build.read.synthetic", "crm.catalog.preview.synthetic", "crm.catalog.preview.read.synthetic"];
@@ -31,7 +33,8 @@ async function postBuild(base, profile, idempotencyKey, exhibitionId = "demo-exp
 }
 
 async function validators(...names) {
-  const ajv = new Ajv();
+  const ajv = new Ajv({ strict: false });
+  addFormats(ajv);
   for (const name of names) ajv.addSchema(JSON.parse(await readFile(new URL(`../schemas/${name}.schema.json`, import.meta.url))));
   return Object.fromEntries(names.map((name) => [name, ajv.getSchema(`https://crm-web.example.invalid/schemas/${name}.schema.json`)]));
 }
@@ -76,7 +79,7 @@ test("S-01 v1.1 metadata schema preserves synthetic legacy filter fields with ex
   const validate = ajv.compile(schema);
   const company = {
     id: "co-0123456789abcdef0123", name: "Synthetic Boundary Maker",
-    source: { sourceRecordId: "src-synthetic-boundary", country: "Fictionland", booth: null,
+    source: { sourceRecordId: "src-synthetic-boundary", country: "Fictionland", booth: "A-14",
       href: "https://example.invalid/synthetic", category: "Synthetic category",
       description: "Synthetic source description", segment: "synthetic segment", duplicateSourceRecordIds: [] },
     enrichment: { status: "found", inn: "0000000001", ogrn: null, revenueRub: 100_000_000,
@@ -130,14 +133,21 @@ test("S-01 v1.1 metadata schema preserves synthetic legacy filter fields with ex
   assert.equal(view.status, "ok");
   assert.match(view.html, /<option value="100-1500" selected>/);
   assert.match(view.html, /<option value="30-200" selected>/);
+  assert.match(view.html, /<option value="RU"/);
+  assert.match(view.html, /Стенд: A-14/);
   assert.match(view.html, /Найдено: 1/);
+  const countryView = renderCatalogV11({ artifact: queryArtifact,
+    result: queryCatalogV11(queryArtifact, { country: "RU" }), filters: { country: "RU" } });
+  assert.match(countryView.html, /<option value="RU" selected>/);
+  assert.match(countryView.html, /Найдено: 1/);
   const hostile = structuredClone(queryArtifact);
   hostile.companies = [{ ...structuredClone(company), name: '<img src=x onerror="bad">',
     source: { ...company.source, category: "<script>bad</script>", description: "<b>bad</b>",
-      href: "https://example.invalid/a\\\" onmouseover=bad" } }];
+      booth: "<script>bad</script>", href: "https://example.invalid/a\\\" onmouseover=bad" } }];
   const safeView = renderCatalogV11({ artifact: hostile, result: queryCatalogV11(hostile), filters: {} });
   assert.equal(safeView.html.includes("<img src=x"), false);
   assert.equal(safeView.html.includes("<script>bad</script>"), false);
+  assert.match(safeView.html, /Стенд: &lt;script&gt;bad&lt;\/script&gt;/);
   assert.equal(safeView.html.includes('onmouseover=bad'), false);
 
   const calls = [];
@@ -153,12 +163,48 @@ test("S-01 v1.1 metadata schema preserves synthetic legacy filter fields with ex
   const fetchHandler = (profileId, scope = "crm.catalog.read", path = "/catalogs/synthetic-current-source-shape?revenueBand=100-1500&profitBand=30-200") =>
     handler(new Request(`https://crm.example.invalid${path}`, { headers: { "x-test-profile": profileId, "x-test-scope": scope } }));
   assert.equal((await fetchHandler("demo-profile-a")).status, 200);
+  const countryResponse = await fetchHandler("demo-profile-a", "crm.catalog.read",
+    "/catalogs/synthetic-current-source-shape?country=RU");
+  assert.equal(countryResponse.status, 200);
+  const countryHtml = await countryResponse.text();
+  assert.match(countryHtml, /<option value="RU" selected>/);
+  assert.match(countryHtml, /Стенд: A-14/);
   assert.equal((await fetchHandler("demo-profile-a", "")).status, 403);
   assert.equal((await fetchHandler("demo-profile-b")).status, 404);
   assert.equal((await fetchHandler("unavailable")).status, 503);
   assert.equal((await fetchHandler("demo-profile-a", "crm.catalog.read", "/catalogs/synthetic-current-source-shape?revenueBand=unsafe")).status, 400);
   assert.equal((await fetchHandler("demo-profile-a", "crm.catalog.read", "/catalogs/synthetic-current-source-shape?query=a&query=b")).status, 400);
   assert.ok(calls.every(scope => scope.profileId !== "demo-profile-b" || scope.exhibitionId === "synthetic-current-source-shape"));
+
+  const search = createCatalogV11SearchHandler({ repository: {
+    async getArtifact(scope) {
+      calls.push(scope);
+      return scope.profileId === "demo-profile-a" ? queryArtifact : null;
+    }
+  }, resolveTrustedProfile: async request => request.headers.get("x-test-profile") === "unavailable"
+    ? (() => { throw new Error("identity unavailable"); })()
+    : ({ profileId: request.headers.get("x-test-profile"), scopes: request.headers.get("x-test-scope")?.split(" ") ?? [] }) });
+  const searchRequest = (profileId, query = "", scope = "crm.catalog.read") => search(new Request(
+    `https://crm.example.invalid/api/v1/catalogs/synthetic-current-source-shape/entries${query}`,
+    { headers: { "x-test-profile": profileId, "x-test-scope": scope } }));
+  const searchResponse = await searchRequest("demo-profile-a", "?query=Unknown%20Finance&limit=1");
+  assert.equal(searchResponse.status, 200);
+  const searchBody = await searchResponse.json();
+  const { "s01-catalog-search-output": validateSearch } = await validators("s01-catalog-search-input", "s01-catalog-search-output", "s01-catalog-search-errors");
+  assert.equal(validateSearch(searchBody), true);
+  assert.equal(searchBody.total, 1);
+  assert.equal(searchBody.items.length, 1);
+  assert.deepEqual(Object.keys(searchBody.items[0]).sort(), ["activity", "booth", "category", "classification", "country", "description", "id", "name", "profitRub", "profitYear", "revenueRub", "revenueYear", "segment", "website"].sort());
+  assert.equal("inn" in searchBody.items[0], false);
+  assert.equal("ogrn" in searchBody.items[0], false);
+  assert.equal("sourceRecordId" in searchBody.items[0], false);
+  assert.equal((await searchRequest("demo-profile-a", "?profileId=demo-profile-b")).status, 400);
+  assert.equal((await searchRequest("demo-profile-a", "?limit=101")).status, 400);
+  assert.equal((await searchRequest("demo-profile-a", "?offset=20001")).status, 400);
+  assert.equal((await searchRequest("demo-profile-a", "?query=x&query=y")).status, 400);
+  assert.equal((await searchRequest("demo-profile-a", "", "")).status, 403);
+  assert.equal((await searchRequest("demo-profile-b")).status, 404);
+  assert.equal((await searchRequest("unavailable")).status, 503);
 });
 
 test("S-01 v1.1 D1 repository persists durable profile-scoped artifacts and verifies content hash", async () => {
@@ -199,12 +245,41 @@ test("S-01 v1.1 D1 repository persists durable profile-scoped artifacts and veri
     "synthetic-revision-2");
   const persistedHandler = createCatalogV11ReadHandler({ repository: repo,
     resolveTrustedProfile: async () => ({ profileId: "demo-profile-a", scopes: ["crm.catalog.read"] }) });
+  const persistedSearch = createCatalogV11SearchHandler({ repository: repo,
+    resolveTrustedProfile: async () => ({ profileId: "demo-profile-a", scopes: ["crm.catalog.read"] }) });
   const page = await persistedHandler(new Request(`https://crm.example.invalid/catalogs/${artifact.exhibitionId}`));
   assert.equal(page.status, 200);
   assert.match(await page.text(), /Synthetic durable row/);
+  const jsonResult = await persistedSearch(new Request(`https://crm.example.invalid/api/v1/catalogs/${artifact.exhibitionId}/entries?limit=10`));
+  assert.equal(jsonResult.status, 200);
+  assert.deepEqual((await jsonResult.json()).items.map(item => item.name), ["Synthetic durable row"]);
+  const server = createServer({ catalogV11Repository: repo,
+    resolveCatalogV11TrustedProfile: async () => ({ profileId: "demo-profile-a", scopes: ["crm.catalog.read"] }) });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const address = server.address();
+    const transported = await fetch(`http://127.0.0.1:${address.port}/catalogs/${artifact.exhibitionId}`);
+    assert.equal(transported.status, 200);
+    assert.match(transported.headers.get("content-type"), /text\/html/);
+    assert.match(await transported.text(), /Synthetic durable row/);
+    const structured = await fetch(`http://127.0.0.1:${address.port}/api/v1/catalogs/${artifact.exhibitionId}/entries?limit=10`);
+    assert.equal(structured.status, 200);
+    assert.match(structured.headers.get("content-type"), /application\/json/);
+    assert.deepEqual((await structured.json()).items.map(item => item.name), ["Synthetic durable row"]);
+  } finally { await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
   db.run("UPDATE crm_catalog_v11_artifacts SET artifact_json=? WHERE profile_ref=?",
     [JSON.stringify({ ...revisionTwo, sourceRevision: "forged" }), "demo-profile-a"]);
-  assert.equal(await repo.getArtifact({ profileId: "demo-profile-a", exhibitionId: artifact.exhibitionId }), null);
+  await assert.rejects(repo.getArtifact({ profileId: "demo-profile-a", exhibitionId: artifact.exhibitionId }), /integrity check failed/);
+  const unavailable = await createCatalogV11ReadHandler({ repository: repo,
+    resolveTrustedProfile: async () => ({ profileId: "demo-profile-a", scopes: ["crm.catalog.read"] }) })
+    (new Request(`https://crm.example.invalid/catalogs/${artifact.exhibitionId}`));
+  assert.equal(unavailable.status, 503);
+  assert.equal((await unavailable.json()).error, "catalog_unavailable");
+  const malformedJson = JSON.stringify({ ...revisionTwo, companies: [{ id: "co-0123456789abcdef0123", name: "incomplete" }] });
+  const malformedSha = createHash("sha256").update(malformedJson).digest("hex");
+  db.run("UPDATE crm_catalog_v11_artifacts SET artifact_json=?,content_sha=? WHERE profile_ref=?",
+    [malformedJson, malformedSha, "demo-profile-a"]);
+  await assert.rejects(repo.getArtifact({ profileId: "demo-profile-a", exhibitionId: artifact.exhibitionId }), /artifact is invalid/);
   db.close();
 });
 

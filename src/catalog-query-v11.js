@@ -53,11 +53,13 @@ export function renderCatalogV11({ artifact, result, filters = {} }) {
     return { status: "invalid_catalog_view", html: "" };
   const options = (name, values, selected, labels = {}) => `<label>${name}<select name="${name}"><option value="">Все</option>${values.map(value =>
     `<option value="${escapeHtml(value)}"${selected === value ? " selected" : ""}>${escapeHtml(labels[value] ?? value)}</option>`).join("")}</select></label>`;
+  const countries = [...new Set(artifact.companies.map(company => company.source?.country).filter(Boolean))]
+    .sort((left, right) => left.localeCompare(right, "ru"));
   const cards = result.items.map(company => {
     const source = company.source, enrichment = company.enrichment;
     const safeHref = safeSourceUrl(source.href);
     return `<article class="company-card" data-company-id="${escapeHtml(company.id)}"><h2>${escapeHtml(company.name)}</h2>
-      <p>${escapeHtml(source.country)}${source.category ? ` · ${escapeHtml(source.category)}` : ""}</p>
+      <p>${escapeHtml(source.country)}${source.booth ? ` · Стенд: ${escapeHtml(source.booth)}` : ""}${source.category ? ` · ${escapeHtml(source.category)}` : ""}</p>
       ${source.description ? `<p>${escapeHtml(source.description)}</p>` : ""}
       <p>Выручка: ${escapeHtml(moneyLabel(enrichment.revenueRub))}${enrichment.revenueYear ? ` (${enrichment.revenueYear})` : ""}</p>
       <p>Прибыль: ${escapeHtml(moneyLabel(enrichment.profitRub))}${enrichment.profitYear ? ` (${enrichment.profitYear})` : ""}</p>
@@ -65,7 +67,7 @@ export function renderCatalogV11({ artifact, result, filters = {} }) {
   }).join("");
   const html = `<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="robots" content="noindex,nofollow"><title>Каталог ${escapeHtml(artifact.exhibitionId)}</title><main>
     <h1>Каталог выставки ${escapeHtml(artifact.exhibitionId)}</h1><form method="get"><label>Поиск<input name="query" value="${escapeHtml(filters.query ?? "")}"></label>
-    ${options("classification", [...classifications], filters.classification, { target: "Целевая", near_target: "Почти целевая", not_target: "Не целевая", unknown: "Не подтверждена" })}
+    ${options("country", countries, filters.country)}${options("classification", [...classifications], filters.classification, { target: "Целевая", near_target: "Почти целевая", not_target: "Не целевая", unknown: "Не подтверждена" })}
     ${options("revenueBand", [...revenueBands], filters.revenueBand)}${options("profitBand", [...profitBands], filters.profitBand)}
     <button type="submit">Показать</button></form><p>Найдено: ${result.total}</p>${cards || "<p>Ничего не найдено.</p>"}</main></html>`;
   return { status: "ok", html };
@@ -111,6 +113,80 @@ export function createCatalogV11ReadHandler({ repository, resolveTrustedProfile 
       "content-type": "text/html; charset=utf-8", "cache-control": "private, no-store",
       "x-content-type-options": "nosniff", "referrer-policy": "same-origin",
       "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+    } });
+  };
+}
+
+const searchError = (status, error) => new Response(JSON.stringify({ error }), { status, headers: {
+  "content-type": "application/json; charset=utf-8", "cache-control": "private, no-store",
+  "x-content-type-options": "nosniff"
+} });
+
+function clientCatalogItem(company) {
+  const source = company.source ?? {};
+  const enrichment = company.enrichment ?? {};
+  const enriched = enrichment.status === "found";
+  return {
+    id: company.id,
+    name: company.name,
+    country: source.country,
+    booth: source.booth ?? null,
+    category: source.category ?? null,
+    description: source.description ?? null,
+    segment: source.segment ?? null,
+    revenueRub: enriched ? enrichment.revenueRub : null,
+    revenueYear: enriched ? enrichment.revenueYear : null,
+    profitRub: enriched ? enrichment.profitRub : null,
+    profitYear: enriched ? enrichment.profitYear : null,
+    activity: enriched ? enrichment.activity : "unknown",
+    website: enriched ? enrichment.website : null,
+    classification: company.qualification?.classification ?? "unknown"
+  };
+}
+
+// Structured app-owned read for the Agent capability. The browser page and
+// Agent search share queryCatalogV11; the projection intentionally excludes
+// registry internals, tax identifiers, duplicate source IDs and provenance.
+export function createCatalogV11SearchHandler({ repository, resolveTrustedProfile }) {
+  if (typeof repository?.getArtifact !== "function" || typeof resolveTrustedProfile !== "function")
+    throw new TypeError("catalog v1.1 repository and trusted profile resolver required");
+  return async function handle(request) {
+    const url = new URL(request.url);
+    const match = url.pathname.match(/^\/api\/v1\/catalogs\/([a-z0-9][a-z0-9-]{0,79})\/entries$/);
+    if (!match || request.method !== "GET") return searchError(404, "not_found");
+    let context;
+    try { context = await resolveTrustedProfile(request); } catch {
+      return searchError(503, "trusted_profile_unavailable");
+    }
+    if (!context || typeof context.profileId !== "string" || !context.profileId || !Array.isArray(context.scopes))
+      return searchError(503, "trusted_profile_unavailable");
+    if (!context.scopes.includes("crm.catalog.read")) return searchError(403, "required_scope_missing");
+
+    const allowed = ["query", "classification", "country", "revenueBand", "profitBand", "limit", "offset"];
+    const keys = [...url.searchParams.keys()];
+    if (keys.some(key => !allowed.includes(key)) || keys.some(key => url.searchParams.getAll(key).length !== 1))
+      return searchError(400, "invalid_query");
+    const limitText = url.searchParams.get("limit");
+    const offsetText = url.searchParams.get("offset");
+    const limit = limitText === null ? 25 : /^(?:[1-9]|[1-9][0-9]|100)$/.test(limitText) ? Number(limitText) : null;
+    const offset = offsetText === null ? 0 : /^(?:0|[1-9][0-9]{0,4})$/.test(offsetText) ? Number(offsetText) : null;
+    if (limit === null || offset === null || offset > 20_000) return searchError(400, "invalid_query");
+    const filters = { query: url.searchParams.get("query") ?? "",
+      classification: url.searchParams.get("classification") || null,
+      country: url.searchParams.has("country") ? url.searchParams.get("country") : null,
+      revenueBand: url.searchParams.get("revenueBand") || null,
+      profitBand: url.searchParams.get("profitBand") || null };
+    let artifact;
+    try { artifact = await repository.getArtifact({ profileId: context.profileId, exhibitionId: match[1] }); }
+    catch { return searchError(503, "catalog_unavailable"); }
+    if (!artifact) return searchError(404, "catalog_not_found");
+    const result = queryCatalogV11(artifact, filters);
+    if (result.status !== "ok") return searchError(400, "invalid_query");
+    return new Response(JSON.stringify({ domainApiVersion: "1.0.0", artifactVersion: artifact.schemaVersion,
+      exhibitionId: artifact.exhibitionId, sourceRevision: artifact.sourceRevision, total: result.total,
+      limit, offset, items: result.items.slice(offset, offset + limit).map(clientCatalogItem) }), { status: 200, headers: {
+      "content-type": "application/json; charset=utf-8", "cache-control": "private, no-store",
+      "x-content-type-options": "nosniff"
     } });
   };
 }
@@ -180,13 +256,14 @@ export function createCatalogV11D1Repository(db, now = () => new Date().toISOStr
   }
   async function getArtifact({ profileId, exhibitionId }) {
     if (!profileRefOk(profileId) || !/^[a-z0-9][a-z0-9-]{0,79}$/.test(exhibitionId ?? "")) return null;
-    try {
-      const row = await db.prepare(`SELECT artifact_json,content_sha FROM crm_catalog_v11_artifacts
-        WHERE profile_ref=? AND exhibition_id=?`).bind(profileId, exhibitionId).first();
-      if (!row || sha256(row.artifact_json) !== row.content_sha) return null;
-      const artifact = JSON.parse(row.artifact_json);
-      return artifact.schemaVersion === "1.1.0" && artifact.exhibitionId === exhibitionId ? artifact : null;
-    } catch { return null; }
+    const row = await db.prepare(`SELECT artifact_json,content_sha FROM crm_catalog_v11_artifacts
+      WHERE profile_ref=? AND exhibition_id=?`).bind(profileId, exhibitionId).first();
+    if (!row) return null;
+    if (sha256(row.artifact_json) !== row.content_sha) throw new Error("stored catalog integrity check failed");
+    const artifact = JSON.parse(row.artifact_json);
+    if (!validV11Artifact(artifact) || artifact.exhibitionId !== exhibitionId)
+      throw new Error("stored catalog artifact is invalid");
+    return artifact;
   }
   return { saveArtifact, getArtifact };
 }

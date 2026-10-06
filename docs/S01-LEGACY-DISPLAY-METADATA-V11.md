@@ -22,6 +22,8 @@ Legacy monetary values in the reviewed 2026 catalog are expressed in RUB million
 
 The established filters are: revenue `<100`, `100..1500` inclusive, `>1500`; profit `<0`, `0..30`, `30..200`, `>=200`. A bounded financial filter excludes null. Search is case-insensitive over name, category and country. `ru===1` is represented by `country="RU"` only when the legacy row has no more specific `country`; other country labels are preserved as source text.
 
+The browser exposes an exact country selector populated from the current artifact and preserves its selection with the financial and classification filters. A non-empty booth is shown on the company card as escaped text; missing booths are omitted.
+
 ## Compatibility gates
 
 - Introduce a new artifact schema version; do not silently add these properties to v1.0.

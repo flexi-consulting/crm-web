@@ -7,6 +7,8 @@ import { createPreleadTimelineService, normalizePreleadEventRequest } from "./pr
 import { createConfirmedDealService, normalizeConfirmedDealRequest } from "./confirmed-deals.js";
 import { createCatalogBuildService } from "./catalog-build.js";
 import { s01ParticipantCapability, readExhibitionParticipants } from "./s01-participants.js";
+import { s01CatalogSearchCapability } from "./s01-catalog-search.js";
+import { createCatalogV11ReadHandler, createCatalogV11SearchHandler } from "./catalog-query-v11.js";
 
 const manifest = {
   serviceId: "crm-web.exhibitions",
@@ -60,7 +62,7 @@ const manifest = {
   compatibility: { deprecatedCapabilities: [] },
   endpoints: {
     readiness: { method: "GET", path: "/api/v1/readiness" },
-    catalog: { method: "GET", path: "/api/v1/catalog" }
+    catalog: { method: "GET", path: "/api/v1/catalog" },
   }
 };
 
@@ -90,8 +92,31 @@ export function createServer({
   dealIntents = createDealIntentService(),
   preleadTimeline = createPreleadTimelineService(),
   confirmedDeals = createConfirmedDealService(),
-  catalogBuilds = createCatalogBuildService()
+  catalogBuilds = createCatalogBuildService(),
+  catalogV11Repository,
+  resolveCatalogV11TrustedProfile
 } = {}) {
+  if (catalogV11Repository && typeof resolveCatalogV11TrustedProfile !== "function")
+    throw new TypeError("v1.1 catalog repository requires a trusted profile resolver");
+  const catalogV11Read = catalogV11Repository
+    ? createCatalogV11ReadHandler({ repository: catalogV11Repository, resolveTrustedProfile: resolveCatalogV11TrustedProfile })
+    : null;
+  const catalogV11Search = catalogV11Repository
+    ? createCatalogV11SearchHandler({ repository: catalogV11Repository, resolveTrustedProfile: resolveCatalogV11TrustedProfile })
+    : null;
+  const serviceManifest = structuredClone(manifest);
+  if (catalogV11Search) {
+    const participantIndex = serviceManifest.capabilities.findIndex((capability) => capability.id === s01ParticipantCapability.capabilityId);
+    serviceManifest.capabilities.splice(participantIndex + 1, 0, {
+      id: s01CatalogSearchCapability.capabilityId, version: s01CatalogSearchCapability.version, required: true,
+      inputSchemaRef: s01CatalogSearchCapability.inputSchemaRef, outputSchemaRef: s01CatalogSearchCapability.outputSchemaRef,
+      errorsSchemaRef: s01CatalogSearchCapability.errorsSchemaRef, descriptorRef: "capabilities/s01-exhibition-catalog-search.v1.json",
+      handlerBinding: s01CatalogSearchCapability.handlerBinding, mcpTool: s01CatalogSearchCapability.mcpTool,
+      effect: s01CatalogSearchCapability.effect, requiredScopes: s01CatalogSearchCapability.requiredScopes,
+      operationRef: s01CatalogSearchCapability.httpBinding
+    });
+    serviceManifest.endpoints.catalogSearch = { method: "GET", path: "/api/v1/catalogs/{exhibitionId}/entries" };
+  }
   async function trustedProfile(request, response, requiredScope) {
     if (!resolveTrustedProfile) {
       json(response, 503, { error: "trusted_profile_unavailable" });
@@ -112,6 +137,26 @@ export function createServer({
 
   return nodeCreateServer(async (request, response) => {
     const url = new URL(request.url ?? "/", "http://localhost");
+    if (catalogV11Read && /^\/catalogs\/[a-z0-9][a-z0-9-]{0,79}$/.test(url.pathname) && request.method === "GET") {
+      const headers = new Headers();
+      for (const [name, value] of Object.entries(request.headers)) {
+        if (value !== undefined) headers.set(name, Array.isArray(value) ? value.join(", ") : value);
+      }
+      const webRequest = new Request(`http://crm.local${request.url}`, { method: "GET", headers });
+      const result = await catalogV11Read(webRequest);
+      response.writeHead(result.status, Object.fromEntries(result.headers));
+      return response.end(await result.text());
+    }
+    if (catalogV11Search && /^\/api\/v1\/catalogs\/[a-z0-9][a-z0-9-]{0,79}\/entries$/.test(url.pathname)) {
+      const headers = new Headers();
+      for (const [name, value] of Object.entries(request.headers)) {
+        if (value !== undefined) headers.set(name, Array.isArray(value) ? value.join(", ") : value);
+      }
+      const webRequest = new Request(`http://crm.local${request.url}`, { method: request.method, headers });
+      const result = await catalogV11Search(webRequest);
+      response.writeHead(result.status, Object.fromEntries(result.headers));
+      return response.end(await result.text());
+    }
     const isCreateIntent = url.pathname === "/api/v1/deal-intents" && request.method === "POST";
     const timelineEventMatch = url.pathname.match(/^\/api\/v1\/preleads\/(demo-prelead-[0-9]{3})\/events$/);
     const isAppendPreleadEvent = Boolean(timelineEventMatch) && request.method === "POST";
@@ -129,9 +174,9 @@ export function createServer({
       response.setHeader("allow", "GET, HEAD, POST");
       return json(response, 405, { error: "method_not_allowed" });
     }
-    if (url.pathname === "/api/v1/manifest") return json(response, 200, manifest);
+    if (url.pathname === "/api/v1/manifest") return json(response, 200, serviceManifest);
     if (url.pathname === "/api/v1/readiness") {
-      return json(response, 200, manifest.readiness);
+      return json(response, 200, serviceManifest.readiness);
     }
     if (url.pathname === "/api/v1/catalog") {
       const params = [...url.searchParams.keys()];
@@ -143,7 +188,7 @@ export function createServer({
       const items = query
         ? catalog.filter((item) => `${item.name} ${item.city} ${item.country}`.toLocaleLowerCase("en").includes(query))
         : catalog;
-      return json(response, 200, { domainApiVersion: manifest.domainApiVersion, items });
+      return json(response, 200, { domainApiVersion: serviceManifest.domainApiVersion, items });
     }
     if (url.pathname === "/api/v1/companies" && (request.method === "GET" || request.method === "HEAD")) {
       if (url.searchParams.size > 0) return json(response, 400, { error: "invalid_query" });
@@ -161,7 +206,7 @@ export function createServer({
       if (participantResult.status !== 200) return json(response, participantResult.status, participantResult.body);
       const company = participantResult.body.items.find((item) => item.id === companyMatch[1]);
       return company
-        ? json(response, 200, { domainApiVersion: manifest.domainApiVersion, company })
+        ? json(response, 200, { domainApiVersion: serviceManifest.domainApiVersion, company })
         : json(response, 404, { error: "company_not_found" });
     }
     if (isCreateIntent) {
