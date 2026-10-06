@@ -5,6 +5,7 @@ import { createBuiltCatalogD1Repository } from "../src/built-catalog-d1.js";
 const issuer = "https://cp.example.invalid";
 let cpMode = "active", cpCalls = 0, foreignEgress = 0, clockOffset = 0;
 let approvalPrepareCalls = 0, approvalConsumeCalls = 0;
+let lostApproval = null;
 let weeekDb;
 const cpFetch = async (url, options) => {
   if (url.startsWith("https://api.weeek.net/public/v1/")) {
@@ -70,17 +71,26 @@ const cpFetch = async (url, options) => {
         body.appToken !== "b".repeat(64) || !/^op-[a-f0-9-]{36}$/.test(body.consumerRequestId) ||
         !/^[a-f0-9]{64}$/.test(body.sourceRevision))
       return Response.json({ error: "invalid request" }, { status: 400 });
-    if (cpMode !== "receipt_approved") return Response.json({ error: "human approval required" }, { status: 403 });
+    if (cpMode === "receipt_approved" && lostApproval &&
+        body.intentId === lostApproval.intentId && body.consumerRequestId === lostApproval.consumerRequestId)
+      return Response.json(lostApproval.response, { status: 200 });
+    if (!["receipt_approved", "receipt_approved_response_lost"].includes(cpMode))
+      return Response.json({ error: "human approval required" }, { status: 403 });
     const canonical = (value) => Array.isArray(value) ? value.map(canonical) : value && typeof value === "object"
       ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonical(value[key])])) : value;
     const requestHash = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256",
       new TextEncoder().encode(JSON.stringify({ audience: "crm-web", clientId: "crm-web",
         commandId: "crm.deals.create", operation: canonical(body.operation), sourceRevision: body.sourceRevision })))),
     (byte) => byte.toString(16).padStart(2, "0")).join("");
-    return Response.json({ version: 1, receipt: { receiptId: "c".repeat(64), audience: "crm-web",
+    const response = { version: 1, receipt: { receiptId: "c".repeat(64), audience: "crm-web",
       clientId: "crm-web", command: "crm.deals.create", requestHash, sourceRevision: body.sourceRevision,
       principalId: "principal_A", profileId: "profile_A", approvedAt: now - 5, consumedAt: now,
-      operation: body.operation } }, { status: 201 });
+      operation: body.operation } };
+    if (cpMode === "receipt_approved_response_lost") {
+      lostApproval = { intentId: body.intentId, consumerRequestId: body.consumerRequestId, response };
+      throw new Error("synthetic_cp_response_lost_after_consume");
+    }
+    return Response.json(response, { status: 201 });
   }
   if (url.endsWith("/exchange")) return new Response(JSON.stringify({ token: "b".repeat(64),
     expiresAt: now + 300 }), { status: 201 });
@@ -88,7 +98,8 @@ const cpFetch = async (url, options) => {
     ? { active: false } : { active: true, iss: issuer, aud: "crm-web", sub: "principal_A",
       profileId: "profile_A", sessionId: "session_A", nbf: now - 10, exp: now + 300,
       scopes: cpMode === "catalog_only" ? ["crm.catalog.read"] :
-        ["deal_create", "deal_create_no_approval", "deal_create_approved_fixture", "receipt_approved"].includes(cpMode)
+        ["deal_create", "deal_create_no_approval", "deal_create_approved_fixture", "receipt_approved",
+          "receipt_approved_response_lost"].includes(cpMode)
           ? ["crm.deals.create"] :
         cpMode === "deals_only" ? ["crm.deals.read"] :
           ["crm.catalog.read", "crm.deals.read"] }), { status: 200 });
@@ -131,6 +142,11 @@ export default {
     if (url.pathname === "/__clock-offset") {
       clockOffset = Number(url.searchParams.get("milliseconds") ?? 0);
       return Response.json({ clockOffset });
+    }
+    if (url.pathname === "/__expire-approval") {
+      await env.CRM_DB.prepare("UPDATE crm_cp_approval_intents SET expires_at=? WHERE profile_ref=?")
+        .bind(Math.floor(Date.now() / 1000) - 1, "profile_A").run();
+      return Response.json({ expired: true });
     }
     return connected(new Request(`https://crm.example.invalid${url.pathname}${url.search}`, request), env);
   }

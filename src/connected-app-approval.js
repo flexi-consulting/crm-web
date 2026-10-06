@@ -2,6 +2,7 @@ import { createS04D1Repository } from "./s04-d1-repository.js";
 
 const HEX = /^[a-f0-9]{64}$/;
 const ID = /^[A-Za-z0-9_-]{1,128}$/;
+const RECEIPT_RETENTION_SECONDS = 90 * 24 * 60 * 60;
 const OPERATION_FIELDS = new Set(["companyId", "exhibitionId", "buildId", "statusId", "title", "source",
   "dealType", "companyInn", "contactName", "dealComment", "notesCount"]);
 function canonical(value) {
@@ -51,7 +52,58 @@ export function createConnectedAppDealApproval({ db, issuer, prepareApproval, co
     const payloadHash = await requestHash(review.details, revision);
     let stored = await repository.getCpApprovalIntent({ profileRef: identity.profileId, reviewId });
     const nowSeconds = Math.floor(now() / 1000);
-    if (!stored || stored.expires_at <= nowSeconds) {
+    const matchesReview = (intent) => intent && intent.revision === revision &&
+      intent.operation_id === review.operationId && intent.request_hash === payloadHash &&
+      HEX.test(intent.intent_id ?? "");
+    const approvalUrlOf = (intent) => {
+      const target = new URL(intent.approval_url);
+      if (target.origin !== issuer || target.pathname !== "/v1/connected-app-approvals/review" ||
+          target.searchParams.getAll("intent").length !== 1 || target.searchParams.get("intent") !== intent.intent_id ||
+          [...target.searchParams.keys()].some((key) => key !== "intent"))
+        throw new Error("approval_intent_url_invalid");
+      return target.href;
+    };
+    const consumeStored = async (intent) => {
+      const consumed = await consumeApproval({ token, intentId: intent.intent_id,
+        consumerRequestId: review.operationId, operation: review.details, sourceRevision: revision });
+      if (consumed?.status === 403 && consumed.body?.error === "human approval required")
+        return intent.expires_at > nowSeconds
+          ? { pending: true, approvalUrl: approvalUrlOf(intent) }
+          : { expired: true };
+      if (consumed?.status === 403 && consumed.body?.error === "approval not available" &&
+          intent.expires_at <= nowSeconds) return { expired: true };
+      const receipt = consumed?.body?.receipt;
+      if (consumed?.status !== 201 && consumed?.status !== 200) throw new Error("approval_consume_unavailable");
+      if (consumed.body?.version !== 1 || !receipt || !HEX.test(receipt.receiptId ?? "") ||
+          receipt.audience !== "crm-web" || receipt.clientId !== "crm-web" ||
+          receipt.command !== "crm.deals.create" || receipt.requestHash !== payloadHash ||
+          receipt.sourceRevision !== revision || receipt.profileId !== identity.profileId ||
+          receipt.principalId !== identity.principalId || !Number.isSafeInteger(receipt.approvedAt) ||
+          !Number.isSafeInteger(receipt.consumedAt) || stable(receipt.operation) !== stable(review.details))
+        throw new Error("approval_receipt_binding_invalid");
+      return { receipt, approvalUrl: approvalUrlOf(intent) };
+    };
+
+    if (stored && (stored.profile_ref !== identity.profileId || !matchesReview(stored)))
+      throw new Error("approval_intent_binding_invalid");
+
+    // CP can replay the same durable receipt for 90 days after a consume response
+    // is lost. Try that recovery before replacing an intent whose ten-minute
+    // approval window elapsed; CP checks consumed intents before their expiry.
+    if (stored && stored.expires_at <= nowSeconds) {
+      const recovered = await consumeStored(stored);
+      if (recovered.receipt) return {
+        profileId: recovered.receipt.profileId, reviewId, revision,
+        actorId: recovered.receipt.principalId, issuerId: issuer,
+        receiptId: recovered.receipt.receiptId, approved: true,
+        issuedAt: expiryText(recovered.receipt.approvedAt),
+        expiresAt: expiryText(recovered.receipt.consumedAt + RECEIPT_RETENTION_SECONDS)
+      };
+      if (!recovered.expired) throw new Error("approval_consume_unavailable");
+      stored = null;
+    }
+
+    if (!stored) {
       const prepared = await prepareApproval({ token, operation: review.details, sourceRevision: revision });
       if (!prepared || prepared.version !== 1 || !HEX.test(prepared.intentId) ||
           !Number.isSafeInteger(prepared.expiresAt) || prepared.expiresAt <= nowSeconds ||
@@ -63,29 +115,14 @@ export function createConnectedAppDealApproval({ db, issuer, prepareApproval, co
       if (saved.status !== "saved" && saved.status !== "existing") throw new Error("approval_intent_persist_failed");
       stored = saved.intent;
     }
-    if (stored.revision !== revision || stored.operation_id !== review.operationId ||
-        stored.request_hash !== payloadHash || stored.expires_at <= nowSeconds || !HEX.test(stored.intent_id))
+    if (!matchesReview(stored) || stored.expires_at <= nowSeconds)
       throw new Error("approval_intent_binding_invalid");
-    const approvalUrl = new URL(stored.approval_url);
-    if (approvalUrl.origin !== issuer || approvalUrl.pathname !== "/v1/connected-app-approvals/review" ||
-        approvalUrl.searchParams.getAll("intent").length !== 1 || approvalUrl.searchParams.get("intent") !== stored.intent_id ||
-        [...approvalUrl.searchParams.keys()].some((key) => key !== "intent"))
-      throw new Error("approval_intent_url_invalid");
-    const consumed = await consumeApproval({ token, intentId: stored.intent_id,
-      consumerRequestId: review.operationId, operation: review.details, sourceRevision: revision });
-    if (consumed?.status === 403 && consumed.body?.error === "human approval required")
-      return { approvalPending: true, approvalUrl: approvalUrl.href };
-    const receipt = consumed?.body?.receipt;
-    if (consumed?.status !== 201 && consumed?.status !== 200) throw new Error("approval_consume_unavailable");
-    if (consumed.body?.version !== 1 || !receipt || !HEX.test(receipt.receiptId ?? "") ||
-        receipt.audience !== "crm-web" || receipt.clientId !== "crm-web" ||
-        receipt.command !== "crm.deals.create" || receipt.requestHash !== payloadHash ||
-        receipt.sourceRevision !== revision || receipt.profileId !== identity.profileId ||
-        receipt.principalId !== identity.principalId || !Number.isSafeInteger(receipt.approvedAt) ||
-        !Number.isSafeInteger(receipt.consumedAt) || stable(receipt.operation) !== stable(review.details))
-      throw new Error("approval_receipt_binding_invalid");
-    return { profileId: receipt.profileId, reviewId, revision, actorId: receipt.principalId,
-      issuerId: issuer, receiptId: receipt.receiptId, approved: true,
-      issuedAt: expiryText(receipt.approvedAt), expiresAt: expiryText(stored.expires_at) };
+    const result = await consumeStored(stored);
+    if (result.pending) return { approvalPending: true, approvalUrl: result.approvalUrl };
+    if (!result.receipt) throw new Error("approval_consume_unavailable");
+    return { profileId: result.receipt.profileId, reviewId, revision, actorId: result.receipt.principalId,
+      issuerId: issuer, receiptId: result.receipt.receiptId, approved: true,
+      issuedAt: expiryText(result.receipt.approvedAt),
+      expiresAt: expiryText(result.receipt.consumedAt + RECEIPT_RETENTION_SECONDS) };
   };
 }

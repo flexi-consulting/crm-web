@@ -245,17 +245,33 @@ test("browser S-04 confirms through D1 and Weeek HTTP, then reconciles an accept
     assert.equal((await (await call(worker.base, "/__cp-count")).json()).weeekCreatePosts, 0,
       "a create scope without a trusted approval receipt cannot reach Weeek");
 
+    await call(worker.base, "/__cp-control?mode=receipt_approved_response_lost");
+    const lostReceiptResponse = await call(worker.base, "/deal-workflow/confirm", { method: "POST",
+      headers: { cookie: session, origin: "https://crm.example.invalid",
+        "content-type": "application/x-www-form-urlencoded" }, body: confirmationForm });
+    assert.equal(lostReceiptResponse.status, 503, await lostReceiptResponse.clone().text());
+    assert.equal((await (await call(worker.base, "/__cp-count")).json()).weeekCreatePosts, 0,
+      "a lost CP consume response cannot reach Weeek before the receipt is recovered");
+
+    // CP receipts remain recoverable for 90 days. Even after the ten-minute
+    // approval window, CRM must consume the same intent/request pair before
+    // preparing a replacement intent.
+    await call(worker.base, "/__expire-approval");
     await call(worker.base, "/__cp-control?mode=receipt_approved");
     const uncertain = await call(worker.base, "/deal-workflow/confirm", { method: "POST",
       headers: { cookie: session, origin: "https://crm.example.invalid",
         "content-type": "application/x-www-form-urlencoded" }, body: confirmationForm });
-    assert.equal(uncertain.status, 202);
+    assert.equal(uncertain.status, 202, await uncertain.clone().text());
     const uncertainHtml = await uncertain.text();
     assert.match(uncertainHtml, /Результат уточняется/);
     assert.match(uncertainHtml, /Повторного запроса на создание не будет/);
     const operationId = uncertainHtml.match(/name="operationId" value="(op-[0-9a-f-]{36})"/)?.[1];
     assert.ok(operationId);
-    assert.equal((await (await call(worker.base, "/__cp-count")).json()).weeekCreatePosts, 1);
+    const afterReceiptRecovery = await (await call(worker.base, "/__cp-count")).json();
+    assert.equal(afterReceiptRecovery.approvalPrepareCalls, 1,
+      "receipt recovery must reuse the expired consumed intent instead of requesting another approval");
+    assert.equal(afterReceiptRecovery.approvalConsumeCalls, 3);
+    assert.equal(afterReceiptRecovery.weeekCreatePosts, 1);
 
     await stop(worker.child);
     worker = await start(root);
