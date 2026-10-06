@@ -185,7 +185,7 @@ export function createCatalogV11D1Repository(db, now = () => new Date().toISOStr
         WHERE profile_ref=? AND exhibition_id=?`).bind(profileId, exhibitionId).first();
       if (!row || sha256(row.artifact_json) !== row.content_sha) return null;
       const artifact = JSON.parse(row.artifact_json);
-      return artifact.schemaVersion === "1.1.0" && artifact.exhibitionId === exhibitionId ? artifact : null;
+      return validV11Artifact(artifact) && artifact.exhibitionId === exhibitionId ? artifact : null;
     } catch { return null; }
   }
   return { saveArtifact, getArtifact };

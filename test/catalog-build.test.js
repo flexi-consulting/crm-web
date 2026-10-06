@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import Ajv from "ajv/dist/2020.js";
 import vm from "node:vm";
 import { readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { createServer } from "../src/server.js";
 import { createCatalogBuildService, createSyntheticSourceAdapter, createSyntheticEnrichmentAdapter, createSyntheticRegistryAdapter, normalizeEnrichment, normalizeRegistry, qualify } from "../src/catalog-build.js";
 import { renderCatalogPreview } from "../src/catalog-preview.js";
@@ -214,6 +215,11 @@ test("S-01 v1.1 D1 repository persists durable profile-scoped artifacts and veri
   } finally { await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
   db.run("UPDATE crm_catalog_v11_artifacts SET artifact_json=? WHERE profile_ref=?",
     [JSON.stringify({ ...revisionTwo, sourceRevision: "forged" }), "demo-profile-a"]);
+  assert.equal(await repo.getArtifact({ profileId: "demo-profile-a", exhibitionId: artifact.exhibitionId }), null);
+  const malformedJson = JSON.stringify({ ...revisionTwo, companies: [{ id: "co-0123456789abcdef0123", name: "incomplete" }] });
+  const malformedSha = createHash("sha256").update(malformedJson).digest("hex");
+  db.run("UPDATE crm_catalog_v11_artifacts SET artifact_json=?,content_sha=? WHERE profile_ref=?",
+    [malformedJson, malformedSha, "demo-profile-a"]);
   assert.equal(await repo.getArtifact({ profileId: "demo-profile-a", exhibitionId: artifact.exhibitionId }), null);
   db.close();
 });
