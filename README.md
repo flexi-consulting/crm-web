@@ -2,6 +2,8 @@
 
 The offline [legacy notes recovery gate](docs/LEGACY-NOTES-RECOVERY.md) records the private S-03/S-04 source correlation and invented golden cases. Its evidence classifier is not a published capability or a live data importer.
 
+The [private note recovery dry run](docs/LEGACY-NOTES-DRY-RUN.md) validates source receipts and reviewed row/profile decisions without writing to D1 or Weeek.
+
 ## Connected profile session read adapter
 
 An opt-in Fetch browser BFF for the same read routes is in
