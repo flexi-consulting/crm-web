@@ -137,6 +137,12 @@ test("S-01 v1.1 metadata schema preserves synthetic legacy filter fields with ex
   assert.match(view.html, /<option value="RU"/);
   assert.match(view.html, /Стенд: A-14/);
   assert.match(view.html, /Найдено: 1/);
+  assert.equal(view.html.includes("Карточка CRM и подготовка сделки"), false,
+    "do not show an S-04 path without a current imported participant binding");
+  const linkedView = renderCatalogV11({ artifact: queryArtifact, result: filtered,
+    participantCompanyIds: [rows.find(row => row.name === "Revenue Upper Boundary").id] });
+  assert.match(linkedView.html, /Карточка CRM и подготовка сделки/);
+  assert.match(linkedView.html, /\/catalogs\/synthetic-current-source-shape\/participants\/co-2123456789abcdef0123/);
   const countryView = renderCatalogV11({ artifact: queryArtifact,
     result: queryCatalogV11(queryArtifact, { country: "RU" }), filters: { country: "RU" } });
   assert.match(countryView.html, /<option value="RU" selected>/);

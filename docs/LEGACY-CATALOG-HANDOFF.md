@@ -61,7 +61,11 @@ allowlists, so contact fields or any other extra source properties are omitted
 from artifacts and their source revisions. The local Worker test exercises
 dual-version D1 restore, replay, old-link resolution and v1.1 page/API reads.
 The `artifactVersions` choice is migration input, not permission to import live
-data or publish a route.
+data or publish a route. The v1.1 catalog emits an S-04 navigation link only
+for companies in the current profile-owned v1.0 participant build; its resolver
+checks both exhibition and company membership before redirecting to the
+canonical participant card. Deal creation still requires its separate browser
+scope and human approval receipt.
 
 The backup and quarantine report are private data. Never commit them, the mapping, source snapshots or derived SQL to this public repository. The `EX` import only handles catalog facts and legacy target flags. The old catalog's `/api/site-predeal-notes` calls point to the separate `flexi-site-notes` Worker. The Telegram deal bot reads and writes preleads in the same legacy D1 database, including `preleads` and `prelead_messages`; its notes, rejection state and deal links are a separate required S-03/S-04 source.
 

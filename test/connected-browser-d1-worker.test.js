@@ -43,7 +43,8 @@ function migrate(root) {
   for (const file of ["0001_s04_domain.sql", "0002_built_catalog.sql", "0003_weeek_deal_identity.sql",
     "0004_legacy_catalog_refs.sql", "0005_connected_browser_sessions.sql",
     "0006_connected_browser_mode.sql", "0007_connected_browser_s04_commands.sql",
-    "0008_cp_approval_intents.sql", "0009_encrypt_connected_browser_secrets.sql"]) {
+    "0008_cp_approval_intents.sql", "0009_encrypt_connected_browser_secrets.sql",
+    "0010_catalog_v11_artifacts.sql"]) {
     const result = spawnSync(node, [wrangler, "d1", "execute", "CRM_DB", "--config", config,
       "--local", "--persist-to", root, "--file", `migrations/${file}`, "--yes", "--json"],
     { cwd, encoding: "utf8" });
@@ -70,7 +71,8 @@ test("Worker Fetch uses atomic D1 browser handoff and real profile-scoped catalo
     assert.deepEqual(await (await call(worker.base, "/__cp-count")).json(), {
       cpCalls: 0, foreignEgress: 0, approvalPrepareCalls: 0, approvalConsumeCalls: 0, weeekCreatePosts: 0
     }, "missing encryption key fails closed before external requests or writes");
-    const { buildId } = await (await call(worker.base, "/__seed")).json();
+    const seeded = await (await call(worker.base, "/__seed")).json();
+    const { buildId, v11ExhibitionId, v11CompanyId } = seeded;
     const deepLink = await call(worker.base, `/catalogs/${buildId}`);
     assert.equal(deepLink.status, 303);
     assert.equal(new URL(deepLink.headers.get("location")).searchParams.get("returnTo"), `/catalogs/${buildId}`);
@@ -110,6 +112,43 @@ test("Worker Fetch uses atomic D1 browser handoff and real profile-scoped catalo
     const details = await call(worker.base, `/catalogs/${buildId}`, { headers: { cookie: session } });
     assert.equal(details.status, 200);
     assert.match(await details.text(), /Example Machine Works/);
+    const v11DeepLink = await call(worker.base, `/catalogs/${v11ExhibitionId}`);
+    assert.equal(v11DeepLink.status, 303);
+    const v11StartUrl = new URL(v11DeepLink.headers.get("location"));
+    const v11Start = await call(worker.base, v11StartUrl.pathname + v11StartUrl.search);
+    assert.equal(v11Start.status, 303, await v11Start.clone().text());
+    assert.equal(new URL(v11Start.headers.get("location")).searchParams.get("scope"), "crm.catalog.read");
+    const v11CallbackUrl = new URL(v11Start.headers.get("location"));
+    const v11Callback = await call(worker.base, `/auth/connected/callback?code=${"c".repeat(64)}` +
+      `&state=${v11CallbackUrl.searchParams.get("state")}&iss=${encodeURIComponent("https://cp.example.invalid")}`,
+      { headers: { cookie: cookie(v11Start, "__Host-crm-connected-pending") } });
+    assert.equal(v11Callback.status, 303);
+    const v11Session = cookie(v11Callback, "__Host-crm-connected-session");
+    const v11Details = await call(worker.base, `/catalogs/${v11ExhibitionId}?revenueBand=100-1500`,
+      { headers: { cookie: v11Session } });
+    assert.equal(v11Details.status, 200, await v11Details.clone().text());
+    const v11Html = await v11Details.text();
+    assert.match(v11Html, /Synthetic manufacturing/);
+    const v11CardPath = `/catalogs/${v11ExhibitionId}/participants/${v11CompanyId}`;
+    assert.match(v11Html, new RegExp(v11CardPath.replaceAll("/", "\\/")));
+    assert.equal((await call(worker.base, `${v11CardPath}?profileId=profile_B`,
+      { headers: { cookie: v11Session } })).status, 400);
+    assert.equal((await call(worker.base,
+      `/catalogs/${v11ExhibitionId}/participants/co-${"0".repeat(20)}`, { headers: { cookie: v11Session } })).status, 404);
+    const v11CardRedirect = await call(worker.base, v11CardPath, { headers: { cookie: v11Session } });
+    assert.equal(v11CardRedirect.status, 303, await v11CardRedirect.clone().text());
+    const canonicalCardPath = new URL(v11CardRedirect.headers.get("location"), "https://crm.example.invalid").pathname;
+    assert.match(canonicalCardPath, /^\/catalogs\/build-[a-f0-9]{24}\/participants\/co-[a-f0-9]{20}$/);
+    const canonicalCard = await call(worker.base, canonicalCardPath, { headers: { cookie: v11Session } });
+    assert.equal(canonicalCard.status, 200, await canonicalCard.clone().text());
+    assert.match(await canonicalCard.text(), /Synthetic manufacturing/);
+    const dealScopeHandoff = await call(worker.base, `${canonicalCardPath}/deal`, { headers: { cookie: v11Session } });
+    assert.equal(dealScopeHandoff.status, 303);
+    const dealScopeUrl = new URL(dealScopeHandoff.headers.get("location"));
+    assert.equal(dealScopeUrl.searchParams.get("from"), "dealCreate");
+    assert.equal(dealScopeUrl.searchParams.get("returnTo"), `${canonicalCardPath}/deal`);
+    assert.equal((await call(worker.base, `/catalogs/${v11ExhibitionId}`, { headers: {
+      cookie: session, authorization: `Bearer ${"b".repeat(64)}` } })).status, 400);
     const missingReview = await call(worker.base,
       "/api/v1/deal-reviews/review-11111111-1111-1111-1111-111111111111",
     { headers: { cookie: session } });

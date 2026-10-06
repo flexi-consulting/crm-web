@@ -1,6 +1,8 @@
 import { createCrmConnectedWorkerHandler } from "../src/connected-browser-worker.js";
 import { createCatalogBuildService } from "../src/catalog-build.js";
 import { createBuiltCatalogD1Repository } from "../src/built-catalog-d1.js";
+import { createCatalogV11D1Repository } from "../src/catalog-query-v11.js";
+import { projectLegacyExSnapshot, projectLegacyExSnapshotV11 } from "../src/legacy-ex-snapshot.js";
 
 const issuer = "https://cp.example.invalid";
 let cpMode = "active", cpCalls = 0, foreignEgress = 0, clockOffset = 0;
@@ -131,7 +133,26 @@ export default {
       const listing = await repo.readParticipants({ profileRef: "profile_A", buildId: saved.buildId });
       const item = listing.body.items[0];
       await repo.ensurePrelead({ profileRef: "profile_A", buildId: saved.buildId, companyId: item.id });
+      const exhibitionId = "synthetic-current-source-shape";
+      const sourceRows = [{ id: "SYNTH001", n: "Synthetic manufacturing", s: "S-01", t: 1, nt: 0,
+        inn: "0000000001", ogrn: null, ru: 1, country: "Sample Federation",
+        cat: "Synthetic manufacturing", b: "Synthetic source description", seg: "Synthetic segment",
+        rev: 250, ry: 2025, prof: 0, py: 2024, href: "https://example.invalid/synthetic-exhibitor" }];
+      const legacyV1 = projectLegacyExSnapshot({ profileRef: "profile_A", eventKey: exhibitionId, entries: sourceRows });
+      const legacyV11 = projectLegacyExSnapshotV11({ profileRef: "profile_A", eventKey: exhibitionId, entries: sourceRows });
+      if (legacyV1.status !== "projected" || legacyV11.status !== "projected")
+        throw new Error("synthetic legacy catalog projection failed");
+      const linkedBuild = await repo.saveBuild({ profileRef: "profile_A", idempotencyKey: legacyV1.idempotencyKey,
+        build: legacyV1.build, legacyRefs: legacyV1.legacyRefs });
+      if (linkedBuild.status !== "stored") throw new Error(`v1.0 linked seed failed: ${linkedBuild.status}`);
+      await repo.ensurePrelead({ profileRef: "profile_A", buildId: linkedBuild.buildId,
+        companyId: legacyV1.legacyRefs[0].companyId });
+      const v11 = createCatalogV11D1Repository(env.CRM_DB);
+      const v11Saved = await v11.saveArtifact({ profileId: "profile_A", artifact: legacyV11.artifact });
+      if (v11Saved.status !== "stored") throw new Error(`v11 seed failed: ${v11Saved.status}`);
       return Response.json({ buildId: saved.buildId, companyId: item.id,
+        v11ExhibitionId: exhibitionId,
+        v11CompanyId: legacyV1.legacyRefs[0].companyId,
         exhibitionId: "demo-expo-001", companyName: item.name });
     }
     if (url.pathname === "/__cp-control") {

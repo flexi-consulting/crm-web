@@ -8,6 +8,8 @@ const SCOPES = new Set(["crm.catalog.read", "crm.notes.read", "crm.deals.read", 
 const ID = /^[A-Za-z0-9_-]{1,128}$/;
 const SCOPE = /^[A-Za-z][A-Za-z0-9.]{1,99}$/;
 const READ_ROUTES = [
+  { pattern: /^\/catalogs\/(?!build-)[a-z0-9][a-z0-9-]{0,79}$/, scope: "crm.catalog.read" },
+  { pattern: /^\/catalogs\/(?!build-)[a-z0-9][a-z0-9-]{0,79}\/participants\/co-[a-f0-9]{20}$/, scope: "crm.catalog.read" },
   { pattern: /^\/catalogs\/build-[a-f0-9]{24}(?:\/participants\/co-[a-f0-9]{20})?$/, scope: "crm.catalog.read" },
   { pattern: /^\/catalogs\/build-[a-f0-9]{24}\/participants\/co-[a-f0-9]{20}\/deal$/, scope: "crm.deals.create" },
   { pattern: /^\/api\/v1\/catalog-builds\/build-[a-f0-9]{24}(?:\/participants(?:\/co-[a-f0-9]{20})?)?$/, scope: "crm.catalog.read" },

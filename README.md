@@ -78,8 +78,12 @@ is mounted. Search covers name/category/country; country, classification,
 revenue and profit filters preserve the old boundaries. The local Worker
 contract restores a synthetic private snapshot to both v1.0 and v1.1 D1 stores,
 replays both receipts without duplication, resolves the v1.0 legacy link, and
-reads the v1.1 page/API after persistence. This is sandbox evidence; it does
-not activate a public production importer, route or real catalog.
+reads the v1.1 page/API after persistence. A v1.1 card shows its CRM/deal link
+only when the current profile-scoped v1.0 participant binding exists. Following
+that link resolves the exact event/company membership server-side and redirects
+to the canonical participant card; a later deal-create action requests its
+separate `crm.deals.create` grant. This is sandbox evidence; it does not
+activate a public production importer, route or real catalog.
 
 `migrations/0002_built_catalog.sql` adds build artifacts, participant membership and build references to the **separate app-owned D1 candidate** created by `0001_s04_domain.sql`. `src/built-catalog-d1.js` persists a validated synthetic build under profile/idempotency key, reads the exact profile-owned participant, binds a stable prelead across rebuilds, and appends a note with D1 replay protection. The existing S-04 D1 repository then reads the same prelead revision and notes for reviewed deal creation. `createDealReviewService` accepts the async D1 participant resolver in its persistent path; its in-memory handler and older demo IDs remain intact.
 
