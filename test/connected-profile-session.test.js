@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createConnectedCrmReadBoundary, createConnectedCrmD1ReadHandler } from "../src/connected-profile-session.js";
 
@@ -10,8 +11,11 @@ const companyId = `co-${"b".repeat(20)}`;
 const reviewId = `review-${"c".repeat(36)}`;
 const operationId = `op-${"d".repeat(36)}`;
 const bearer = "Bearer invented-opaque-token-0001";
-const contract = JSON.parse(readFileSync(new URL("../contracts/connected-app-identity-v1/contract.json", import.meta.url)));
-const schema = JSON.parse(readFileSync(new URL("../contracts/connected-app-identity-v1/response.schema.json", import.meta.url)));
+const contractRaw = readFileSync(new URL("../contracts/connected-app-identity-v1/contract.json", import.meta.url));
+const schemaRaw = readFileSync(new URL("../contracts/connected-app-identity-v1/response.schema.json", import.meta.url));
+const source = JSON.parse(readFileSync(new URL("../contracts/connected-app-identity-v1/source.json", import.meta.url)));
+const contract = JSON.parse(contractRaw);
+const schema = JSON.parse(schemaRaw);
 const request = (path, options = {}) => new Request(`https://crm.example.invalid${path}`, {
   method: options.method ?? "GET", headers: { authorization: options.authorization ?? bearer,
     ...(options.cookie ? { cookie: options.cookie } : {}) }
@@ -53,11 +57,17 @@ function fixture() {
   return { sessions, records, calls, introspect, handler, handleScopedRequest };
 }
 
-test("pinned Control Plane v1 contract grants CRM reads only and matches the response shape", () => {
+test("pinned Control Plane v1 contract grants separate CRM reads and deal creation", () => {
+  const sha = bytes => createHash("sha256").update(bytes).digest("hex");
+  assert.equal(source.repository, "trained-assist/trained-assist-control-plane");
+  assert.equal(source.revision, "a455214645f2a5a05207e8a6ea1ea6ad0215476f");
+  assert.equal(sha(contractRaw), source.contractSha256);
+  assert.equal(sha(schemaRaw), source.responseSchemaSha256);
   assert.equal(contract.urn, "urn:trained-assist:connected-app-identity:v1");
   assert.equal(contract.status, "offline_contract_only");
   assert.deepEqual(contract.audiences["crm-web"],
-    ["crm.catalog.read", "crm.notes.read", "crm.deals.read"]);
+    ["crm.catalog.read", "crm.notes.read", "crm.deals.read", "crm.deals.create"]);
+  assert.equal(contract.audiences["crm-web"].includes("crm.deals.publish"), false);
   assert.deepEqual(schema.oneOf[1].required, contract.introspection.activeResponseFields);
   assert.deepEqual(contract.introspection.inactiveResponse, { active: false });
   assert.equal(contract.token.agentRunRequired, false);

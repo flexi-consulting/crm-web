@@ -1,6 +1,6 @@
 import { createBuiltCatalogD1HttpHandler } from "./built-catalog-d1-http.js";
 
-// Pinned to trained-assist-control-plane#66 (connected-app-identity v1).
+// Scope vocabulary is SHA-pinned to the Control Plane contract snapshot in contracts/connected-app-identity-v1/source.json.
 // This boundary is opt-in. The control plane, not the app or
 // browser, selects the profile and grants the audience-specific scopes.
 const AUDIENCE = "crm-web";
