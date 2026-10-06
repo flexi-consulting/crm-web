@@ -4,6 +4,8 @@ The offline [legacy notes recovery gate](docs/LEGACY-NOTES-RECOVERY.md) records 
 
 The [private note recovery dry run](docs/LEGACY-NOTES-DRY-RUN.md) validates source receipts and reviewed row/profile decisions without writing to D1 or Weeek.
 
+The [exact current catalog candidate list](docs/LEGACY-CURRENT-CANDIDATES.md) checks old HTML bytes and row provenance for 59 private notes while leaving the new trusted profile owner unresolved.
+
 Independent CRM and exhibitions web service. This work is a local synthetic API/domain-logic foundation. Catalog and company reads use fixtures; the exhibition extension adds a hidden synthetic catalog-build pipeline; the sales extension prepares in-memory intents and includes an unadvertised synthetic confirmed-deal state machine behind a fake provider. None of these routes writes to a live CRM or scrapes live sites. Mutating deal-intent, prelead timeline, confirmed-deal, and catalog-build routes are omitted from the published manifest, so the agent cannot discover them as capabilities.
 
 ## Run locally
