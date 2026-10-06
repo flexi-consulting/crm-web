@@ -215,12 +215,17 @@ test("S-01 v1.1 D1 repository persists durable profile-scoped artifacts and veri
   } finally { await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
   db.run("UPDATE crm_catalog_v11_artifacts SET artifact_json=? WHERE profile_ref=?",
     [JSON.stringify({ ...revisionTwo, sourceRevision: "forged" }), "demo-profile-a"]);
-  assert.equal(await repo.getArtifact({ profileId: "demo-profile-a", exhibitionId: artifact.exhibitionId }), null);
+  await assert.rejects(repo.getArtifact({ profileId: "demo-profile-a", exhibitionId: artifact.exhibitionId }), /integrity check failed/);
+  const unavailable = await createCatalogV11ReadHandler({ repository: repo,
+    resolveTrustedProfile: async () => ({ profileId: "demo-profile-a", scopes: ["crm.catalog.read"] }) })
+    (new Request(`https://crm.example.invalid/catalogs/${artifact.exhibitionId}`));
+  assert.equal(unavailable.status, 503);
+  assert.equal((await unavailable.json()).error, "catalog_unavailable");
   const malformedJson = JSON.stringify({ ...revisionTwo, companies: [{ id: "co-0123456789abcdef0123", name: "incomplete" }] });
   const malformedSha = createHash("sha256").update(malformedJson).digest("hex");
   db.run("UPDATE crm_catalog_v11_artifacts SET artifact_json=?,content_sha=? WHERE profile_ref=?",
     [malformedJson, malformedSha, "demo-profile-a"]);
-  assert.equal(await repo.getArtifact({ profileId: "demo-profile-a", exhibitionId: artifact.exhibitionId }), null);
+  await assert.rejects(repo.getArtifact({ profileId: "demo-profile-a", exhibitionId: artifact.exhibitionId }), /artifact is invalid/);
   db.close();
 });
 

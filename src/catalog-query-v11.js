@@ -180,13 +180,14 @@ export function createCatalogV11D1Repository(db, now = () => new Date().toISOStr
   }
   async function getArtifact({ profileId, exhibitionId }) {
     if (!profileRefOk(profileId) || !/^[a-z0-9][a-z0-9-]{0,79}$/.test(exhibitionId ?? "")) return null;
-    try {
-      const row = await db.prepare(`SELECT artifact_json,content_sha FROM crm_catalog_v11_artifacts
-        WHERE profile_ref=? AND exhibition_id=?`).bind(profileId, exhibitionId).first();
-      if (!row || sha256(row.artifact_json) !== row.content_sha) return null;
-      const artifact = JSON.parse(row.artifact_json);
-      return validV11Artifact(artifact) && artifact.exhibitionId === exhibitionId ? artifact : null;
-    } catch { return null; }
+    const row = await db.prepare(`SELECT artifact_json,content_sha FROM crm_catalog_v11_artifacts
+      WHERE profile_ref=? AND exhibition_id=?`).bind(profileId, exhibitionId).first();
+    if (!row) return null;
+    if (sha256(row.artifact_json) !== row.content_sha) throw new Error("stored catalog integrity check failed");
+    const artifact = JSON.parse(row.artifact_json);
+    if (!validV11Artifact(artifact) || artifact.exhibitionId !== exhibitionId)
+      throw new Error("stored catalog artifact is invalid");
+    return artifact;
   }
   return { saveArtifact, getArtifact };
 }
