@@ -5,13 +5,14 @@ import { classifyHistoricalExArtifact, correlateLegacySiteNotes,
 
 const sha = (char) => char.repeat(64);
 const invented = {
-  currentCatalogs: [{ profileRef: "demo-profile-a", eventKey: "invented-expo-2026",
+  currentCatalogs: [{ profileRef: "demo-profile-a", sourcePath: "demo/current/index.html",
+    eventKey: "invented-expo-2026",
     sourceSha256: sha("a"), entries: [{ id: "LANG001" },
       { id: "AB C-1" }, { id: "AB-C-1" }] }],
   historicalCatalogs: [{ profileRef: "demo-profile-b", eventKey: "older_expo",
     sourceSha256: sha("b"), entries: [{ id: "OLD001" }] },
   { profileRef: "demo-profile-b", eventKey: "older_expo",
-    sourceSha256: sha("c"), entries: [{ id: "OLD001" }] }]
+    sourceSha256: sha("c"), entries: [{ id: "OLD001" }, {}] }]
 };
 
 test("legacy bot key normalization exposes ID collisions without binding notes", () => {
@@ -22,13 +23,18 @@ test("legacy bot key normalization exposes ID collisions without binding notes",
   const ids = ["site_invented-expo-2026_lang001", "site_invented-expo-2026_ab-c-1",
     "site_older_expo_old001", "site_invented-expo-2026_missing",
     "site_never-published_abc", "unexpected-key"];
-  const results = correlateLegacySiteNotes({ ...invented, preleadIds: ids });
+  const evidence = correlateLegacySiteNotes({ ...invented, preleadIds: ids });
+  const results = evidence.records;
+  assert.deepEqual(evidence.invalidHistoricalRows, [{ sourceSha256: sha("c"),
+    sourcePath: null, rowIndex: 1, reason: "missing_string_id" }]);
+  assert.deepEqual(evidence.invalidCurrentRows, []);
   assert.deepEqual(results.map((item) => item.status), [
     "current_unique_evidence", "current_ambiguous_quarantine",
     "historical_only_quarantine", "known_event_missing_company_quarantine",
     "unknown_event_quarantine", "invalid_note_key_quarantine"
   ]);
   assert.deepEqual(results[0].currentCandidates.map((item) => item.rowIndex), [0]);
+  assert.equal(results[0].currentCandidates[0].sourcePath, "demo/current/index.html");
   assert.deepEqual(results[1].currentCandidates.map((item) => item.rowIndex), [1, 2]);
   assert.equal(results[2].currentCandidates.length, 0);
   assert.deepEqual(results[2].historicalCandidates.map((item) => item.sourceSha256),

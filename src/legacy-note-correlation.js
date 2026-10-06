@@ -29,7 +29,7 @@ export function classifyHistoricalExArtifact({ bytes, sourcePath }) {
 
 function indexedCatalogs(catalogs) {
   if (!Array.isArray(catalogs)) throw new TypeError("legacy_catalogs_invalid");
-  const byNoteId = new Map(), eventPrefixes = new Set();
+  const byNoteId = new Map(), eventPrefixes = new Set(), invalidRows = [];
   for (const catalog of catalogs) {
     if (!catalog || typeof catalog.eventKey !== "string" || !catalog.eventKey.trim() ||
         !/^[a-f0-9]{64}$/.test(catalog.sourceSha256 ?? "") ||
@@ -37,17 +37,22 @@ function indexedCatalogs(catalogs) {
     const prefix = `site_${segment(catalog.eventKey)}_`.toLowerCase();
     eventPrefixes.add(prefix);
     catalog.entries.forEach((entry, rowIndex) => {
-      if (!entry || typeof entry.id !== "string" || !entry.id.trim())
-        throw new TypeError("legacy_catalog_row_invalid");
+      if (!entry || typeof entry.id !== "string" || !entry.id.trim()) {
+        invalidRows.push({ sourceSha256: catalog.sourceSha256,
+          sourcePath: catalog.sourcePath ?? null, rowIndex,
+          reason: "missing_string_id" });
+        return;
+      }
       const key = legacySitePredealKey(catalog.eventKey, entry.id);
       const candidates = byNoteId.get(key) ?? [];
-      candidates.push({ sourceSha256: catalog.sourceSha256, rowIndex,
+      candidates.push({ sourceSha256: catalog.sourceSha256,
+        sourcePath: catalog.sourcePath ?? null, rowIndex,
         profileRef: catalog.profileRef ?? null, eventKey: catalog.eventKey,
         legacyCompanyId: entry.id });
       byNoteId.set(key, candidates);
     });
   }
-  return { byNoteId, eventPrefixes };
+  return { byNoteId, eventPrefixes, invalidRows };
 }
 
 export function correlateLegacySiteNotes({ currentCatalogs, historicalCatalogs = [], preleadIds }) {
@@ -56,7 +61,7 @@ export function correlateLegacySiteNotes({ currentCatalogs, historicalCatalogs =
   const current = indexedCatalogs(currentCatalogs);
   const historical = indexedCatalogs(historicalCatalogs);
   const prefixes = [...current.eventPrefixes, ...historical.eventPrefixes];
-  return preleadIds.map((preleadId) => {
+  const records = preleadIds.map((preleadId) => {
     const currentCandidates = current.byNoteId.get(preleadId) ?? [];
     const historicalCandidates = historical.byNoteId.get(preleadId) ?? [];
     let status;
@@ -70,6 +75,8 @@ export function correlateLegacySiteNotes({ currentCatalogs, historicalCatalogs =
     else status = "unknown_event_quarantine";
     return { preleadId, status, currentCandidates, historicalCandidates };
   });
+  return { records, invalidCurrentRows: current.invalidRows,
+    invalidHistoricalRows: historical.invalidRows };
 }
 
 export function summarizeLegacyNoteCorrelation(results) {
