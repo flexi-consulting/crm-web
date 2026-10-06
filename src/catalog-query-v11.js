@@ -53,11 +53,13 @@ export function renderCatalogV11({ artifact, result, filters = {} }) {
     return { status: "invalid_catalog_view", html: "" };
   const options = (name, values, selected, labels = {}) => `<label>${name}<select name="${name}"><option value="">Все</option>${values.map(value =>
     `<option value="${escapeHtml(value)}"${selected === value ? " selected" : ""}>${escapeHtml(labels[value] ?? value)}</option>`).join("")}</select></label>`;
+  const countries = [...new Set(artifact.companies.map(company => company.source?.country).filter(Boolean))]
+    .sort((left, right) => left.localeCompare(right, "ru"));
   const cards = result.items.map(company => {
     const source = company.source, enrichment = company.enrichment;
     const safeHref = safeSourceUrl(source.href);
     return `<article class="company-card" data-company-id="${escapeHtml(company.id)}"><h2>${escapeHtml(company.name)}</h2>
-      <p>${escapeHtml(source.country)}${source.category ? ` · ${escapeHtml(source.category)}` : ""}</p>
+      <p>${escapeHtml(source.country)}${source.booth ? ` · Стенд: ${escapeHtml(source.booth)}` : ""}${source.category ? ` · ${escapeHtml(source.category)}` : ""}</p>
       ${source.description ? `<p>${escapeHtml(source.description)}</p>` : ""}
       <p>Выручка: ${escapeHtml(moneyLabel(enrichment.revenueRub))}${enrichment.revenueYear ? ` (${enrichment.revenueYear})` : ""}</p>
       <p>Прибыль: ${escapeHtml(moneyLabel(enrichment.profitRub))}${enrichment.profitYear ? ` (${enrichment.profitYear})` : ""}</p>
@@ -65,7 +67,7 @@ export function renderCatalogV11({ artifact, result, filters = {} }) {
   }).join("");
   const html = `<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="robots" content="noindex,nofollow"><title>Каталог ${escapeHtml(artifact.exhibitionId)}</title><main>
     <h1>Каталог выставки ${escapeHtml(artifact.exhibitionId)}</h1><form method="get"><label>Поиск<input name="query" value="${escapeHtml(filters.query ?? "")}"></label>
-    ${options("classification", [...classifications], filters.classification, { target: "Целевая", near_target: "Почти целевая", not_target: "Не целевая", unknown: "Не подтверждена" })}
+    ${options("country", countries, filters.country)}${options("classification", [...classifications], filters.classification, { target: "Целевая", near_target: "Почти целевая", not_target: "Не целевая", unknown: "Не подтверждена" })}
     ${options("revenueBand", [...revenueBands], filters.revenueBand)}${options("profitBand", [...profitBands], filters.profitBand)}
     <button type="submit">Показать</button></form><p>Найдено: ${result.total}</p>${cards || "<p>Ничего не найдено.</p>"}</main></html>`;
   return { status: "ok", html };

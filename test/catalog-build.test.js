@@ -77,7 +77,7 @@ test("S-01 v1.1 metadata schema preserves synthetic legacy filter fields with ex
   const validate = ajv.compile(schema);
   const company = {
     id: "co-0123456789abcdef0123", name: "Synthetic Boundary Maker",
-    source: { sourceRecordId: "src-synthetic-boundary", country: "Fictionland", booth: null,
+    source: { sourceRecordId: "src-synthetic-boundary", country: "Fictionland", booth: "A-14",
       href: "https://example.invalid/synthetic", category: "Synthetic category",
       description: "Synthetic source description", segment: "synthetic segment", duplicateSourceRecordIds: [] },
     enrichment: { status: "found", inn: "0000000001", ogrn: null, revenueRub: 100_000_000,
@@ -131,14 +131,21 @@ test("S-01 v1.1 metadata schema preserves synthetic legacy filter fields with ex
   assert.equal(view.status, "ok");
   assert.match(view.html, /<option value="100-1500" selected>/);
   assert.match(view.html, /<option value="30-200" selected>/);
+  assert.match(view.html, /<option value="RU"/);
+  assert.match(view.html, /Стенд: A-14/);
   assert.match(view.html, /Найдено: 1/);
+  const countryView = renderCatalogV11({ artifact: queryArtifact,
+    result: queryCatalogV11(queryArtifact, { country: "RU" }), filters: { country: "RU" } });
+  assert.match(countryView.html, /<option value="RU" selected>/);
+  assert.match(countryView.html, /Найдено: 1/);
   const hostile = structuredClone(queryArtifact);
   hostile.companies = [{ ...structuredClone(company), name: '<img src=x onerror="bad">',
     source: { ...company.source, category: "<script>bad</script>", description: "<b>bad</b>",
-      href: "https://example.invalid/a\\\" onmouseover=bad" } }];
+      booth: "<script>bad</script>", href: "https://example.invalid/a\\\" onmouseover=bad" } }];
   const safeView = renderCatalogV11({ artifact: hostile, result: queryCatalogV11(hostile), filters: {} });
   assert.equal(safeView.html.includes("<img src=x"), false);
   assert.equal(safeView.html.includes("<script>bad</script>"), false);
+  assert.match(safeView.html, /Стенд: &lt;script&gt;bad&lt;\/script&gt;/);
   assert.equal(safeView.html.includes('onmouseover=bad'), false);
 
   const calls = [];
@@ -154,6 +161,12 @@ test("S-01 v1.1 metadata schema preserves synthetic legacy filter fields with ex
   const fetchHandler = (profileId, scope = "crm.catalog.read", path = "/catalogs/synthetic-current-source-shape?revenueBand=100-1500&profitBand=30-200") =>
     handler(new Request(`https://crm.example.invalid${path}`, { headers: { "x-test-profile": profileId, "x-test-scope": scope } }));
   assert.equal((await fetchHandler("demo-profile-a")).status, 200);
+  const countryResponse = await fetchHandler("demo-profile-a", "crm.catalog.read",
+    "/catalogs/synthetic-current-source-shape?country=RU");
+  assert.equal(countryResponse.status, 200);
+  const countryHtml = await countryResponse.text();
+  assert.match(countryHtml, /<option value="RU" selected>/);
+  assert.match(countryHtml, /Стенд: A-14/);
   assert.equal((await fetchHandler("demo-profile-a", "")).status, 403);
   assert.equal((await fetchHandler("demo-profile-b")).status, 404);
   assert.equal((await fetchHandler("unavailable")).status, 503);
