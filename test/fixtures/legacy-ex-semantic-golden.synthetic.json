@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "eventKey": "synthetic-current-source-shape",
+  "rows": [
+    { "id": "SYN001", "n": "Synthetic Target Works", "s": "A-01", "ru": 1, "t": 1, "nt": 0, "inn": "0000000001", "ogrn": "0000000000001", "rev": 250, "href": "https://exhibitor-001.example.invalid/catalog", "w": "https://exhibitor-001.example.invalid" },
+    { "id": "SYN002", "n": "Synthetic Near Target", "s": "A-02", "ru": 1, "t": 0, "nt": 1, "href": "https://exhibitor-002.example.invalid/catalog" },
+    { "id": "SYN003", "n": "Synthetic Not Target", "s": "A-03", "ru": 1, "t": 0, "nt": 0 },
+    { "id": "SYN004", "n": "Synthetic Unknown Class", "s": "A-04", "ru": 1, "t": 0 },
+    { "id": "SYN005", "n": "Synthetic Unclassified", "s": null, "ru": 1, "t": null, "nt": null }
+  ],
+  "expected": {
+    "counts": { "all": 5, "target": 1, "near_target": 1, "not_target": 1, "unknown": 2 },
+    "namesByClassification": {
+      "target": ["Synthetic Target Works"],
+      "near_target": ["Synthetic Near Target"],
+      "not_target": ["Synthetic Not Target"],
+      "unknown": ["Synthetic Unknown Class", "Synthetic Unclassified"]
+    },
+    "legacyIds": ["SYN001", "SYN002", "SYN003", "SYN004", "SYN005"],
+    "privateFields": ["contact001@example.invalid", "+7 000 000-00-01", "Synthetic Director 001", "Synthetic product summary"]
+  }
+}

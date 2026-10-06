@@ -8,6 +8,8 @@ import { join } from "node:path";
 import { createServer } from "node:net";
 import { captureLegacyCatalogs, restoreLegacyCatalogsLocal, verifyLegacyCatalogBackup,
   parseLegacyExHtml } from "../src/private-legacy-handoff.js";
+import { projectLegacyExSnapshot } from "../src/legacy-ex-snapshot.js";
+import { renderBuiltCatalogBrowser } from "../src/built-catalog-browser.js";
 
 const wrangler = new URL("../node_modules/wrangler/bin/wrangler.js", import.meta.url).pathname;
 const node = process.env.CRM_S04_WRANGLER_NODE || process.execPath;
@@ -54,6 +56,78 @@ async function call(base, path, body, { profile = "demo-profile-a", approval = f
 }
 
 const sha256 = value => createHash("sha256").update(value).digest("hex");
+
+test("synthetic current legacy catalog preserves classification, identity, filters and privacy through D1 and browser", async () => {
+  const root = mkdtempSync(join(tmpdir(), "crm-legacy-semantic-golden-"));
+  let worker;
+  const golden = JSON.parse(readFileSync(new URL("./fixtures/legacy-ex-semantic-golden.synthetic.json", import.meta.url)));
+  const html = Buffer.from(`<!doctype html><script>const EVENT_KEY = '${golden.eventKey}';\nconst EX = ${JSON.stringify(golden.rows.map((row, index) => ({
+    ...row, c: "Synthetic City", b: "Synthetic product summary", p: `+7 000 000-00-0${index + 1}`,
+    e: `contact00${index + 1}@example.invalid`, dir: "Synthetic Director 001" }))) };\n</script>`);
+  const parsed = parseLegacyExHtml(html);
+  assert.equal(parsed.eventKey, golden.eventKey);
+  const projected = projectLegacyExSnapshot({ profileRef: "demo-profile-a", ...parsed });
+  assert.equal(projected.status, "projected");
+  const expectedNames = Object.fromEntries(Object.entries(golden.expected.namesByClassification)
+    .map(([classification, names]) => [classification, [...names].sort()]));
+  const actualNames = Object.fromEntries(Object.keys(expectedNames).map(classification => [classification,
+    projected.build.artifact.companies.filter(company => company.qualification.classification === classification)
+      .map(company => company.name).sort()]));
+  assert.deepEqual(actualNames, expectedNames, "old EX flags map to the reviewed domain classifications");
+  assert.equal(projected.build.artifact.companies.length, golden.expected.counts.all);
+
+  try {
+    for (const migration of ["migrations/0001_s04_domain.sql", "migrations/0002_built_catalog.sql",
+      "migrations/0003_weeek_deal_identity.sql", "migrations/0004_legacy_catalog_refs.sql"]) {
+      const applied = spawnSync(node, [wrangler, "d1", "execute", "CRM_DB", "--config", config,
+        "--local", "--persist-to", root, "--file", migration, "--yes", "--json"], { cwd, encoding: "utf8" });
+      assert.equal(applied.status, 0, applied.stderr || applied.stdout);
+    }
+    worker = await startWorker(root);
+    const imported = await call(worker.base, "/catalog/import-legacy", { eventKey: parsed.eventKey, entries: parsed.entries });
+    assert.equal(imported.status, 201, JSON.stringify(imported.body));
+    assert.equal(imported.body.sourceRevision, projected.build.artifact.sourceRevision);
+    const all = await call(worker.base, "/catalog/read", { buildId: imported.body.buildId });
+    assert.equal(all.status, 200);
+    assert.equal(all.body.items.length, golden.expected.counts.all);
+    const identities = new Map(projected.legacyRefs.map(ref => [ref.legacyId, ref.companyId]));
+    assert.deepEqual(all.body.items.map(item => item.id).sort(), [...identities.values()].sort());
+    for (const [classification, expectedCount] of Object.entries(golden.expected.counts)) {
+      if (classification === "all") continue;
+      const filtered = await call(worker.base, "/catalog/read", { buildId: imported.body.buildId, classification });
+      assert.equal(filtered.status, 200);
+      assert.equal(filtered.body.items.length, expectedCount, `filter ${classification}`);
+      assert.deepEqual(filtered.body.items.map(item => item.qualification.classification),
+        Array(expectedCount).fill(classification));
+    }
+    for (const legacyId of golden.expected.legacyIds) {
+      const link = await call(worker.base, "/catalog/resolve-legacy", { eventKey: parsed.eventKey, legacyId });
+      assert.equal(link.status, 200, legacyId);
+      assert.equal(link.body.companyId, identities.get(legacyId), legacyId);
+    }
+    const browser = renderBuiltCatalogBrowser(all.body);
+    assert.match(browser, /Synthetic Target Works/);
+    assert.match(browser, /<form method="get" action="\/catalogs\//);
+    assert.match(browser, /<select name="classification">[\s\S]*<option value="target">/);
+    const targetBrowser = renderBuiltCatalogBrowser((await call(worker.base, "/catalog/read", {
+      buildId: imported.body.buildId, classification: "target" })).body, { classification: "target" });
+    assert.match(targetBrowser, /<option value="target" selected>/);
+    assert.match(targetBrowser, /Найдено: 1/);
+    const detail = await call(worker.base, "/catalog/read", { buildId: imported.body.buildId,
+      companyId: identities.get("SYN001") });
+    const card = renderBuiltCatalogBrowser(detail.body, { companyId: identities.get("SYN001") });
+    assert.match(card, /https:\/\/exhibitor-001\.example\.invalid\/catalog/);
+    for (const privateValue of golden.expected.privateFields) {
+      assert.equal(JSON.stringify(projected.build).includes(privateValue), false, `projector leaked ${privateValue}`);
+      assert.equal(JSON.stringify(all.body).includes(privateValue), false, `D1/API leaked ${privateValue}`);
+      assert.equal(browser.includes(privateValue), false, `browser leaked ${privateValue}`);
+      assert.equal(card.includes(privateValue), false, `detail leaked ${privateValue}`);
+    }
+  } finally {
+    if (worker) await stopWorker(worker.child);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("reviewed legacy projection persists through local D1 Worker with exact refs and replay", async () => {
   const root = mkdtempSync(join(tmpdir(), "crm-reviewed-import-d1-"));
