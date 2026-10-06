@@ -65,6 +65,24 @@ export function createBuiltCatalogD1HttpHandler({ db, enabled = false, provider,
     const authorize = (scope) => context.scopes.includes(scope) ? null : reply(403, { error: "required_scope_missing" });
     const malformedQuery = () => url.searchParams.size > 0 ? reply(400, { error: "invalid_query" }) : null;
     try {
+      if (path.startsWith("/api/v1/legacy-catalog-links/") && request.method === "GET") {
+        const denied = authorize("crm.catalog.build.read.synthetic"); if (denied) return denied;
+        let eventKey, legacyId;
+        try {
+          const parts = path.slice("/api/v1/legacy-catalog-links/".length).split("/");
+          if (parts.length !== 2) return reply(400, { error: "invalid_legacy_link" });
+          [eventKey, legacyId] = parts.map(decodeURIComponent);
+        } catch { return reply(400, { error: "invalid_legacy_link" }); }
+        const revisions = url.searchParams.getAll("sourceRevision");
+        if ([...url.searchParams.keys()].some((key) => key !== "sourceRevision") || revisions.length !== 1 ||
+            !/^legacy-ex-sha256-[a-f0-9]{64}$/.test(revisions[0]))
+          return reply(400, { error: "source_revision_required" });
+        const result = await built.catalogBuilds.resolveLegacyParticipant({ profileRef: context.profileId,
+          eventKey, legacyId, sourceRevision: revisions[0] });
+        return result.status === 200 ? reply(200, { ...result.body,
+          browserPath: `/catalogs/${result.body.buildId}/participants/${result.body.companyId}` })
+          : reply(result.status, result.body);
+      }
       const browserMatch = path.match(/^\/catalogs\/(build-[a-f0-9]{24})(?:\/participants\/(co-[a-f0-9]{20}))?$/);
       if (browserMatch && request.method === "GET") {
         const denied = authorize("crm.catalog.build.read.synthetic"); if (denied) return denied;
