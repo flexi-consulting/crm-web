@@ -59,10 +59,27 @@ test covers import, profile isolation, old-link lookup, a revised snapshot,
 notes and one reviewed fake deal. Removed legacy IDs stop resolving in the
 latest snapshot. This is an opt-in internal import contract; the published
 catalog page and `/api/v1/companies` still use demo data. Real source file
-selection, public URL routing, old notes/deal-status migration, full legacy
-financial/card fields and production approval/profile issuers remain open.
+selection, public URL routing, old notes/deal-status migration and production
+approval/profile issuers remain open. The additive v1.1 catalog contract now
+preserves legacy category, description, segment, revenue/profit RUB values and
+their source years through a separately versioned projection. It converts old
+RUB-million amounts to whole RUB, preserves missing amounts/years as `null`,
+and keeps the original v1.0 artifact shape unchanged. Private `restore-local`
+mapping can explicitly request `artifactVersions: ["1.0.0", "1.1.0"]`; the
+default remains v1.0. Dual restore keeps the existing legacy-ID-to-build links
+for notes/deal workflows while writing a separate profile-scoped v1.1 browse
+artifact. Contact fields are neither projected nor used in the source revision.
 The private capture and local D1 restore procedure, including GCP aggregate
 inventory and quarantine rules, is in [docs/LEGACY-CATALOG-HANDOFF.md](docs/LEGACY-CATALOG-HANDOFF.md).
+
+The v1.1 list and card are served by the profile-scoped `/catalogs/{eventKey}`
+and `/api/v1/catalogs/{eventKey}/entries` handlers when the v1.1 D1 repository
+is mounted. Search covers name/category/country; country, classification,
+revenue and profit filters preserve the old boundaries. The local Worker
+contract restores a synthetic private snapshot to both v1.0 and v1.1 D1 stores,
+replays both receipts without duplication, resolves the v1.0 legacy link, and
+reads the v1.1 page/API after persistence. This is sandbox evidence; it does
+not activate a public production importer, route or real catalog.
 
 `migrations/0002_built_catalog.sql` adds build artifacts, participant membership and build references to the **separate app-owned D1 candidate** created by `0001_s04_domain.sql`. `src/built-catalog-d1.js` persists a validated synthetic build under profile/idempotency key, reads the exact profile-owned participant, binds a stable prelead across rebuilds, and appends a note with D1 replay protection. The existing S-04 D1 repository then reads the same prelead revision and notes for reviewed deal creation. `createDealReviewService` accepts the async D1 participant resolver in its persistent path; its in-memory handler and older demo IDs remain intact.
 
