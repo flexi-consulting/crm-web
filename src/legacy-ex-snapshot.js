@@ -35,7 +35,8 @@ export function projectLegacyExSnapshot({ profileRef, eventKey, entries }) {
     seen.add(row.id);
     if (!text(row.n, 240) || optionalText(row.s, 80) === null && row.s != null && row.s !== "" ||
         ![0, 1].includes(row.t) || ![0, 1].includes(row.nt) || row.t + row.nt > 1 ||
-        ![0, 1].includes(row.ru) || !innOk(row.inn) || !ogrnOk(row.ogrn) ||
+        ![0, 1].includes(row.ru) || row.t === 1 && (row.ru !== 1 || !row.inn) ||
+        !innOk(row.inn) || !ogrnOk(row.ogrn) ||
         money(row.rev) === undefined || url(row.href) === undefined || url(row.w) === undefined)
       return { status: "legacy_record_invalid" };
   }
