@@ -65,5 +65,23 @@ export function prepareApprovedLegacyImport({ packet, manifestSha256, sourceSha2
     profileEvidenceSha256: profileBinding.evidenceSha256,
     reviewerEvidenceSha256: decisions.reviewerEvidenceSha256,
     includedRows: accepted.length, excludedSourceIndexes: excluded,
-    build: projection.build, legacyRefs: projection.legacyRefs };
+    idempotencyKey: projection.idempotencyKey, build: projection.build, legacyRefs: projection.legacyRefs };
+}
+
+// Persistence boundary for the app-owned catalog repository. Callers must
+// provide the separately verified owner/profile and reviewer receipts above.
+export async function importReviewedLegacyExSnapshot({ repository, ...review }) {
+  if (!repository?.saveBuild) return { status: "catalog_repository_required" };
+  const prepared = prepareApprovedLegacyImport(review);
+  if (prepared.status !== "reviewed_projection_ready") return prepared;
+  let saved;
+  try {
+    saved = await repository.saveBuild({ profileRef: prepared.profileId,
+      idempotencyKey: prepared.build.idempotencyKey, build: prepared.build,
+      legacyRefs: prepared.legacyRefs });
+  } catch { return { status: "catalog_storage_unavailable" }; }
+  if (saved?.status !== "stored" && saved?.status !== "replay")
+    return { status: saved?.status === "storage_unavailable" ? "catalog_storage_unavailable" : "catalog_import_conflict" };
+  return { status: saved.status, buildId: saved.buildId, sourceRevision: prepared.build.artifact.sourceRevision,
+    imported: prepared.includedRows, excluded: prepared.excludedSourceIndexes.length };
 }

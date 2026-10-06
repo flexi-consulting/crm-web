@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { prepareApprovedLegacyImport } from "../src/legacy-import-approval.js";
+import { importReviewedLegacyExSnapshot, prepareApprovedLegacyImport } from "../src/legacy-import-approval.js";
 
 const hash = (value) => createHash("sha256").update(value).digest("hex");
 const rows = [
@@ -65,4 +65,29 @@ test("binds decision packet to exact owner, source path, source bytes, and event
   assert.equal(prepareApprovedLegacyImport(args({ sourceSha256: "f".repeat(64) })).status, "source_not_in_review_packet");
   assert.equal(prepareApprovedLegacyImport(args({ sourcePath: "other/catalog.html" })).status, "source_not_in_review_packet");
   assert.equal(prepareApprovedLegacyImport(args({ eventKey: "other-expo" })).status, "source_not_in_review_packet");
+});
+
+test("writes the approved projection through the app-owned repository and reports replay safely", async () => {
+  const calls = [];
+  const repository = { async saveBuild(input) {
+    calls.push(input);
+    return { status: calls.length === 1 ? "stored" : "replay", buildId: input.build.buildId };
+  } };
+  const first = await importReviewedLegacyExSnapshot({ repository, ...args() });
+  const replay = await importReviewedLegacyExSnapshot({ repository, ...args() });
+  assert.equal(first.status, "stored");
+  assert.equal(replay.status, "replay");
+  assert.equal(first.imported, 2);
+  assert.equal(calls[0].profileRef, "profile-01");
+  assert.equal(calls[0].idempotencyKey, calls[1].idempotencyKey);
+  assert.equal(calls[0].build.artifact.sourceRevision, first.sourceRevision);
+  assert.deepEqual(calls[0].legacyRefs, calls[1].legacyRefs);
+});
+
+test("does not call persistence when any source row lacks an approved decision", async () => {
+  let calls = 0;
+  const result = await importReviewedLegacyExSnapshot({ repository: { async saveBuild() { calls++; } },
+    ...args({ decisions: { ...decisions(), rows: decisions().rows.slice(0, 1) } }) });
+  assert.equal(result.status, "row_decision_coverage_invalid");
+  assert.equal(calls, 0);
 });
