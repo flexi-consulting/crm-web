@@ -75,6 +75,32 @@ test("synthetic current legacy catalog preserves classification, identity, filte
       .map(company => company.name).sort()]));
   assert.deepEqual(actualNames, expectedNames, "old EX flags map to the reviewed domain classifications");
   assert.equal(projected.build.artifact.companies.length, golden.expected.counts.all);
+  const legacyMatches = (row, { revenue = "all", profit = "all", query = "" } = {}) => {
+      const inBand = (value, band) => {
+        if (band === "all") return true;
+        if (value == null) return false;
+        return band === "0-100" ? value < 100 : band === "100-1500" ? value >= 100 && value <= 1500 :
+          band === "1500+" ? value > 1500 : band === "loss" ? value < 0 : band === "0-30" ? value >= 0 && value < 30 :
+          band === "30-200" ? value >= 30 && value < 200 : value >= 200;
+      };
+      const search = query.toLowerCase();
+      return inBand(row.rev, revenue) && inBand(row.prof, profit) &&
+        (!search || `${row.n} ${row.cat ?? ""} ${row.country ?? ""}`.toLowerCase().includes(search));
+  };
+    for (const [band, names] of Object.entries(golden.expected.revenueBands)) {
+      if (band === "all") continue;
+      const actual = golden.rows.filter(row => legacyMatches(row, { revenue: band })).map(row => row.n).sort();
+      assert.deepEqual(actual, [...names].sort(), `legacy revenue band ${band}`);
+    }
+    for (const [band, names] of Object.entries(golden.expected.profitBands)) {
+      if (band === "all") continue;
+      const actual = golden.rows.filter(row => legacyMatches(row, { profit: band })).map(row => row.n).sort();
+      assert.deepEqual(actual, [...names].sort(), `legacy profit band ${band}`);
+    }
+    for (const [query, names] of Object.entries(golden.expected.search)) {
+      const actual = golden.rows.filter(row => legacyMatches(row, { query })).map(row => row.n).sort();
+      assert.deepEqual(actual, [...names].sort(), `legacy search ${query}`);
+    }
 
   try {
     for (const migration of ["migrations/0001_s04_domain.sql", "migrations/0002_built_catalog.sql",
@@ -92,8 +118,8 @@ test("synthetic current legacy catalog preserves classification, identity, filte
     assert.equal(all.body.items.length, golden.expected.counts.all);
     const identities = new Map(projected.legacyRefs.map(ref => [ref.legacyId, ref.companyId]));
     assert.deepEqual(all.body.items.map(item => item.id).sort(), [...identities.values()].sort());
-    for (const [classification, expectedCount] of Object.entries(golden.expected.counts)) {
-      if (classification === "all") continue;
+    for (const classification of ["target", "near_target", "not_target", "unknown"]) {
+      const expectedCount = golden.expected.namesByClassification[classification].length;
       const filtered = await call(worker.base, "/catalog/read", { buildId: imported.body.buildId, classification });
       assert.equal(filtered.status, 200);
       assert.equal(filtered.body.items.length, expectedCount, `filter ${classification}`);
@@ -113,6 +139,13 @@ test("synthetic current legacy catalog preserves classification, identity, filte
       buildId: imported.body.buildId, classification: "target" })).body, { classification: "target" });
     assert.match(targetBrowser, /<option value="target" selected>/);
     assert.match(targetBrowser, /Найдено: 1/);
+    const missingMigrationFields = ["profitRub", "revenueYear", "profitYear", "category", "description"]
+      .filter(key => !(key in all.body.items[0].enrichment) && !(key in all.body.items[0].source));
+    assert.deepEqual(missingMigrationFields, ["profitRub", "revenueYear", "profitYear", "category", "description"],
+      "current API omits fields needed for legacy filter/display parity; tracked in CRM issue #3");
+    assert.equal(golden.expected.revenueBands["0-100"].length, 1);
+    assert.equal(golden.expected.profitBands.loss.length, 1);
+    assert.equal(golden.expected.search.apparel.length, 1);
     const detail = await call(worker.base, "/catalog/read", { buildId: imported.body.buildId,
       companyId: identities.get("SYN001") });
     const card = renderBuiltCatalogBrowser(detail.body, { companyId: identities.get("SYN001") });
