@@ -77,11 +77,15 @@ export async function importReviewedLegacyExSnapshot({ repository, ...review }) 
   let saved;
   try {
     saved = await repository.saveBuild({ profileRef: prepared.profileId,
-      idempotencyKey: prepared.build.idempotencyKey, build: prepared.build,
+      idempotencyKey: prepared.idempotencyKey, build: prepared.build,
       legacyRefs: prepared.legacyRefs });
   } catch { return { status: "catalog_storage_unavailable" }; }
-  if (saved?.status !== "stored" && saved?.status !== "replay")
-    return { status: saved?.status === "storage_unavailable" ? "catalog_storage_unavailable" : "catalog_import_conflict" };
+  if (saved?.status !== "stored" && saved?.status !== "replay") {
+    if (saved?.status === "storage_unavailable") return { status: "catalog_storage_unavailable" };
+    if (saved?.status === "invalid_build") return { status: "catalog_projection_invalid" };
+    if (saved?.status === "invalid_legacy_refs") return { status: "legacy_reference_conflict" };
+    return { status: "catalog_import_conflict" };
+  }
   return { status: saved.status, buildId: saved.buildId, sourceRevision: prepared.build.artifact.sourceRevision,
     imported: prepared.includedRows, excluded: prepared.excludedSourceIndexes.length };
 }

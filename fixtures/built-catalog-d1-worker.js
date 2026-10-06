@@ -6,6 +6,7 @@ import { createDealReviewService } from "../src/deal-reviews.js";
 import { importLegacyExSnapshot, importLegacyExSnapshotV11 } from "../src/legacy-ex-snapshot.js";
 import { createCatalogV11D1Repository, createCatalogV11ReadHandler,
   createCatalogV11SearchHandler } from "../src/catalog-query-v11.js";
+import { importReviewedLegacyExSnapshot } from "../src/legacy-import-approval.js";
 
 const now = "2026-10-06T09:00:00.000Z";
 let providerCalls = 0;
@@ -60,6 +61,14 @@ export default {
       if (path === "/catalog/import-legacy-v11") {
         result = await importLegacyExSnapshotV11({ repository: catalogV11, profileRef: profileId,
           eventKey: args.eventKey, entries: args.entries });
+        return respond(result.status === "stored" ? 201 : result.status === "replay" ? 200 : 422, result);
+      }
+      if (path === "/catalog/import-reviewed-legacy") {
+        const { sourceBytesBase64, ...review } = args;
+        let sourceBytes;
+        try { sourceBytes = Buffer.from(sourceBytesBase64, "base64"); }
+        catch { return respond(400, { error: "invalid_source_bytes" }); }
+        result = await importReviewedLegacyExSnapshot({ repository: built, ...review, sourceBytes });
         return respond(result.status === "stored" ? 201 : result.status === "replay" ? 200 : 422, result);
       }
       if (path === "/catalog/resolve-legacy") result = await built.resolveLegacyParticipant({
