@@ -16,7 +16,7 @@ const READ_ROUTES = [
 const json = (status, error) => new Response(JSON.stringify({ error }), { status,
   headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
 
-function activeIdentity(value, issuer, nowSeconds) {
+export function activeIdentity(value, issuer, nowSeconds) {
   if (!value || Object.keys(value).sort().join(",") !==
     "active,aud,exp,iss,nbf,profileId,scopes,sessionId,sub" || value.active !== true ||
     value.iss !== issuer || value.aud !== AUDIENCE ||

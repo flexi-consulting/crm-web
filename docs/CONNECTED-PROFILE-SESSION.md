@@ -8,6 +8,12 @@ The visible S-01 routes are `GET /catalogs/{buildId}`, its participant card, and
 
 ## Remaining integration gates
 
+### Opt-in browser BFF contract
+
+`src/connected-browser-bff.js` adds an opt-in Fetch handler over the read adapter. It follows the Control Plane #70 first-party authorization-code profile: fixed HTTPS issuer and callback, server-side `state` and PKCE S256 verifier, single-use pending transaction, code exchange with the CRM service credential, fresh introspection and an opaque `HttpOnly; Secure` app cookie. The exchanged token stays in the injected server-side store; browser requests cannot supply a bearer or profile. Browser reads enter the existing S-01/S-04 read boundary, which validates introspection on every request. Profile switch or revocation invalidates later reads; introspection outage gives 503. Logout requires a same-origin request and CSRF token from the authenticated session endpoint, and does not depend on Control Plane availability. The callback returns to one fixed origin, never to a browser-supplied URL. Redirects on service calls are disabled.
+
+The included memory store is a disposable test fixture. A deployed Worker needs an atomic, durable pending/session store, a real registered CRM credential and exact redirect, the Control Plane platform-session resolver, and an ingress that strips authorization codes and bearer values from logs. This PR does not mount the BFF, enable the flag, import private catalogs or authorize deal writes. A live two-profile acceptance test remains required.
+
 - A real Control Plane issuer/introspection service with registered CRM service authentication, one-time browser handoff and live session/profile revocation.
 - A reviewed old `USER_ID` → agent principal/profile authority export. The current private CRM audit has no approved bindings, so no real catalog or note may be assigned by path/name coincidence.
 - A final private source delta and catalog/notes import with profile and source-revision receipts before any old link routes are switched.

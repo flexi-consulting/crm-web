@@ -2,6 +2,11 @@
 
 ## Connected profile session read adapter
 
+An opt-in Fetch browser BFF for the same read routes is in
+[`src/connected-browser-bff.js`](src/connected-browser-bff.js). It implements the first-party
+Control Plane code+PKCE handoff with an injected durable-store port and fixed HTTPS origins.
+It is unmounted by default; the included memory store is only for disposable tests.
+
 An opt-in, read-only consumer of the Control Plane connected-app identity v1 contract is in
 [`src/connected-profile-session.js`](src/connected-profile-session.js). It uses per-request introspection
 for the selected agent profile and exposes S-01 catalog reads and S-04 deal status reads only.
