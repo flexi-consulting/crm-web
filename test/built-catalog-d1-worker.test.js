@@ -2,10 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:net";
+import { captureLegacyCatalogs, restoreLegacyCatalogsLocal } from "../src/private-legacy-handoff.js";
 
 const wrangler = new URL("../node_modules/wrangler/bin/wrangler.js", import.meta.url).pathname;
 const node = process.env.CRM_S04_WRANGLER_NODE || process.execPath;
@@ -144,6 +145,54 @@ test("D1 built catalog, stable prelead/note and reviewed deal survive three Work
     const afterDeal = await call(worker.base, "/catalog/bind", { buildId: rebuilt.body.buildId, companyId });
     assert.equal(afterDeal.status, 200);
     assert.equal(afterDeal.body.prelead.disposition, "deal");
+  } finally {
+    if (worker) await stopWorker(worker.child);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("private byte receipt and explicit mapping restore one invented EX catalog to local D1", async () => {
+  const root = mkdtempSync(join(tmpdir(), "crm-private-d1-"));
+  let worker;
+  try {
+    const sourceRoot = join(root, "source-users");
+    const data = join(sourceRoot, "invented-source-profile", "projects", "invented-project", "data");
+    const deployed = join(sourceRoot, "invented-source-profile", "projects", "invented-project",
+      "deploy", "demo-expo-001");
+    mkdirSync(data, { recursive: true }); mkdirSync(deployed, { recursive: true });
+    const entries = [{ id: "EX001", n: "Invented Local D1 Participant", s: "B-01",
+      t: 1, nt: 0, inn: "0000000001", ogrn: "0000000000001", ru: 1, rev: 200 }];
+    writeFileSync(join(deployed, "index.html"),
+      `<script>const EX = ${JSON.stringify(entries)};const EVENT_KEY = 'demo-expo-001';</script>`);
+    writeFileSync(join(data, "enriched.json"), JSON.stringify([{ n: "Invented input" }]));
+    const backup = join(root, "private-backup");
+    assert.equal((await captureLegacyCatalogs({ sourceRoot, outputDir: backup })).files, 2);
+    const manifest = JSON.parse(readFileSync(join(backup, "manifest.json"), "utf8"));
+    const catalog = manifest.records.find((item) => item.kind === "deployed_html");
+    const mappingFile = join(root, "private-mapping.json");
+    writeFileSync(mappingFile, JSON.stringify({ version: 1, catalogs: [{
+      sourcePath: catalog.sourcePath, sourceSha256: catalog.objectSha256,
+      profileRef: "demo-profile-a", eventKey: "demo-expo-001", resolutions: {}
+    }] }));
+    const db = join(root, "d1");
+    for (const migration of ["migrations/0001_s04_domain.sql", "migrations/0002_built_catalog.sql",
+      "migrations/0003_weeek_deal_identity.sql", "migrations/0004_legacy_catalog_refs.sql"]) {
+      const applied = spawnSync(node, [wrangler, "d1", "execute", "CRM_DB", "--config", config,
+        "--local", "--persist-to", db, "--file", migration, "--yes", "--json"], { cwd, encoding: "utf8" });
+      assert.equal(applied.status, 0, applied.stderr || applied.stdout);
+    }
+    worker = await startWorker(db);
+    const receipts = await restoreLegacyCatalogsLocal({ backupDir: backup,
+      mappingFile, endpoint: `${worker.base}/` });
+    assert.equal(receipts.length, 1);
+    assert.equal(receipts[0].status, "stored");
+    const replay = await restoreLegacyCatalogsLocal({ backupDir: backup,
+      mappingFile, endpoint: `${worker.base}/` });
+    assert.equal(replay[0].status, "replay");
+    const linked = await call(worker.base, "/catalog/resolve-legacy",
+      { eventKey: "demo-expo-001", legacyId: "EX001" });
+    assert.equal(linked.status, 200);
+    assert.equal(linked.body.buildId, receipts[0].buildId);
   } finally {
     if (worker) await stopWorker(worker.child);
     rmSync(root, { recursive: true, force: true });

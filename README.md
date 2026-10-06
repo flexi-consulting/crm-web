@@ -46,6 +46,8 @@ latest snapshot. This is an opt-in internal import contract; the published
 catalog page and `/api/v1/companies` still use demo data. Real source file
 selection, public URL routing, old notes/deal-status migration, full legacy
 financial/card fields and production approval/profile issuers remain open.
+The private capture and local D1 restore procedure, including GCP aggregate
+inventory and quarantine rules, is in [docs/LEGACY-CATALOG-HANDOFF.md](docs/LEGACY-CATALOG-HANDOFF.md).
 
 `migrations/0002_built_catalog.sql` adds build artifacts, participant membership and build references to the **separate app-owned D1 candidate** created by `0001_s04_domain.sql`. `src/built-catalog-d1.js` persists a validated synthetic build under profile/idempotency key, reads the exact profile-owned participant, binds a stable prelead across rebuilds, and appends a note with D1 replay protection. The existing S-04 D1 repository then reads the same prelead revision and notes for reviewed deal creation. `createDealReviewService` accepts the async D1 participant resolver in its persistent path; its in-memory handler and older demo IDs remain intact.
 
