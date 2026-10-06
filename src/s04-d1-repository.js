@@ -21,6 +21,9 @@ export function createS04D1Repository(db) {
     const events = await db.prepare(`SELECT kind, payload_json FROM s04_prelead_events
       WHERE prelead_id = ? AND profile_ref = ? ORDER BY sequence`)
       .bind(row.prelead_id, profileRef).all();
+    const kinds = (events.results ?? []).map((event) => event.kind);
+    if ([...kinds].reverse().find((kind) =>
+      kind === "rejection_added" || kind === "rejection_undone") === "rejection_added") return null;
     const notes = (events.results ?? []).filter((event) => event.kind === "note_added")
       .map((event) => { try { return JSON.parse(event.payload_json).noteText; } catch { return null; } })
       .filter((note) => typeof note === "string" && note.length > 0);

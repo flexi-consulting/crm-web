@@ -159,6 +159,62 @@ export function createBuiltCatalogD1Repository(db, now = () => new Date().toISOS
     return { status: owned ? 503 : 404, body: { error: owned ? "prelead_storage_unavailable" : "prelead_not_found" } };
   }
 
+  async function appendDisposition({ profileRef, preleadId: id, request }) {
+    if (!/^built-prelead-[a-f0-9]{24}$/.test(id) || !/^op-[0-9a-f-]{36}$/.test(request?.operationId ?? "") ||
+        !["rejection_added", "rejection_undone"].includes(request?.type))
+      return { status: 400, body: { error: "invalid_disposition" } };
+    const rejection = request.type === "rejection_added";
+    if (rejection ? typeof request.reason !== "string" || !request.reason.trim() ||
+        [...request.reason.trim()].length > 300 : !/^evt-[0-9a-f-]{36}$/.test(request.targetEventId ?? ""))
+      return { status: 400, body: { error: "invalid_disposition" } };
+    const payload = rejection ? { reason: request.reason.trim() } : { targetEventId: request.targetEventId };
+    const payloadJson = JSON.stringify(payload);
+    const eventId = `evt-${sha(JSON.stringify([id, request.operationId])).slice(0, 36)}`;
+    const latest = `(SELECT kind FROM s04_prelead_events e WHERE e.prelead_id = p.prelead_id
+      AND e.kind IN ('rejection_added','rejection_undone') ORDER BY e.sequence DESC LIMIT 1)`;
+    const condition = rejection ? `COALESCE(${latest}, '') <> 'rejection_added'` :
+      `EXISTS (SELECT 1 FROM s04_prelead_events e WHERE e.prelead_id = p.prelead_id
+        AND e.event_id = ? AND e.kind = 'rejection_added' AND e.sequence =
+        (SELECT MAX(sequence) FROM s04_prelead_events WHERE prelead_id = p.prelead_id
+          AND kind IN ('rejection_added','rejection_undone')))`;
+    try {
+      const [insert] = await db.batch([
+        db.prepare(`INSERT INTO s04_prelead_events
+          (event_id, prelead_id, profile_ref, operation_id, sequence, kind, payload_json, created_at)
+          SELECT ?, p.prelead_id, p.profile_ref, ?, p.revision + 1, ?, ?, ?
+          FROM s04_preleads p WHERE p.prelead_id = ? AND p.profile_ref = ?
+          AND NOT EXISTS (SELECT 1 FROM s04_prelead_events d WHERE d.prelead_id = p.prelead_id AND d.kind = 'deal_linked')
+          AND NOT EXISTS (SELECT 1 FROM s04_deal_operations o WHERE o.prelead_id = p.prelead_id
+            AND o.status IN ('unknown','created'))
+          AND ${condition}`)
+          .bind(eventId, request.operationId, request.type, payloadJson, now(), id, profileRef,
+            ...(rejection ? [] : [request.targetEventId])),
+        db.prepare(`UPDATE s04_preleads SET revision = revision + 1
+          WHERE prelead_id = ? AND profile_ref = ? AND EXISTS
+          (SELECT 1 FROM s04_prelead_events WHERE event_id = ? AND prelead_id = ?)`)
+          .bind(id, profileRef, eventId, id)
+      ]);
+      if (changed(insert)) return { status: 201, body: { eventId, operationId: request.operationId,
+        type: request.type, payload, replayed: false } };
+    } catch {}
+    const existing = await db.prepare(`SELECT event_id, kind, payload_json FROM s04_prelead_events
+      WHERE prelead_id = ? AND profile_ref = ? AND operation_id = ?`)
+      .bind(id, profileRef, request.operationId).first();
+    if (existing) return existing.kind === request.type && existing.payload_json === payloadJson
+      ? { status: 200, body: { eventId: existing.event_id, operationId: request.operationId,
+        type: request.type, payload, replayed: true } }
+      : { status: 409, body: { error: "idempotency_conflict" } };
+    const prelead = await db.prepare("SELECT prelead_id FROM s04_preleads WHERE prelead_id = ? AND profile_ref = ?")
+      .bind(id, profileRef).first();
+    if (!prelead) return { status: 404, body: { error: "prelead_not_found" } };
+    const deal = await db.prepare("SELECT event_id FROM s04_prelead_events WHERE prelead_id = ? AND kind = 'deal_linked'")
+      .bind(id).first();
+    const operation = await db.prepare(`SELECT operation_id FROM s04_deal_operations
+      WHERE prelead_id = ? AND status IN ('unknown','created') LIMIT 1`).bind(id).first();
+    if (deal || operation) return { status: 409, body: { error: "prelead_deal_conflict" } };
+    return { status: 409, body: { error: rejection ? "prelead_already_rejected" : "undo_not_applicable" } };
+  }
+
   async function getTimeline({ profileRef, preleadId: id }) {
     const prelead = await db.prepare(`SELECT prelead_id, event_id, company_id, revision FROM s04_preleads
       WHERE prelead_id = ? AND profile_ref = ?`).bind(id, profileRef).first();
@@ -200,5 +256,6 @@ export function createBuiltCatalogD1Repository(db, now = () => new Date().toISOS
     return bound && exhibition ? { company: selected.body.items[0], exhibition, buildId, preleadId: id } : null;
   }
 
-  return { saveBuild, getBuild, getBuildByKey, readParticipants, ensurePrelead, appendNote, getTimeline, resolve };
+  return { saveBuild, getBuild, getBuildByKey, readParticipants, ensurePrelead,
+    appendNote, appendDisposition, getTimeline, resolve };
 }

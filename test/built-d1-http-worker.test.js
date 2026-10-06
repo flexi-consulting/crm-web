@@ -66,7 +66,8 @@ const draftFor = (buildId, companyId, title = "HTTP durable deal") => ({ buildId
 async function schemas() {
   const ajv = new Ajv(); addFormats(ajv);
   for (const name of ["built-participants-input", "built-participants-output", "s03-built-timeline-input",
-    "s03-built-note-input", "s04-review-input", "s04-create-input", "s04-operation-input",
+    "s03-built-note-input", "s03-built-reject-input", "s03-built-undo-input",
+    "s04-review-input", "s04-create-input", "s04-operation-input",
     "prelead-event-response", "prelead-timeline-event", "prelead-timeline-response",
     "s04-review-output", "synthetic-deal-operation"]) {
     ajv.addSchema(JSON.parse(await readFile(new URL(`../schemas/${name}.schema.json`, import.meta.url))));
@@ -99,7 +100,8 @@ test("opt-in public-shaped D1 HTTP routes and offline MCP share one durable S01/
     assert.deepEqual(mcpList.body.result.structuredContent, list.body);
     const tools = await request(worker.base, "POST", "/__offline-mcp", { method: "tools/list" });
     assert.deepEqual(tools.body.result.tools.map((item) => item.name).sort(), [
-      "crm_built_catalog_participants_read", "crm_built_prelead_note_add", "crm_built_prelead_timeline_read",
+      "crm_built_catalog_participants_read", "crm_built_prelead_note_add", "crm_built_prelead_reject",
+      "crm_built_prelead_rejection_undo", "crm_built_prelead_timeline_read",
       "crm_deal_create_from_participant", "crm_deal_get_operation", "crm_deal_prepare_from_participant",
       "crm_deal_reconcile_operation", "crm_deal_repair_catalog_link"
     ].sort());
@@ -130,10 +132,35 @@ test("opt-in public-shaped D1 HTTP routes and offline MCP share one durable S01/
       { type: "note_added", operationId: noteOperationId, noteText: "HTTP synthetic interest" })).status, 200);
     assert.equal((await request(worker.base, "POST", `/api/v1/preleads/${preleadId}/events`,
       { type: "note_added", operationId: noteOperationId, noteText: "Changed" })).status, 409);
-    const unsupported = await request(worker.base, "POST", `/api/v1/preleads/${preleadId}/events`,
-      { type: "rejection_added", operationId: `op-${randomUUID()}`, reason: "Synthetic refusal" });
-    assert.equal(unsupported.status, 422);
-    assert.equal(unsupported.body.error, "event_type_not_available_on_d1");
+    const rejectArgs = { type: "rejection_added", operationId: `op-${randomUUID()}`,
+      reason: "Synthetic refusal" };
+    const rejected = await request(worker.base, "POST", `/api/v1/preleads/${preleadId}/events`, rejectArgs);
+    assert.equal(rejected.status, 201, JSON.stringify(rejected.body));
+    validate("prelead-event-response", rejected.body);
+    assert.equal(rejected.body.prelead.disposition, "rejected");
+    assert.equal((await request(worker.base, "POST", `/api/v1/preleads/${preleadId}/events`, rejectArgs)).status, 200);
+    assert.equal((await request(worker.base, "POST", `/api/v1/preleads/${preleadId}/events`,
+      { ...rejectArgs, reason: "Changed" })).status, 409);
+    assert.equal((await request(worker.base, "POST", `/api/v1/preleads/${preleadId}/events`,
+      { type: "rejection_added", operationId: `op-${randomUUID()}`, reason: "Second rejection" })).status, 409);
+    assert.equal((await request(worker.base, "POST", `/api/v1/preleads/${preleadId}/events`,
+      rejectArgs, { profile: "demo-profile-b" })).status, 404);
+    assert.equal((await request(worker.base, "POST", "/api/v1/deal-reviews",
+      draftFor(buildId, company.id))).status, 404);
+    const undoArgs = { preleadId, operationId: `op-${randomUUID()}`,
+      targetEventId: rejected.body.event.eventId };
+    validate("s03-built-undo-input", undoArgs);
+    const undone = await request(worker.base, "POST", "/__offline-mcp", { contract: "s03",
+      name: "crm_built_prelead_rejection_undo", arguments: undoArgs });
+    assert.equal(undone.status, 200, JSON.stringify(undone.body));
+    validate("prelead-event-response", undone.body.result.structuredContent);
+    assert.equal(undone.body.result.structuredContent.prelead.disposition, "active");
+    const undoReplay = await request(worker.base, "POST", "/__offline-mcp", { contract: "s03",
+      name: "crm_built_prelead_rejection_undo", arguments: undoArgs });
+    assert.equal(undoReplay.body.result.structuredContent.replayed, true);
+    assert.equal((await request(worker.base, "POST", `/api/v1/preleads/${preleadId}/events`,
+      { type: "rejection_undone", operationId: `op-${randomUUID()}`,
+        targetEventId: rejected.body.event.eventId })).status, 409);
     await stop(worker.child);
 
     worker = await start(root);
@@ -150,7 +177,8 @@ test("opt-in public-shaped D1 HTTP routes and offline MCP share one durable S01/
     assert.equal((await request(worker.base, "POST", "/api/v1/catalog-builds", { exhibitionId: "demo-expo-002" },
       { key: "http-durable-build-a" })).status, 409);
     validate("prelead-timeline-response", recovered.body);
-    assert.deepEqual(recovered.body.events.map((event) => event.payload.noteText), ["HTTP synthetic interest"]);
+    assert.deepEqual(recovered.body.events.filter((event) => event.type === "note_added")
+      .map((event) => event.payload.noteText), ["HTTP synthetic interest"]);
     const mcpTimeline = await request(worker.base, "POST", "/__offline-mcp", { contract: "s03",
       name: "crm_built_prelead_timeline_read", arguments: { preleadId } });
     validate("s03-built-timeline-input", { preleadId });
@@ -197,7 +225,8 @@ test("opt-in public-shaped D1 HTTP routes and offline MCP share one durable S01/
     assert.equal(mcpOperation.body.result.structuredContent.dealId, confirmed.body.dealId);
     const timeline = await request(worker.base, "GET", `/api/v1/preleads/${preleadId}/timeline`);
     validate("prelead-timeline-response", timeline.body);
-    assert.deepEqual(timeline.body.events.map((event) => event.type), ["note_added", "note_added", "deal_linked"]);
+    assert.deepEqual(timeline.body.events.map((event) => event.type),
+      ["note_added", "rejection_added", "rejection_undone", "note_added", "deal_linked"]);
     assert.equal(timeline.body.prelead.disposition, "deal");
     await stop(worker.child);
 
@@ -222,6 +251,46 @@ test("the opt-in D1 HTTP and offline MCP modules have no Agent Run launch depend
   }
 });
 
+test("a rejection invalidates a prepared deal review until undo and a new review", async () => {
+  const root = mkdtempSync(join(tmpdir(), "crm-built-disposition-stale-"));
+  let worker;
+  try {
+    migrate(root); worker = await start(root);
+    const built = await request(worker.base, "POST", "/api/v1/catalog-builds",
+      { exhibitionId: "demo-expo-001" }, { key: "disposition-stale-build" });
+    assert.equal(built.status, 201);
+    const list = await request(worker.base, "GET",
+      `/api/v1/catalog-builds/${built.body.buildId}/participants?classification=target`);
+    const company = list.body.items[0];
+    const bound = await request(worker.base, "POST", `${company.detailPath}/prelead`, {});
+    const id = bound.body.prelead.id;
+    const oldReview = await request(worker.base, "POST", "/api/v1/deal-reviews",
+      draftFor(built.body.buildId, company.id));
+    assert.equal(oldReview.status, 201);
+    const rejected = await request(worker.base, "POST", `/api/v1/preleads/${id}/events`,
+      { type: "rejection_added", operationId: `op-${randomUUID()}`, reason: "Synthetic mismatch" });
+    assert.equal(rejected.status, 201);
+    assert.equal((await request(worker.base, "POST", `/api/v1/deal-reviews/${oldReview.body.reviewId}/confirm`,
+      { revision: oldReview.body.revision }, { approval: true })).status, 409);
+    const undone = await request(worker.base, "POST", `/api/v1/preleads/${id}/events`,
+      { type: "rejection_undone", operationId: `op-${randomUUID()}`,
+        targetEventId: rejected.body.event.eventId });
+    assert.equal(undone.status, 201);
+    assert.equal((await request(worker.base, "POST", `/api/v1/deal-reviews/${oldReview.body.reviewId}/confirm`,
+      { revision: oldReview.body.revision }, { approval: true })).status, 409);
+    const freshReview = await request(worker.base, "POST", "/api/v1/deal-reviews",
+      draftFor(built.body.buildId, company.id));
+    assert.equal(freshReview.status, 201);
+    const confirmed = await request(worker.base, "POST", `/api/v1/deal-reviews/${freshReview.body.reviewId}/confirm`,
+      { revision: freshReview.body.revision }, { approval: true });
+    assert.equal(confirmed.status, 201, JSON.stringify(confirmed.body));
+    assert.equal((await request(worker.base, "GET", "/__provider-count")).body.calls, 1);
+  } finally {
+    if (worker) await stop(worker.child);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("public-shaped D1 unknown outcome remains unknown after restart without another POST", async () => {
   const root = mkdtempSync(join(tmpdir(), "crm-built-http-unknown-"));
   let worker;
@@ -231,7 +300,7 @@ test("public-shaped D1 unknown outcome remains unknown after restart without ano
       { key: "http-unknown-build" });
     const list = await request(worker.base, "GET", `/api/v1/catalog-builds/${built.body.buildId}/participants?classification=target`);
     const companyId = list.body.items[0].id;
-    await request(worker.base, "POST", `/api/v1/catalog-builds/${built.body.buildId}/participants/${companyId}/prelead`, {});
+    const bound = await request(worker.base, "POST", `/api/v1/catalog-builds/${built.body.buildId}/participants/${companyId}/prelead`, {});
     const review = await request(worker.base, "POST", "/api/v1/deal-reviews",
       draftFor(built.body.buildId, companyId, "Unknown HTTP outcome"));
     assert.equal(review.status, 201);
@@ -240,6 +309,11 @@ test("public-shaped D1 unknown outcome remains unknown after restart without ano
     assert.equal(unknown.status, 202);
     assert.equal(unknown.body.status, "unknown");
     assert.equal((await request(worker.base, "GET", "/__provider-count")).body.calls, 1);
+    const rejectedWhileUnknown = await request(worker.base, "POST",
+      `/api/v1/preleads/${bound.body.prelead.id}/events`,
+      { type: "rejection_added", operationId: `op-${randomUUID()}`, reason: "Unresolved provider outcome" });
+    assert.equal(rejectedWhileUnknown.status, 409);
+    assert.equal(rejectedWhileUnknown.body.error, "prelead_deal_conflict");
     await stop(worker.child);
     worker = await start(root);
     const replay = await request(worker.base, "POST", path, { revision: review.body.revision }, { approval: true });

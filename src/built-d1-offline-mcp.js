@@ -4,6 +4,8 @@ import dealDescriptor from "../capabilities/s04-deals.v1.json" with { type: "jso
 import builtInput from "../schemas/built-participants-input.schema.json" with { type: "json" };
 import timelineInput from "../schemas/s03-built-timeline-input.schema.json" with { type: "json" };
 import noteInput from "../schemas/s03-built-note-input.schema.json" with { type: "json" };
+import rejectInput from "../schemas/s03-built-reject-input.schema.json" with { type: "json" };
+import undoInput from "../schemas/s03-built-undo-input.schema.json" with { type: "json" };
 import reviewInput from "../schemas/s04-review-input.schema.json" with { type: "json" };
 import confirmInput from "../schemas/s04-create-input.schema.json" with { type: "json" };
 import operationInput from "../schemas/s04-operation-input.schema.json" with { type: "json" };
@@ -19,6 +21,12 @@ const validTimeline = (args) => exactKeys(args, ["preleadId"]) && /^built-prelea
 const validNote = (args) => exactKeys(args, ["preleadId", "operationId", "noteText"]) &&
   /^built-prelead-[a-f0-9]{24}$/.test(args.preleadId ?? "") && /^op-[0-9a-f-]{36}$/.test(args.operationId ?? "") &&
   typeof args.noteText === "string" && args.noteText.trim().length > 0 && [...args.noteText.trim()].length <= 1000;
+const validReject = (args) => exactKeys(args, ["preleadId", "operationId", "reason"]) &&
+  /^built-prelead-[a-f0-9]{24}$/.test(args.preleadId ?? "") && /^op-[0-9a-f-]{36}$/.test(args.operationId ?? "") &&
+  typeof args.reason === "string" && args.reason.trim().length > 0 && [...args.reason.trim()].length <= 300;
+const validUndo = (args) => exactKeys(args, ["preleadId", "operationId", "targetEventId"]) &&
+  /^built-prelead-[a-f0-9]{24}$/.test(args.preleadId ?? "") && /^op-[0-9a-f-]{36}$/.test(args.operationId ?? "") &&
+  /^evt-[0-9a-f-]{36}$/.test(args.targetEventId ?? "");
 const validConfirm = (args) => exactKeys(args, ["reviewId", "revision"]) &&
   /^review-[0-9a-f-]{36}$/.test(args.reviewId ?? "") && /^[a-f0-9]{64}$/.test(args.revision ?? "");
 const validOperation = (args) => exactKeys(args, ["operationId"]) && /^op-[0-9a-f-]{36}$/.test(args.operationId ?? "");
@@ -26,7 +34,8 @@ const tools = [
   { name: builtDescriptor.mcpTool.name, operation: "built", scope: builtDescriptor.requiredScopes[0], inputSchema: builtInput,
     _meta: { capabilityId: builtDescriptor.capabilityId, capabilityVersion: builtDescriptor.version } },
   ...preleadDescriptor.tools.map((tool) => ({ ...tool,
-    inputSchema: tool.operation === "getTimeline" ? timelineInput : noteInput,
+    inputSchema: tool.operation === "getTimeline" ? timelineInput : tool.operation === "addNote" ? noteInput
+      : tool.operation === "reject" ? rejectInput : undoInput,
     _meta: { capabilityId: preleadDescriptor.capabilityId, capabilityVersion: preleadDescriptor.version } })),
   ...dealDescriptor.tools.map((tool) => ({ ...tool,
     inputSchema: tool.operation === "prepare" ? reviewInput : tool.operation === "confirm" ? confirmInput : operationInput,
@@ -62,6 +71,8 @@ export function createBuiltD1OfflineMcp({ domain, resolveTrustedProfile, resolve
       const valid = tool.operation === "built" ? validBuilt(args)
         : tool.operation === "getTimeline" ? validTimeline(args)
         : tool.operation === "addNote" ? validNote(args)
+        : tool.operation === "reject" ? validReject(args)
+        : tool.operation === "undoRejection" ? validUndo(args)
         : tool.operation === "prepare" ? Boolean(normalizeDealReviewRequest(args))
         : tool.operation === "confirm" ? validConfirm(args) : validOperation(args);
       if (!valid) return reply({ error: { code: -32602, message: "INVALID_ARGUMENTS" } });
@@ -76,6 +87,11 @@ export function createBuiltD1OfflineMcp({ domain, resolveTrustedProfile, resolve
         preleadId: args.preleadId });
       else if (tool.operation === "addNote") result = await domain.preleads.addNote({ profileId: context.profileId,
         preleadId: args.preleadId, request: { type: "note_added", operationId: args.operationId, noteText: args.noteText } });
+      else if (tool.operation === "reject") result = await domain.preleads.addEvent({ profileId: context.profileId,
+        preleadId: args.preleadId, request: { type: "rejection_added", operationId: args.operationId, reason: args.reason } });
+      else if (tool.operation === "undoRejection") result = await domain.preleads.addEvent({ profileId: context.profileId,
+        preleadId: args.preleadId, request: { type: "rejection_undone", operationId: args.operationId,
+          targetEventId: args.targetEventId } });
       else if (tool.operation === "prepare") result = await domain.reviewService.prepare({ profileId: context.profileId, request: args });
       else if (tool.operation === "confirm") {
         let trustedReceipt;

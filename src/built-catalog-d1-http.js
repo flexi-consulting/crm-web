@@ -29,12 +29,13 @@ export function createBuiltCatalogD1Domain({ db, provider, now }) {
     storagePort: repository, participantResolver: catalogBuilds, now });
   const preleads = {
     getTimeline: ({ profileId, preleadId }) => catalogBuilds.getTimeline({ profileRef: profileId, preleadId }),
-    async addNote({ profileId, preleadId, request }) {
+    async addEvent({ profileId, preleadId, request }) {
       const event = normalizePreleadEventRequest(request);
       if (!event) return { status: 400, body: { error: "invalid_event_request" } };
-      if (event.type !== "note_added") return { status: 422, body: { error: "event_type_not_available_on_d1" } };
-      const added = await catalogBuilds.appendNote({ profileRef: profileId, preleadId,
-        operationId: event.operationId, noteText: event.noteText });
+      const added = event.type === "note_added"
+        ? await catalogBuilds.appendNote({ profileRef: profileId, preleadId,
+          operationId: event.operationId, noteText: event.noteText })
+        : await catalogBuilds.appendDisposition({ profileRef: profileId, preleadId, request: event });
       if (added.status >= 400) return added;
       const timeline = await catalogBuilds.getTimeline({ profileRef: profileId, preleadId });
       if (timeline.status !== 200) return { status: 503, body: { error: "prelead_timeline_unavailable" } };
@@ -42,7 +43,8 @@ export function createBuiltCatalogD1Domain({ db, provider, now }) {
       return { status: added.status, body: { domainApiVersion: "1.0.0", prelead: timeline.body.prelead,
         event: saved, operationId: event.operationId, eventCount: timeline.body.events.length,
         replayed: added.status === 200 } };
-    }
+    },
+    async addNote(args) { return this.addEvent(args); }
   };
   return { catalogBuilds, repository, dealService, reviewService, preleads };
 }
@@ -128,7 +130,7 @@ export function createBuiltCatalogD1HttpHandler({ db, enabled = false, provider,
         const denied = authorize("crm.preleads.events.append"); if (denied) return denied;
         const invalidQuery = malformedQuery(); if (invalidQuery) return invalidQuery;
         const parsed = await input(request); if (parsed.error) return reply(parsed.status, { error: parsed.error });
-        const result = await built.preleads.addNote({ profileId: context.profileId,
+        const result = await built.preleads.addEvent({ profileId: context.profileId,
           preleadId: noteMatch[1], request: parsed.value });
         return reply(result.status, result.body);
       }
