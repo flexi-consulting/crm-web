@@ -6,7 +6,9 @@ import { readFile } from "node:fs/promises";
 import { createServer } from "../src/server.js";
 import { createCatalogBuildService, createSyntheticSourceAdapter, createSyntheticEnrichmentAdapter, createSyntheticRegistryAdapter, normalizeEnrichment, normalizeRegistry, qualify } from "../src/catalog-build.js";
 import { renderCatalogPreview } from "../src/catalog-preview.js";
-import { queryCatalogV11, renderCatalogV11, createCatalogV11ReadHandler } from "../src/catalog-query-v11.js";
+import { queryCatalogV11, renderCatalogV11, createCatalogV11ReadHandler,
+  createCatalogV11D1Repository } from "../src/catalog-query-v11.js";
+import initSqlJs from "sql.js";
 
 const scopes = ["crm.catalog.build.synthetic", "crm.catalog.build.read.synthetic", "crm.catalog.preview.synthetic", "crm.catalog.preview.read.synthetic"];
 const headers = (profileId, granted = scopes) => ({ "x-test-profile": profileId, "x-test-scopes": granted.join(" ") });
@@ -157,6 +159,53 @@ test("S-01 v1.1 metadata schema preserves synthetic legacy filter fields with ex
   assert.equal((await fetchHandler("demo-profile-a", "crm.catalog.read", "/catalogs/synthetic-current-source-shape?revenueBand=unsafe")).status, 400);
   assert.equal((await fetchHandler("demo-profile-a", "crm.catalog.read", "/catalogs/synthetic-current-source-shape?query=a&query=b")).status, 400);
   assert.ok(calls.every(scope => scope.profileId !== "demo-profile-b" || scope.exhibitionId === "synthetic-current-source-shape"));
+});
+
+test("S-01 v1.1 D1 repository persists durable profile-scoped artifacts and verifies content hash", async () => {
+  class D1Statement {
+    constructor(db, sql, values = []) { this.db = db; this.sql = sql; this.values = values; }
+    bind(...values) { return new D1Statement(this.db, this.sql, values); }
+    async first() {
+      const statement = this.db.prepare(this.sql);
+      try { statement.bind(this.values); return statement.step() ? statement.getAsObject() : null; }
+      finally { statement.free(); }
+    }
+    async run() { this.db.run(this.sql, this.values); return { meta: { changes: this.db.getRowsModified() } }; }
+  }
+  class LocalD1 { constructor(db) { this.db = db; } prepare(sql) { return new D1Statement(this.db, sql); } }
+  const SQL = await initSqlJs();
+  const db = new SQL.Database();
+  db.run(await readFile(new URL("../migrations/0005_catalog_v11_artifacts.sql", import.meta.url), "utf8"));
+  const repo = createCatalogV11D1Repository(new LocalD1(db), () => "2026-10-06T00:00:00.000Z");
+  const artifact = { schemaVersion: "1.1.0", exhibitionId: "synthetic-current-source-shape",
+    sourceRevision: "synthetic-revision-1", companies: [{ id: "co-0123456789abcdef0123", name: "Synthetic durable row",
+      source: { sourceRecordId: "src-synthetic-durable", country: "Fictionland", booth: null, href: null,
+        category: "Synthetic category", description: null, segment: null, duplicateSourceRecordIds: [] },
+      enrichment: { status: "not_found", inn: null, ogrn: null, revenueRub: null, revenueYear: null,
+        profitRub: null, profitYear: null, activity: "unknown", website: null,
+        provenance: { provider: "synthetic", fixtureRef: "synthetic-durable" } },
+      registry: { status: "unknown", provenance: { source: "synthetic", fixtureRef: "synthetic-durable" } },
+      qualification: { classification: "unknown", target: false, nearTarget: false, reason: "synthetic_unverified" } }] };
+  assert.equal((await repo.saveArtifact({ profileId: "demo-profile-a",
+    artifact: { ...artifact, companies: [{ id: "co-0123456789abcdef0123", name: "incomplete" }] } })).status,
+  "invalid_artifact");
+  assert.equal((await repo.saveArtifact({ profileId: "demo-profile-a", artifact })).status, "stored");
+  assert.equal((await repo.saveArtifact({ profileId: "demo-profile-a", artifact })).status, "replay");
+  assert.deepEqual(await repo.getArtifact({ profileId: "demo-profile-a", exhibitionId: artifact.exhibitionId }), artifact);
+  assert.equal(await repo.getArtifact({ profileId: "demo-profile-b", exhibitionId: artifact.exhibitionId }), null);
+  const revisionTwo = { ...artifact, sourceRevision: "synthetic-revision-2" };
+  assert.equal((await repo.saveArtifact({ profileId: "demo-profile-a", artifact: revisionTwo })).status, "stored");
+  assert.equal((await repo.getArtifact({ profileId: "demo-profile-a", exhibitionId: artifact.exhibitionId })).sourceRevision,
+    "synthetic-revision-2");
+  const persistedHandler = createCatalogV11ReadHandler({ repository: repo,
+    resolveTrustedProfile: async () => ({ profileId: "demo-profile-a", scopes: ["crm.catalog.read"] }) });
+  const page = await persistedHandler(new Request(`https://crm.example.invalid/catalogs/${artifact.exhibitionId}`));
+  assert.equal(page.status, 200);
+  assert.match(await page.text(), /Synthetic durable row/);
+  db.run("UPDATE crm_catalog_v11_artifacts SET artifact_json=? WHERE profile_ref=?",
+    [JSON.stringify({ ...revisionTwo, sourceRevision: "forged" }), "demo-profile-a"]);
+  assert.equal(await repo.getArtifact({ profileId: "demo-profile-a", exhibitionId: artifact.exhibitionId }), null);
+  db.close();
 });
 
 test("build artifacts and reports are deterministic; same key replays without another adapter call", async () => {

@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 const classifications = new Set(["target", "near_target", "not_target", "unknown"]);
 const revenueBands = new Set(["0-100", "100-1500", "1500+"]);
 const profitBands = new Set(["loss", "0-30", "30-200", "200+"]);
@@ -111,4 +113,80 @@ export function createCatalogV11ReadHandler({ repository, resolveTrustedProfile 
       "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
     } });
   };
+}
+
+const sha256 = value => createHash("sha256").update(value).digest("hex");
+const profileRefOk = value => typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value);
+const exactKeys = (value, keys) => value && typeof value === "object" && !Array.isArray(value) &&
+  Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
+const validYear = value => value === null || Number.isInteger(value) && value >= 1900 && value <= 2200;
+function validV11Artifact(artifact) {
+  if (!exactKeys(artifact, ["schemaVersion", "exhibitionId", "sourceRevision", "companies"]) ||
+      artifact.schemaVersion !== "1.1.0" || !/^[a-z0-9][a-z0-9-]{0,79}$/.test(artifact.exhibitionId ?? "") ||
+      typeof artifact.sourceRevision !== "string" || !artifact.sourceRevision ||
+      !Array.isArray(artifact.companies) || artifact.companies.length > 20_000) return false;
+  return artifact.companies.every(company => {
+    if (!exactKeys(company, ["id", "name", "source", "enrichment", "registry", "qualification"]) ||
+        !/^co-[a-f0-9]{20}$/.test(company.id ?? "") || typeof company.name !== "string" || !company.name.trim()) return false;
+    const source = company.source, enrichment = company.enrichment, registry = company.registry, qualification = company.qualification;
+    if (!exactKeys(source, ["sourceRecordId", "country", "booth", "href", "category", "description", "segment", "duplicateSourceRecordIds"]) ||
+        !/^src-[a-z0-9-]{1,48}$/.test(source.sourceRecordId ?? "") || typeof source.country !== "string" || !source.country.trim() ||
+        !(source.booth === null || typeof source.booth === "string" && source.booth.length <= 80) ||
+        !(source.href === null || safeSourceUrl(source.href) === source.href) ||
+        !(source.category === null || typeof source.category === "string" && source.category.length <= 240) ||
+        !(source.description === null || typeof source.description === "string" && source.description.length <= 2000) ||
+        !(source.segment === null || typeof source.segment === "string" && source.segment.length <= 120) ||
+        !Array.isArray(source.duplicateSourceRecordIds) || source.duplicateSourceRecordIds.some(id => !/^src-[a-z0-9-]{1,48}$/.test(id))) return false;
+    if (!exactKeys(enrichment, ["status", "inn", "ogrn", "revenueRub", "revenueYear", "profitRub", "profitYear", "activity", "website", "provenance"]) ||
+        !["found", "not_found", "unavailable"].includes(enrichment.status) ||
+        !(enrichment.inn === null || /^([0-9]{10}|[0-9]{12})$/.test(enrichment.inn)) ||
+        !(enrichment.ogrn === null || /^([0-9]{13}|[0-9]{15})$/.test(enrichment.ogrn)) ||
+        !(enrichment.revenueRub === null || Number.isSafeInteger(enrichment.revenueRub) && enrichment.revenueRub >= 0) ||
+        !validYear(enrichment.revenueYear) ||
+        !(enrichment.profitRub === null || Number.isSafeInteger(enrichment.profitRub)) || !validYear(enrichment.profitYear) ||
+        !["manufacturer", "distributor", "service", "unknown"].includes(enrichment.activity) ||
+        !(enrichment.website === null || safeSourceUrl(enrichment.website) === enrichment.website) ||
+        !exactKeys(enrichment.provenance, ["provider", "fixtureRef"]) ||
+        ![enrichment.provenance.provider, enrichment.provenance.fixtureRef].every(value => typeof value === "string" && value.trim())) return false;
+    if (!exactKeys(registry, ["status", "provenance"]) || !["ok", "sanctioned", "not_found", "inactive", "unknown"].includes(registry.status) ||
+        !exactKeys(registry.provenance, ["source", "fixtureRef"]) ||
+        ![registry.provenance.source, registry.provenance.fixtureRef].every(value => typeof value === "string" && value.trim())) return false;
+    return exactKeys(qualification, ["classification", "target", "nearTarget", "reason"]) &&
+      ["target", "near_target", "not_target", "unknown"].includes(qualification.classification) &&
+      typeof qualification.target === "boolean" && typeof qualification.nearTarget === "boolean" &&
+      typeof qualification.reason === "string";
+  }) && new Set(artifact.companies.map(company => company.id)).size === artifact.companies.length;
+}
+
+export function createCatalogV11D1Repository(db, now = () => new Date().toISOString()) {
+  if (!db?.prepare || typeof now !== "function") throw new TypeError("catalog v1.1 D1 binding required");
+  async function saveArtifact({ profileId, artifact }) {
+    if (!profileRefOk(profileId) || !validV11Artifact(artifact))
+      return { status: "invalid_artifact" };
+    const artifactJson = JSON.stringify(artifact), contentSha = sha256(artifactJson), updatedAt = now();
+    try {
+      const prior = await db.prepare(`SELECT content_sha FROM crm_catalog_v11_artifacts
+        WHERE profile_ref=? AND exhibition_id=?`).bind(profileId, artifact.exhibitionId).first();
+      if (prior?.content_sha === contentSha) return { status: "replay", exhibitionId: artifact.exhibitionId,
+        sourceRevision: artifact.sourceRevision };
+      await db.prepare(`INSERT INTO crm_catalog_v11_artifacts
+        (profile_ref,exhibition_id,source_revision,artifact_json,content_sha,updated_at)
+        VALUES(?,?,?,?,?,?) ON CONFLICT(profile_ref,exhibition_id) DO UPDATE SET
+        source_revision=excluded.source_revision,artifact_json=excluded.artifact_json,
+        content_sha=excluded.content_sha,updated_at=excluded.updated_at`)
+        .bind(profileId, artifact.exhibitionId, artifact.sourceRevision, artifactJson, contentSha, updatedAt).run();
+      return { status: "stored", exhibitionId: artifact.exhibitionId, sourceRevision: artifact.sourceRevision };
+    } catch { return { status: "storage_unavailable" }; }
+  }
+  async function getArtifact({ profileId, exhibitionId }) {
+    if (!profileRefOk(profileId) || !/^[a-z0-9][a-z0-9-]{0,79}$/.test(exhibitionId ?? "")) return null;
+    try {
+      const row = await db.prepare(`SELECT artifact_json,content_sha FROM crm_catalog_v11_artifacts
+        WHERE profile_ref=? AND exhibition_id=?`).bind(profileId, exhibitionId).first();
+      if (!row || sha256(row.artifact_json) !== row.content_sha) return null;
+      const artifact = JSON.parse(row.artifact_json);
+      return artifact.schemaVersion === "1.1.0" && artifact.exhibitionId === exhibitionId ? artifact : null;
+    } catch { return null; }
+  }
+  return { saveArtifact, getArtifact };
 }
