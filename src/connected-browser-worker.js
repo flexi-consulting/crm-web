@@ -11,26 +11,13 @@ const notFound = () => new Response(JSON.stringify({ error: "not_found" }), {
   status: 404, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" }
 });
 
-/** Opt-in Worker composition. No test headers can become a trusted profile or approval. */
-const hex = (bytes) => Array.from(new Uint8Array(bytes), (value) => value.toString(16).padStart(2, "0")).join("");
-async function approvalReceipt(identity, reviewId, revision, now) {
-  if (!identity?.profileId || !identity?.principalId || !identity?.sessionId ||
-      !/^review-[0-9a-f-]{36}$/.test(reviewId ?? "") || typeof revision !== "string") return null;
-  const timestamp = now();
-  // Keep retries of one confirmation stable within the receipt lifetime, but
-  // give a later human confirmation a fresh durable receipt after expiry.
-  const receiptWindow = Math.floor(timestamp / (5 * 60_000));
-  const stable = [identity.profileId, identity.principalId, identity.sessionId,
-    reviewId, revision, receiptWindow].join("\0");
-  const receiptId = `crm-review-${hex(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(stable)))}`;
-  const issued = new Date(timestamp).toISOString();
-  return { profileId: identity.profileId, reviewId, revision, actorId: identity.principalId,
-    issuerId: "crm-connected-browser-cp-session-v1", receiptId, approved: true,
-    issuedAt: issued, expiresAt: new Date(Date.parse(issued) + 5 * 60_000).toISOString() };
-}
-
+/**
+ * Opt-in Worker composition. Approval must come from a separately reviewed
+ * trusted issuer. In particular, an authenticated create scope is not approval.
+ */
 export function createCrmConnectedWorkerHandler({ fetcher = fetch, now = () => Date.now(),
-  resolveWeeekToken, resolveWeeekStatusIds, resolveLeadStatusId } = {}) {
+  resolveWeeekToken, resolveWeeekStatusIds, resolveLeadStatusId,
+  resolveTrustedReviewReceipt } = {}) {
   return async (request, env) => {
     if (env?.CRM_CONNECTED_BROWSER_ENABLED !== "true") return notFound();
     try {
@@ -57,8 +44,10 @@ export function createCrmConnectedWorkerHandler({ fetcher = fetch, now = () => D
           if (typeof resolveLeadStatusId !== "function") return undefined;
           return resolveLeadStatusId(profileId, env);
         }, resolveTrustedProfile: () => identity,
-        resolveTrustedReviewReceipt: (_request, trusted, reviewId, revision) =>
-          approvalReceipt(trusted, reviewId, revision, now) })(received);
+        resolveTrustedReviewReceipt: typeof resolveTrustedReviewReceipt === "function"
+          ? (receivedRequest, trusted, reviewId, revision) =>
+            resolveTrustedReviewReceipt({ request: receivedRequest, identity: trusted, reviewId, revision, env })
+          : undefined })(received);
       const browser = createCrmConnectedBrowserHandler({ enabled: true, issuer,
         allowedIssuerOrigins: [issuer], publicOrigin, redirectUri, defaultReturnPath, store,
         exchangeCode: client.exchangeCode, introspect: client.introspect,

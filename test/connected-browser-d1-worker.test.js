@@ -227,6 +227,15 @@ test("browser S-04 confirms through D1 and Weeek HTTP, then reconciles an accept
         "content-type": "application/x-www-form-urlencoded" }, body: confirmationForm })).status, 403);
     assert.equal((await (await call(worker.base, "/__cp-count")).json()).weeekCreatePosts, 0);
 
+    await call(worker.base, "/__cp-control?mode=deal_create_no_approval");
+    const unapproved = await call(worker.base, "/deal-workflow/confirm", { method: "POST",
+      headers: { cookie: session, origin: "https://crm.example.invalid",
+        "content-type": "application/x-www-form-urlencoded" }, body: confirmationForm });
+    assert.equal(unapproved.status, 403, await unapproved.clone().text());
+    assert.equal((await (await call(worker.base, "/__cp-count")).json()).weeekCreatePosts, 0,
+      "a create scope without a trusted approval receipt cannot reach Weeek");
+
+    await call(worker.base, "/__cp-control?mode=deal_create_approved_fixture");
     const uncertain = await call(worker.base, "/deal-workflow/confirm", { method: "POST",
       headers: { cookie: session, origin: "https://crm.example.invalid",
         "content-type": "application/x-www-form-urlencoded" }, body: confirmationForm });
@@ -240,7 +249,7 @@ test("browser S-04 confirms through D1 and Weeek HTTP, then reconciles an accept
 
     await stop(worker.child);
     worker = await start(root);
-    await call(worker.base, "/__cp-control?mode=deal_create");
+    await call(worker.base, "/__cp-control?mode=deal_create_no_approval");
     // The recovery form survives restart and reconciles the existing unknown operation.
     const recovered = await call(worker.base, "/deal-workflow/reconcile", { method: "POST",
       headers: { cookie: session, origin: "https://crm.example.invalid",

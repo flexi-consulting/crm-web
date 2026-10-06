@@ -17,7 +17,7 @@ The included memory store is a disposable test fixture. A deployed Worker needs 
 - A real Control Plane issuer/introspection service with registered CRM service authentication, one-time browser handoff and live session/profile revocation.
 - A reviewed old `USER_ID` → agent principal/profile authority export. The current private CRM audit has no approved bindings, so no real catalog or note may be assigned by path/name coincidence.
 - A final private source delta and catalog/notes import with profile and source-revision receipts before any old link routes are switched.
-- The offline identity contract currently lists CRM read scopes only. The proposed `crm.deals.create` grant and browser-issued receipt need Control Plane registration/review before a live session can receive them.
+- The offline identity contract currently lists CRM read scopes only. The proposed `crm.deals.create` grant needs Control Plane registration/review, and the confirmation route remains fail-closed unless a separately reviewed trusted approval receipt issuer is injected. A create scope or browser POST is not itself approval.
 - A reviewed profile-to-Weeek credential/status binding and disposable Weeek workspace evidence for create permissions, marker preservation, exhaustive status scans and read consistency.
 - A dedicated CRM Web D1 binding with ordered migrations and an owner-reviewed route canary; never apply these migrations to the legacy deal-bot database.
 - Browser cookie/handoff design, deployed MCP service binding, S-01 route parity and no-GCP cutover proof. None is claimed by the offline tests.

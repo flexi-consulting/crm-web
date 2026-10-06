@@ -52,7 +52,8 @@ const cpFetch = async (url, options) => {
     ? { active: false } : { active: true, iss: issuer, aud: "crm-web", sub: "principal_A",
       profileId: "profile_A", sessionId: "session_A", nbf: now - 10, exp: now + 300,
       scopes: cpMode === "catalog_only" ? ["crm.catalog.read"] :
-        cpMode === "deal_create" ? ["crm.deals.create"] :
+        ["deal_create", "deal_create_no_approval", "deal_create_approved_fixture"].includes(cpMode)
+          ? ["crm.deals.create"] :
         cpMode === "deals_only" ? ["crm.deals.read"] :
           ["crm.catalog.read", "crm.deals.read"] }), { status: 200 });
   foreignEgress++;
@@ -60,6 +61,16 @@ const cpFetch = async (url, options) => {
 };
 const connected = createCrmConnectedWorkerHandler({ fetcher: cpFetch,
   now: () => Date.now() + clockOffset,
+  // Only this isolated fixture can issue an approval receipt. Production
+  // composition has no receipt issuer and therefore fails closed.
+  resolveTrustedReviewReceipt: async ({ identity, reviewId, revision }) => {
+    if (cpMode !== "deal_create_approved_fixture") return null;
+    const issuedAt = new Date(Date.now() + clockOffset).toISOString();
+    return { profileId: identity.profileId, reviewId, revision, actorId: identity.principalId,
+      issuerId: "synthetic-test-approval-issuer",
+      receiptId: `fixture-approval-${reviewId}-${revision}`, approved: true,
+      issuedAt, expiresAt: new Date(Date.parse(issuedAt) + 60_000).toISOString() };
+  },
   resolveWeeekToken: async (profileId) => profileId === "profile_A" ? "synthetic-weeek-token" : null,
   resolveWeeekStatusIds: async (profileId) => profileId === "profile_A" ? ["status-lead-A"] : [],
   resolveLeadStatusId: async (profileId) => profileId === "profile_A" ? "status-lead-A" : null });

@@ -102,12 +102,6 @@ export function createDealReviewService({ confirmedDeals, preleadTimeline, parti
     const review = await storagePort.getReview({ profileRef: profileId, reviewId: id });
     if (!review) return { status: 404, body: { error: "review_not_found" } };
     if (revision !== review.revision) return { status: 409, body: { error: "review_stale" } };
-    if (!trustedReceipt || trustedReceipt.profileId !== profileId || trustedReceipt.reviewId !== id ||
-        trustedReceipt.revision !== revision || !requiredText(trustedReceipt.actorId, 160) ||
-        !requiredText(trustedReceipt.receiptId, 160) || !requiredText(trustedReceipt.issuerId, 160) ||
-        !trustedReceipt.issuedAt || !trustedReceipt.expiresAt || trustedReceipt.approved !== true) {
-      return { status: 403, body: { error: "trusted_review_confirmation_required" } };
-    }
     const previous = await confirmedDeals.get({ profileId, operationId: review.operationId });
     if (previous.status === 200) {
       // A repeat browser submit after a lost response is a read-only reconcile.
@@ -118,6 +112,12 @@ export function createDealReviewService({ confirmedDeals, preleadTimeline, parti
           body: { ...reconciled.body, replayed: true } } : reconciled;
       }
       return { ...previous, body: { ...previous.body, replayed: true } };
+    }
+    if (!trustedReceipt || trustedReceipt.profileId !== profileId || trustedReceipt.reviewId !== id ||
+        trustedReceipt.revision !== revision || !requiredText(trustedReceipt.actorId, 160) ||
+        !requiredText(trustedReceipt.receiptId, 160) || !requiredText(trustedReceipt.issuerId, 160) ||
+        !trustedReceipt.issuedAt || !trustedReceipt.expiresAt || trustedReceipt.approved !== true) {
+      return { status: 403, body: { error: "trusted_review_confirmation_required" } };
     }
     if (previous.status !== 200) {
       const current = await persistentState(profileId, review.snapshot.draft);
