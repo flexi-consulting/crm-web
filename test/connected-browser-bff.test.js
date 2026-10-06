@@ -29,7 +29,8 @@ function fixture() {
       exp: Math.floor(now / 1000) + 300, scopes: ["crm.catalog.read", "crm.deals.read"] };
   };
   const handler = createCrmConnectedBrowserHandler({ enabled: true, issuer,
-    allowedIssuerOrigins: [issuer], publicOrigin: origin, redirectUri: callback, store,
+    allowedIssuerOrigins: [issuer], publicOrigin: origin, redirectUri: callback,
+    defaultReturnPath: `/catalogs/${build}`, store,
     now: () => now, introspect, exchangeCode: async (args) => {
       calls.push(["exchange", args]);
       return { token, expiresAt: Math.floor(now / 1000) + 300 };
@@ -56,7 +57,7 @@ async function signIn(f) {
   const path = `/auth/connected/callback?code=${code}&state=${target.searchParams.get("state")}&iss=${encodeURIComponent(issuer)}`;
   const callbackResponse = await f.handler(request(path, { headers: { cookie: pending } }));
   assert.equal(callbackResponse.status, 303);
-  assert.equal(callbackResponse.headers.get("location"), origin);
+  assert.equal(callbackResponse.headers.get("location"), `${origin}/catalogs/${build}`);
   const session = cookie(callbackResponse, "__Host-crm-connected-session");
   assert.ok(session);
   assert.match(session, /^__Host-crm-connected-session=[a-f0-9]{64}$/);

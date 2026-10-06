@@ -17,6 +17,7 @@ export function createCrmConnectedWorkerHandler({ fetcher = fetch, now = () => D
       const issuer = env.CRM_CONNECTED_CP_ISSUER;
       const publicOrigin = env.CRM_CONNECTED_PUBLIC_ORIGIN;
       const redirectUri = env.CRM_CONNECTED_REDIRECT_URI;
+      const defaultReturnPath = env.CRM_CONNECTED_DEFAULT_CATALOG_PATH;
       const client = createCrmControlPlaneClient({ issuer, allowedIssuerOrigins: [issuer],
         serviceKey: env.CRM_CONNECTED_CP_SERVICE_KEY, fetcher });
       const store = createCrmBrowserD1Store(env.CRM_DB, { now });
@@ -26,7 +27,7 @@ export function createCrmConnectedWorkerHandler({ fetcher = fetch, now = () => D
         provider: { async create() { throw new Error("connected_browser_write_forbidden"); } },
         resolveTrustedProfile: () => identity })(received);
       const browser = createCrmConnectedBrowserHandler({ enabled: true, issuer,
-        allowedIssuerOrigins: [issuer], publicOrigin, redirectUri, store,
+        allowedIssuerOrigins: [issuer], publicOrigin, redirectUri, defaultReturnPath, store,
         exchangeCode: client.exchangeCode, introspect: client.introspect,
         handleScopedRequest: read, now });
       return await browser(request);

@@ -3,6 +3,7 @@ CREATE TABLE IF NOT EXISTS connected_browser_pending (
   handle_hash TEXT PRIMARY KEY CHECK(length(handle_hash) = 64),
   state TEXT NOT NULL,
   verifier TEXT NOT NULL,
+  return_path TEXT NOT NULL,
   created_at_ms INTEGER NOT NULL,
   expires_at_ms INTEGER NOT NULL
 );

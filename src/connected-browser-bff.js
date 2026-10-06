@@ -5,6 +5,7 @@ const PENDING = "__Host-crm-connected-pending";
 const SESSION = "__Host-crm-connected-session";
 const AUTH_PATH = "/v1/connected-app-sessions/authorize";
 const SCOPES = ["crm.catalog.read", "crm.deals.read"];
+const CATALOG_PATH = /^\/catalogs\/build-[a-f0-9]{24}(?:\/participants\/co-[a-f0-9]{20})?$/;
 const encoder = new TextEncoder();
 const random = () => {
   const bytes = new Uint8Array(32);
@@ -76,13 +77,14 @@ export function createCrmControlPlaneClient({ issuer, allowedIssuerOrigins, serv
 
 /** Disabled by default. Browser credentials never reach the domain handler. */
 export function createCrmConnectedBrowserHandler({ enabled = false, issuer, allowedIssuerOrigins,
-  publicOrigin, redirectUri, store, exchangeCode, introspect, handleScopedRequest,
+  publicOrigin, redirectUri, defaultReturnPath, store, exchangeCode, introspect, handleScopedRequest,
   now = () => Date.now() } = {}) {
   if (!enabled) return async () => error(404, "not_found");
   if (typeof issuer !== "string" || !issuer.startsWith("https://") || new URL(issuer).origin !== issuer ||
       !allowedIssuerOrigins?.includes(issuer) || typeof publicOrigin !== "string" ||
       !publicOrigin.startsWith("https://") || new URL(publicOrigin).origin !== publicOrigin ||
       redirectUri !== `${publicOrigin}/auth/connected/callback` ||
+      !CATALOG_PATH.test(defaultReturnPath ?? "") ||
       !store || !["putPending", "takePending", "putSession", "getSession", "deleteSession"]
         .every((key) => typeof store[key] === "function") ||
       typeof exchangeCode !== "function" || typeof introspect !== "function" ||
@@ -94,9 +96,13 @@ export function createCrmConnectedBrowserHandler({ enabled = false, issuer, allo
     const url = new URL(request.url);
     if (url.origin !== publicOrigin) return error(400, "invalid_origin");
     if (url.pathname === "/auth/connected/start" && request.method === "GET") {
-      if (url.searchParams.size) return error(400, "invalid_auth_request");
+      const returns = url.searchParams.getAll("returnTo");
+      if (url.searchParams.size > 1 || returns.length > 1 ||
+          (url.searchParams.size && returns.length !== 1)) return error(400, "invalid_auth_request");
+      const returnPath = returns[0] ?? defaultReturnPath;
+      if (!CATALOG_PATH.test(returnPath)) return error(400, "invalid_return_path");
       const handle = random(), state = random(), verifier = random();
-      await store.putPending(await digest(handle), { state, verifier, createdAt: now() });
+      await store.putPending(await digest(handle), { state, verifier, returnPath, createdAt: now() });
       const target = new URL(AUTH_PATH, issuer);
       for (const [key, value] of Object.entries({ response_type: "code", client_id: AUDIENCE,
         redirect_uri: redirectUri, scope: SCOPES.join(" "), state,
@@ -109,7 +115,8 @@ export function createCrmConnectedBrowserHandler({ enabled = false, issuer, allo
       const transaction = handle ? await store.takePending(await digest(handle)) : null;
       const keys = [...url.searchParams.keys()];
       const code = url.searchParams.get("code"), state = url.searchParams.get("state");
-      if (!transaction || now() - transaction.createdAt > 300_000 || keys.length !== 3 ||
+      if (!transaction || !CATALOG_PATH.test(transaction.returnPath) ||
+          now() - transaction.createdAt > 300_000 || keys.length !== 3 ||
           new Set(keys).size !== 3 || keys.some((key) => !["code", "state", "iss"].includes(key)) ||
           !safeHex(code) || state !== transaction.state || url.searchParams.get("iss") !== issuer)
         return error(401, "invalid_auth_callback");
@@ -125,11 +132,14 @@ export function createCrmConnectedBrowserHandler({ enabled = false, issuer, allo
           identity.exp > exchanged.expiresAt || !SCOPES.every((scope) => identity.scopes.includes(scope)))
         return error(401, "connected_session_inactive");
       const newHandle = random();
+      const sessionExpiresAt = Math.min(exchanged.expiresAt, identity.exp);
       await store.putSession(await digest(newHandle), { token: exchanged.token, csrf: random(),
-        createdAt: now(), expiresAt: exchanged.expiresAt });
+        createdAt: now(), expiresAt: sessionExpiresAt });
       const previous = readCookie(request, SESSION);
       if (previous) await store.deleteSession(await digest(previous));
-      return redirect(publicOrigin, [cookie(PENDING, "", 0, "Lax"), cookie(SESSION, newHandle, 3600)]);
+      const age = Math.min(3600, sessionExpiresAt - Math.floor(now() / 1000));
+      return redirect(`${publicOrigin}${transaction.returnPath}`, [cookie(PENDING, "", 0, "Lax"),
+        cookie(SESSION, newHandle, age)]);
     }
     if (url.pathname === "/auth/connected/logout" && request.method === "POST") {
       const handle = readCookie(request, SESSION);
@@ -143,7 +153,11 @@ export function createCrmConnectedBrowserHandler({ enabled = false, issuer, allo
     if (request.method !== "GET") return error(404, "not_found");
     if (request.headers.has("authorization")) return error(400, "untrusted_browser_authorization");
     const handle = readCookie(request, SESSION);
-    if (!handle) return error(401, "connected_session_required");
+    if (!handle) {
+      if (CATALOG_PATH.test(url.pathname) && !url.searchParams.size)
+        return redirect(`${publicOrigin}/auth/connected/start?${new URLSearchParams({ returnTo: url.pathname })}`);
+      return error(401, "connected_session_required");
+    }
     const session = await store.getSession(await digest(handle));
     if (!safeHex(session?.token)) return error(401, "connected_session_required");
     if (url.pathname === "/auth/connected/session") {

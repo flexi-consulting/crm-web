@@ -59,7 +59,11 @@ test("Worker Fetch uses atomic D1 browser handoff and real profile-scoped catalo
     migrate(root);
     worker = await start(root);
     const { buildId } = await (await call(worker.base, "/__seed")).json();
-    const startResponse = await call(worker.base, "/auth/connected/start");
+    const deepLink = await call(worker.base, `/catalogs/${buildId}`);
+    assert.equal(deepLink.status, 303);
+    assert.equal(new URL(deepLink.headers.get("location")).searchParams.get("returnTo"), `/catalogs/${buildId}`);
+    const startResponse = await call(worker.base, new URL(deepLink.headers.get("location")).pathname +
+      new URL(deepLink.headers.get("location")).search);
     assert.equal(startResponse.status, 303, await startResponse.clone().text());
     const authorize = new URL(startResponse.headers.get("location"));
     assert.equal(authorize.origin, "https://cp.example.invalid");
@@ -74,6 +78,10 @@ test("Worker Fetch uses atomic D1 browser handoff and real profile-scoped catalo
     assert.deepEqual([accepted.status, replay.status].sort(), [303, 401]);
     const session = cookie(accepted.status === 303 ? accepted : replay, "__Host-crm-connected-session");
     assert.match(session, /^__Host-crm-connected-session=[a-f0-9]{64}$/);
+    assert.equal((accepted.status === 303 ? accepted : replay).headers.get("location"),
+      `https://crm.example.invalid/catalogs/${buildId}`);
+    assert.equal((await call(worker.base, "/auth/connected/start?returnTo=https%3A%2F%2Fevil.example.invalid" )).status, 400);
+    assert.equal((await call(worker.base, "/auth/connected/start?returnTo=%2F%2Fevil.example.invalid" )).status, 400);
     await stop(worker.child);
     worker = await start(root);
     const details = await call(worker.base, `/catalogs/${buildId}`, { headers: { cookie: session } });
