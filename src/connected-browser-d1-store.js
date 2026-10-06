@@ -1,5 +1,5 @@
 const HANDLE = /^[a-f0-9]{64}$/;
-const CATALOG_PATH = /^\/catalogs\/build-[a-f0-9]{24}(?:\/participants\/co-[a-f0-9]{20})?$/;
+const CATALOG_PATH = /^\/catalogs\/[a-z0-9][a-z0-9-]{0,79}(?:\/participants\/co-[a-f0-9]{20})?$/;
 const DEAL_CREATE_PATH = /^\/catalogs\/build-[a-f0-9]{24}\/participants\/co-[a-f0-9]{20}\/deal$/;
 const DEAL_PATH = /^\/api\/v1\/(?:deal-reviews\/review-|deal-operations\/op-)[0-9a-f-]{36}$/;
 const validReturn = (mode, path) => mode === "catalog" ? CATALOG_PATH.test(path) : mode === "dealCreate"
