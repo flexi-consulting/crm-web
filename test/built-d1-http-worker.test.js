@@ -1,0 +1,253 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import { spawn, spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createServer } from "node:net";
+import Ajv from "ajv/dist/2020.js";
+import addFormats from "ajv-formats";
+
+const wrangler = new URL("../node_modules/wrangler/bin/wrangler.js", import.meta.url).pathname;
+const node = process.env.CRM_S04_WRANGLER_NODE || process.execPath;
+const cwd = new URL("..", import.meta.url).pathname;
+const config = "test/wrangler.built-d1-http-local.toml";
+async function freePort() {
+  const server = createServer();
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = server.address().port;
+  await new Promise((resolve) => server.close(resolve));
+  return port;
+}
+async function start(root) {
+  const port = await freePort(), inspectorPort = await freePort();
+  const child = spawn(node, [wrangler, "dev", "--config", config, "--ip", "127.0.0.1",
+    "--port", String(port), "--inspector-port", String(inspectorPort),
+    "--persist-to", root, "--log-level", "error"], { cwd, stdio: ["ignore", "pipe", "pipe"] });
+  let logs = "";
+  child.stdout.on("data", (part) => { logs += part; });
+  child.stderr.on("data", (part) => { logs += part; });
+  const base = `http://127.0.0.1:${port}`;
+  for (let attempt = 0; attempt < 100; attempt++) {
+    if (child.exitCode !== null) throw new Error(`Worker exited: ${logs}`);
+    try { if ((await fetch(`${base}/health`)).ok) return { child, base }; } catch {}
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+  child.kill("SIGTERM"); throw new Error(`Worker did not start: ${logs}`);
+}
+async function stop(child) {
+  if (child.exitCode !== null) return;
+  child.kill("SIGTERM");
+  await Promise.race([new Promise((resolve) => child.once("close", resolve)),
+    new Promise((resolve) => setTimeout(() => { child.kill("SIGKILL"); resolve(); }, 3000))]);
+}
+async function request(base, method, path, body, { profile = "demo-profile-a", approval = false,
+  key, scopes, disabled = false } = {}) {
+  const response = await fetch(`${base}${path}`, { method, headers: {
+    "x-test-profile": profile, ...(approval ? { "x-test-approval": "approved" } : {}),
+    ...(key ? { "idempotency-key": key } : {}), ...(scopes ? { "x-test-scopes": scopes.join(",") } : {}),
+    ...(disabled ? { "x-test-disable": "true" } : {}),
+    ...(body === undefined ? {} : { "content-type": "application/json" })
+  }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+  return { status: response.status, body: await response.json() };
+}
+function migrate(root) {
+  for (const migration of ["migrations/0001_s04_domain.sql", "migrations/0002_built_catalog.sql"]) {
+    const applied = spawnSync(node, [wrangler, "d1", "execute", "CRM_DB", "--config", config,
+      "--local", "--persist-to", root, "--file", migration, "--yes", "--json"], { cwd, encoding: "utf8" });
+    assert.equal(applied.status, 0, applied.stderr || applied.stdout);
+  }
+}
+const draftFor = (buildId, companyId, title = "HTTP durable deal") => ({ buildId, companyId,
+  exhibitionId: "demo-expo-001", title, companyInn: "0000000001",
+  contactName: "Example Contact", dealComment: "Synthetic catalog request" });
+async function schemas() {
+  const ajv = new Ajv(); addFormats(ajv);
+  for (const name of ["built-participants-input", "built-participants-output", "s03-built-timeline-input",
+    "s03-built-note-input", "s04-review-input", "s04-create-input", "s04-operation-input",
+    "prelead-event-response", "prelead-timeline-event", "prelead-timeline-response",
+    "s04-review-output", "synthetic-deal-operation"]) {
+    ajv.addSchema(JSON.parse(await readFile(new URL(`../schemas/${name}.schema.json`, import.meta.url))));
+  }
+  return (name, value) => { const valid = ajv.getSchema(`https://crm-web.example.invalid/schemas/${name}.schema.json`);
+    assert.ok(valid(value), JSON.stringify(valid.errors)); };
+}
+
+test("opt-in public-shaped D1 HTTP routes and offline MCP share one durable S01/S03/S04 state", async () => {
+  const root = mkdtempSync(join(tmpdir(), "crm-built-http-d1-"));
+  let worker;
+  try {
+    migrate(root);
+    worker = await start(root);
+    const built = await request(worker.base, "POST", "/api/v1/catalog-builds", { exhibitionId: "demo-expo-001" },
+      { key: "http-durable-build-a" });
+    assert.equal(built.status, 201, JSON.stringify(built.body));
+    const validate = await schemas();
+    const buildId = built.body.buildId;
+    validate("built-participants-input", { buildId, classification: "target" });
+    const listPath = `/api/v1/catalog-builds/${buildId}/participants`;
+    assert.equal((await request(worker.base, "GET", listPath, undefined, { disabled: true })).status, 404);
+    const list = await request(worker.base, "GET", `${listPath}?classification=target`);
+    assert.equal(list.status, 200);
+    validate("built-participants-output", list.body);
+    const company = list.body.items[0];
+    assert.deepEqual((await request(worker.base, "GET", company.detailPath)).body.items, [company]);
+    const mcpList = await request(worker.base, "POST", "/__offline-mcp", { contract: "s01",
+      arguments: { buildId, classification: "target" } });
+    assert.deepEqual(mcpList.body.result.structuredContent, list.body);
+    const tools = await request(worker.base, "POST", "/__offline-mcp", { method: "tools/list" });
+    assert.deepEqual(tools.body.result.tools.map((item) => item.name).sort(), [
+      "crm_built_catalog_participants_read", "crm_built_prelead_note_add", "crm_built_prelead_timeline_read",
+      "crm_deal_create_from_participant", "crm_deal_get_operation", "crm_deal_prepare_from_participant",
+      "crm_deal_reconcile_operation", "crm_deal_repair_catalog_link"
+    ].sort());
+    assert.equal((await request(worker.base, "POST", "/__offline-mcp", { contract: "s01",
+      protocolVersion: "1900-01-01", arguments: { buildId } })).body.error.message, "CAPABILITY_VERSION_MISMATCH");
+    assert.equal((await request(worker.base, "POST", "/__offline-mcp", { contract: "s01",
+      capabilityVersion: "9.0.0", arguments: { buildId } })).body.error.message, "CAPABILITY_VERSION_MISMATCH");
+    assert.equal((await request(worker.base, "GET", listPath, undefined, { profile: "demo-profile-b" })).status, 404);
+    assert.equal((await request(worker.base, "GET", listPath, undefined, { scopes: [] })).status, 403);
+    const builtB = await request(worker.base, "POST", "/api/v1/catalog-builds", { exhibitionId: "demo-expo-001" },
+      { key: "http-durable-build-a", profile: "demo-profile-b" });
+    assert.equal(builtB.status, 201);
+    assert.notEqual(builtB.body.buildId, buildId);
+    assert.equal((await request(worker.base, "GET", `/api/v1/catalog-builds/${builtB.body.buildId}/participants`,
+      undefined, { profile: "demo-profile-b" })).status, 200);
+    assert.equal((await request(worker.base, "GET", `/api/v1/catalog-builds/${builtB.body.buildId}/participants`)).status, 404);
+    const binding = await request(worker.base, "POST", `${company.detailPath}/prelead`, {});
+    assert.equal(binding.status, 201);
+    const preleadId = binding.body.prelead.id;
+    const noteOperationId = `op-${randomUUID()}`;
+    validate("s03-built-note-input", { preleadId, operationId: noteOperationId, noteText: "HTTP synthetic interest" });
+    const note = await request(worker.base, "POST", `/api/v1/preleads/${preleadId}/events`,
+      { type: "note_added", operationId: noteOperationId, noteText: "HTTP synthetic interest" });
+    assert.equal(note.status, 201, JSON.stringify(note.body));
+    validate("prelead-event-response", note.body);
+    assert.equal(note.body.prelead.companyId, company.id);
+    assert.equal((await request(worker.base, "POST", `/api/v1/preleads/${preleadId}/events`,
+      { type: "note_added", operationId: noteOperationId, noteText: "HTTP synthetic interest" })).status, 200);
+    assert.equal((await request(worker.base, "POST", `/api/v1/preleads/${preleadId}/events`,
+      { type: "note_added", operationId: noteOperationId, noteText: "Changed" })).status, 409);
+    const unsupported = await request(worker.base, "POST", `/api/v1/preleads/${preleadId}/events`,
+      { type: "rejection_added", operationId: `op-${randomUUID()}`, reason: "Synthetic refusal" });
+    assert.equal(unsupported.status, 422);
+    assert.equal(unsupported.body.error, "event_type_not_available_on_d1");
+    await stop(worker.child);
+
+    worker = await start(root);
+    const recovered = await request(worker.base, "GET", `/api/v1/preleads/${preleadId}/timeline`);
+    assert.equal(recovered.status, 200);
+    const recoveredBuild = await request(worker.base, "GET", `/api/v1/catalog-builds/${buildId}`);
+    assert.equal(recoveredBuild.status, 200);
+    assert.equal(recoveredBuild.body.artifact.companies.length, built.body.artifact.companies.length);
+    const replayBuild = await request(worker.base, "POST", "/api/v1/catalog-builds", { exhibitionId: "demo-expo-001" },
+      { key: "http-durable-build-a" });
+    assert.equal(replayBuild.status, 200);
+    assert.equal(replayBuild.body.buildId, buildId);
+    assert.equal(replayBuild.body.replayed, true);
+    assert.equal((await request(worker.base, "POST", "/api/v1/catalog-builds", { exhibitionId: "demo-expo-002" },
+      { key: "http-durable-build-a" })).status, 409);
+    validate("prelead-timeline-response", recovered.body);
+    assert.deepEqual(recovered.body.events.map((event) => event.payload.noteText), ["HTTP synthetic interest"]);
+    const mcpTimeline = await request(worker.base, "POST", "/__offline-mcp", { contract: "s03",
+      name: "crm_built_prelead_timeline_read", arguments: { preleadId } });
+    validate("s03-built-timeline-input", { preleadId });
+    assert.deepEqual(mcpTimeline.body.result.structuredContent, recovered.body);
+    const secondNoteId = `op-${randomUUID()}`;
+    const mcpNote = await request(worker.base, "POST", "/__offline-mcp", { contract: "s03",
+      name: "crm_built_prelead_note_add", arguments: { preleadId, operationId: secondNoteId,
+        noteText: "MCP synthetic context" } });
+    validate("prelead-event-response", mcpNote.body.result.structuredContent);
+    const afterMcpNote = await request(worker.base, "GET", `/api/v1/preleads/${preleadId}/timeline`);
+    assert.deepEqual(afterMcpNote.body.events.at(-1), mcpNote.body.result.structuredContent.event);
+    const rebuilt = await request(worker.base, "POST", "/api/v1/catalog-builds", { exhibitionId: "demo-expo-001" },
+      { key: "http-durable-build-b" });
+    assert.equal(rebuilt.status, 201);
+    const rebound = await request(worker.base, "POST", `/api/v1/catalog-builds/${rebuilt.body.buildId}/participants/${company.id}/prelead`, {});
+    assert.equal(rebound.body.prelead.id, preleadId);
+    const draft = draftFor(rebuilt.body.buildId, company.id);
+    validate("s04-review-input", draft);
+    const httpReview = await request(worker.base, "POST", "/api/v1/deal-reviews", draft);
+    assert.equal(httpReview.status, 201, JSON.stringify(httpReview.body));
+    validate("s04-review-output", httpReview.body);
+    assert.match(httpReview.body.details.dealComment, /HTTP synthetic interest/);
+    assert.match(httpReview.body.details.dealComment, /MCP synthetic context/);
+    const mcpReview = await request(worker.base, "POST", "/__offline-mcp", { contract: "s04",
+      name: "crm_deal_prepare_from_participant", arguments: draft });
+    assert.deepEqual(mcpReview.body.result.structuredContent.details, httpReview.body.details);
+    assert.equal((await request(worker.base, "POST", `/api/v1/deal-reviews/${httpReview.body.reviewId}/confirm`,
+      { revision: httpReview.body.revision })).status, 403);
+    await stop(worker.child);
+
+    worker = await start(root);
+    const readReview = await request(worker.base, "GET", `/api/v1/deal-reviews/${httpReview.body.reviewId}`);
+    assert.deepEqual(readReview.body.details, httpReview.body.details);
+    const confirmed = await request(worker.base, "POST", `/api/v1/deal-reviews/${httpReview.body.reviewId}/confirm`,
+      { revision: httpReview.body.revision }, { approval: true });
+    validate("s04-create-input", { reviewId: httpReview.body.reviewId, revision: httpReview.body.revision });
+    assert.equal(confirmed.status, 201, JSON.stringify(confirmed.body));
+    validate("synthetic-deal-operation", confirmed.body);
+    assert.equal(confirmed.body.linkStatus, "linked");
+    assert.equal((await request(worker.base, "GET", "/__provider-count")).body.calls, 1);
+    const mcpOperation = await request(worker.base, "POST", "/__offline-mcp", { contract: "s04",
+      name: "crm_deal_get_operation", arguments: { operationId: httpReview.body.operationId } });
+    validate("s04-operation-input", { operationId: httpReview.body.operationId });
+    assert.equal(mcpOperation.body.result.structuredContent.dealId, confirmed.body.dealId);
+    const timeline = await request(worker.base, "GET", `/api/v1/preleads/${preleadId}/timeline`);
+    validate("prelead-timeline-response", timeline.body);
+    assert.deepEqual(timeline.body.events.map((event) => event.type), ["note_added", "note_added", "deal_linked"]);
+    assert.equal(timeline.body.prelead.disposition, "deal");
+    await stop(worker.child);
+
+    worker = await start(root);
+    const replay = await request(worker.base, "POST", `/api/v1/deal-reviews/${httpReview.body.reviewId}/confirm`,
+      { revision: httpReview.body.revision }, { approval: true });
+    assert.equal(replay.status, 200);
+    assert.equal(replay.body.dealId, confirmed.body.dealId);
+    assert.equal((await request(worker.base, "GET", "/__provider-count")).body.calls, 0);
+    assert.equal((await request(worker.base, "GET", `/api/v1/preleads/${preleadId}/timeline`, undefined,
+      { profile: "demo-profile-b" })).status, 404);
+  } finally {
+    if (worker) await stop(worker.child);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("the opt-in D1 HTTP and offline MCP modules have no Agent Run launch dependency", async () => {
+  for (const name of ["built-catalog-d1-http.js", "built-d1-offline-mcp.js", "built-catalog-d1.js"]) {
+    assert.doesNotMatch(await readFile(new URL(`../src/${name}`, import.meta.url), "utf8"),
+      /runner\.launch|spawnAgentRun|agent-run/i);
+  }
+});
+
+test("public-shaped D1 unknown outcome remains unknown after restart without another POST", async () => {
+  const root = mkdtempSync(join(tmpdir(), "crm-built-http-unknown-"));
+  let worker;
+  try {
+    migrate(root); worker = await start(root);
+    const built = await request(worker.base, "POST", "/api/v1/catalog-builds", { exhibitionId: "demo-expo-001" },
+      { key: "http-unknown-build" });
+    const list = await request(worker.base, "GET", `/api/v1/catalog-builds/${built.body.buildId}/participants?classification=target`);
+    const companyId = list.body.items[0].id;
+    await request(worker.base, "POST", `/api/v1/catalog-builds/${built.body.buildId}/participants/${companyId}/prelead`, {});
+    const review = await request(worker.base, "POST", "/api/v1/deal-reviews",
+      draftFor(built.body.buildId, companyId, "Unknown HTTP outcome"));
+    assert.equal(review.status, 201);
+    const path = `/api/v1/deal-reviews/${review.body.reviewId}/confirm`;
+    const unknown = await request(worker.base, "POST", path, { revision: review.body.revision }, { approval: true });
+    assert.equal(unknown.status, 202);
+    assert.equal(unknown.body.status, "unknown");
+    assert.equal((await request(worker.base, "GET", "/__provider-count")).body.calls, 1);
+    await stop(worker.child);
+    worker = await start(root);
+    const replay = await request(worker.base, "POST", path, { revision: review.body.revision }, { approval: true });
+    assert.equal(replay.status, 202);
+    assert.equal(replay.body.status, "unknown");
+    assert.equal((await request(worker.base, "GET", "/__provider-count")).body.calls, 0);
+  } finally {
+    if (worker) await stop(worker.child);
+    rmSync(root, { recursive: true, force: true });
+  }
+});

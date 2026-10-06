@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crm-web.example.invalid/schemas/s03-built-timeline-input.schema.json",
+  "type": "object", "additionalProperties": false,
+  "required": ["preleadId"],
+  "properties": { "preleadId": { "type": "string", "pattern": "^built-prelead-[a-f0-9]{24}$" } }
+}

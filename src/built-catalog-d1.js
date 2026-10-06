@@ -32,6 +32,12 @@ export function createBuiltCatalogD1Repository(db, now = () => new Date().toISOS
     } catch { return null; }
   }
 
+  async function getBuildByKey({ profileRef, idempotencyKey }) {
+    const row = await db.prepare("SELECT build_id FROM s02_catalog_builds WHERE profile_ref = ? AND idempotency_key = ?")
+      .bind(profileRef, idempotencyKey).first();
+    return row ? getBuild({ profileRef, buildId: row.build_id }) : null;
+  }
+
   async function saveBuild({ profileRef, idempotencyKey, build }) {
     let accepted = false;
     try { accepted = validBuild(build); } catch {}
@@ -109,7 +115,7 @@ export function createBuiltCatalogD1Repository(db, now = () => new Date().toISOS
         WHERE p.prelead_id = ? AND p.profile_ref = ? AND r.build_id = ? AND r.company_id = ?`)
         .bind(id, profileRef, buildId, companyId).first();
       if (!binding) return { status: 409, body: { error: "prelead_identity_conflict" } };
-      const refs = await db.prepare("SELECT build_id FROM s02_prelead_build_refs WHERE prelead_id = ? ORDER BY created_at, build_id")
+      const refs = await db.prepare("SELECT build_id FROM s02_prelead_build_refs WHERE prelead_id = ? ORDER BY rowid")
         .bind(id).all();
       const events = await db.prepare("SELECT kind FROM s04_prelead_events WHERE prelead_id = ? AND profile_ref = ? ORDER BY sequence")
         .bind(id, profileRef).all();
@@ -153,6 +159,33 @@ export function createBuiltCatalogD1Repository(db, now = () => new Date().toISOS
     return { status: owned ? 503 : 404, body: { error: owned ? "prelead_storage_unavailable" : "prelead_not_found" } };
   }
 
+  async function getTimeline({ profileRef, preleadId: id }) {
+    const prelead = await db.prepare(`SELECT prelead_id, event_id, company_id, revision FROM s04_preleads
+      WHERE prelead_id = ? AND profile_ref = ?`).bind(id, profileRef).first();
+    if (!prelead) return { status: 404, body: { error: "prelead_not_found" } };
+    const refs = await db.prepare("SELECT build_id FROM s02_prelead_build_refs WHERE prelead_id = ? ORDER BY rowid")
+      .bind(id).all();
+    const sourceBuildIds = (refs.results ?? []).map((row) => row.build_id);
+    if (sourceBuildIds.length === 0) return { status: 404, body: { error: "prelead_not_found" } };
+    const rows = await db.prepare(`SELECT event_id, operation_id, sequence, kind, payload_json, created_at
+      FROM s04_prelead_events WHERE prelead_id = ? AND profile_ref = ? ORDER BY sequence`)
+      .bind(id, profileRef).all();
+    let events;
+    try { events = (rows.results ?? []).map((row) => ({
+      eventId: row.kind === "deal_linked" ? `evt-${sha(row.event_id).slice(0, 36)}` : row.event_id,
+      operationId: row.operation_id, sequence: row.sequence, type: row.kind,
+      payload: JSON.parse(row.payload_json), occurredAt: row.created_at
+    })); } catch { return { status: 503, body: { error: "prelead_event_invalid" } }; }
+    const kinds = events.map((event) => event.type);
+    const disposition = kinds.includes("deal_linked") ? "deal"
+      : [...kinds].reverse().find((kind) => kind === "rejection_added" || kind === "rejection_undone") === "rejection_added"
+        ? "rejected" : "active";
+    return { status: 200, body: { domainApiVersion: "1.0.0", prelead: {
+      id, companyId: prelead.company_id, exhibitionId: prelead.event_id,
+      buildId: sourceBuildIds.at(-1), sourceBuildIds, stage: "draft", disposition
+    }, events } };
+  }
+
   async function resolve({ profileId, exhibitionId, companyId, buildId }) {
     if (!buildId) return null;
     const selected = await readParticipants({ profileRef: profileId, buildId, companyId });
@@ -167,5 +200,5 @@ export function createBuiltCatalogD1Repository(db, now = () => new Date().toISOS
     return bound && exhibition ? { company: selected.body.items[0], exhibition, buildId, preleadId: id } : null;
   }
 
-  return { saveBuild, getBuild, readParticipants, ensurePrelead, appendNote, resolve };
+  return { saveBuild, getBuild, getBuildByKey, readParticipants, ensurePrelead, appendNote, getTimeline, resolve };
 }

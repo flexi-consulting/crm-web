@@ -1,0 +1,12 @@
+name = "crm-web-built-d1-http-contract-local"
+main = "../fixtures/built-d1-http-worker.js"
+compatibility_date = "2025-04-01"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+D1_CONNECTED_APP_ENABLED = "true"
+
+[[d1_databases]]
+binding = "CRM_DB"
+database_name = "crm-web-built-d1-http-contract-local"
+database_id = "00000000-0000-4000-8000-000000000003"
