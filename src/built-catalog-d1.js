@@ -6,7 +6,7 @@ const sha = (value) => createHash("sha256").update(value).digest("hex");
 const preleadId = (profileRef, eventId, companyId) => `built-prelead-${sha(JSON.stringify([profileRef, eventId, companyId])).slice(0, 24)}`;
 const changed = (result) => Number(result?.meta?.changes ?? 0) === 1;
 const validBuild = (build) => build?.buildId && /^build-[a-f0-9]{24}$/.test(build.buildId) &&
-  build.artifact?.schemaVersion === "1.0.0" && /^demo-expo-[0-9]{3}$/.test(build.artifact.exhibitionId) &&
+  build.artifact?.schemaVersion === "1.0.0" && /^[a-z0-9][a-z0-9-]{0,79}$/.test(build.artifact.exhibitionId) &&
   typeof build.artifact.sourceRevision === "string" && build.artifact.sourceRevision.length > 0 &&
   Array.isArray(build.artifact.companies) && build.artifact.companies.length <= 20_000 &&
   build.report?.validation?.valid === true && build.report.exhibitionId === build.artifact.exhibitionId &&
@@ -38,12 +38,20 @@ export function createBuiltCatalogD1Repository(db, now = () => new Date().toISOS
     return row ? getBuild({ profileRef, buildId: row.build_id }) : null;
   }
 
-  async function saveBuild({ profileRef, idempotencyKey, build }) {
+  async function saveBuild({ profileRef, idempotencyKey, build, legacyRefs = [] }) {
     let accepted = false;
     try { accepted = validBuild(build); } catch {}
-    if (!accepted || !/^demo-profile-[a-z]$/.test(profileRef) ||
+    if (!accepted || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(profileRef) ||
         typeof idempotencyKey !== "string" || !/^[A-Za-z0-9._:-]{8,128}$/.test(idempotencyKey))
       return { status: "invalid_build" };
+    if (!Array.isArray(legacyRefs) || legacyRefs.length > build.artifact.companies.length ||
+        legacyRefs.length > 0 && legacyRefs.length !== build.artifact.companies.length ||
+        new Set(legacyRefs.map((ref) => ref.legacyId)).size !== legacyRefs.length ||
+        new Set(legacyRefs.map((ref) => ref.companyId)).size !== legacyRefs.length ||
+        legacyRefs.some((ref) => !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(ref?.legacyId ?? "") ||
+          ref.companyId !== `co-${sha(JSON.stringify([build.artifact.exhibitionId, ref.legacyId])).slice(0, 20)}` ||
+          !build.artifact.companies.some((item) => item.id === ref.companyId)))
+      return { status: "invalid_legacy_refs" };
     const artifactJson = JSON.stringify(build.artifact);
     const reportJson = JSON.stringify(build.report);
     const contentSha = sha(JSON.stringify([artifactJson, reportJson]));
@@ -55,13 +63,51 @@ export function createBuiltCatalogD1Repository(db, now = () => new Date().toISOS
     for (const participant of build.artifact.companies) statements.push(db.prepare(`INSERT INTO s02_catalog_participants
       (build_id, company_id, participant_json) VALUES (?, ?, ?)`)
       .bind(build.buildId, participant.id, JSON.stringify(participant)));
+    for (const ref of legacyRefs) statements.push(db.prepare(`INSERT INTO s02_legacy_participant_refs
+      (profile_ref, event_key, legacy_company_id, build_id, company_id)
+      VALUES (?, ?, ?, ?, ?)`)
+      .bind(profileRef, build.artifact.exhibitionId, ref.legacyId, build.buildId, ref.companyId));
     try { await db.batch(statements); return { status: "stored", buildId: build.buildId }; }
     catch {
       const prior = await db.prepare("SELECT build_id, content_sha FROM s02_catalog_builds WHERE profile_ref = ? AND idempotency_key = ?")
         .bind(profileRef, idempotencyKey).first();
-      return !prior ? { status: "storage_unavailable" } : prior.build_id === build.buildId && prior.content_sha === contentSha
-        ? { status: "replay", buildId: prior.build_id } : { status: "build_conflict" };
+      if (!prior) return { status: "storage_unavailable" };
+      if (prior.build_id !== build.buildId || prior.content_sha !== contentSha) return { status: "build_conflict" };
+      try {
+        const refs = await db.prepare(`SELECT legacy_company_id, company_id FROM s02_legacy_participant_refs
+          WHERE profile_ref = ? AND event_key = ? AND build_id = ? ORDER BY legacy_company_id`)
+          .bind(profileRef, build.artifact.exhibitionId, build.buildId).all();
+        const expected = legacyRefs.map((ref) => [ref.legacyId, ref.companyId]).sort((a, b) => a[0].localeCompare(b[0]));
+        const actual = (refs.results ?? []).map((ref) => [ref.legacy_company_id, ref.company_id]);
+        return JSON.stringify(actual) === JSON.stringify(expected)
+          ? { status: "replay", buildId: prior.build_id } : { status: "build_conflict" };
+      } catch { return { status: "storage_unavailable" }; }
     }
+  }
+
+  async function resolveLegacyParticipant({ profileRef, eventKey, legacyId }) {
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(profileRef ?? "") ||
+        !/^[a-z0-9][a-z0-9-]{0,79}$/.test(eventKey ?? "") ||
+        !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(legacyId ?? ""))
+      return { status: 400, body: { error: "invalid_legacy_link" } };
+    const latest = await db.prepare(`SELECT b.build_id FROM s02_catalog_builds b
+      WHERE b.profile_ref = ? AND b.event_id = ? AND EXISTS
+      (SELECT 1 FROM s02_legacy_participant_refs r WHERE r.build_id = b.build_id)
+      ORDER BY b.created_at DESC, b.rowid DESC LIMIT 1`).bind(profileRef, eventKey).first();
+    if (!latest) return { status: 404, body: { error: "legacy_link_not_found" } };
+    const rows = await db.prepare(`SELECT r.company_id, r.build_id, b.source_revision
+      FROM s02_legacy_participant_refs r JOIN s02_catalog_builds b ON b.build_id = r.build_id
+      WHERE r.profile_ref = ? AND r.event_key = ? AND r.legacy_company_id = ?
+      ORDER BY b.created_at DESC, b.rowid DESC`).bind(profileRef, eventKey, legacyId).all();
+    const refs = rows.results ?? [];
+    if (!refs.length) return { status: 404, body: { error: "legacy_link_not_found" } };
+    if (new Set(refs.map((ref) => ref.company_id)).size !== 1)
+      return { status: 409, body: { error: "legacy_link_ambiguous" } };
+    const selected = refs.find((ref) => ref.build_id === latest.build_id);
+    if (!selected) return { status: 404, body: { error: "legacy_link_not_found" } };
+    return { status: 200, body: { exhibitionId: eventKey, legacyId, companyId: selected.company_id,
+      buildId: selected.build_id, sourceRevision: selected.source_revision,
+      detailPath: `/api/v1/catalog-builds/${selected.build_id}/participants/${selected.company_id}` } };
   }
 
   async function readParticipants({ profileRef, buildId, companyId = null, query = "", classification = null }) {
@@ -256,6 +302,6 @@ export function createBuiltCatalogD1Repository(db, now = () => new Date().toISOS
     return bound && exhibition ? { company: selected.body.items[0], exhibition, buildId, preleadId: id } : null;
   }
 
-  return { saveBuild, getBuild, getBuildByKey, readParticipants, ensurePrelead,
+  return { saveBuild, getBuild, getBuildByKey, resolveLegacyParticipant, readParticipants, ensurePrelead,
     appendNote, appendDisposition, getTimeline, resolve };
 }

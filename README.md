@@ -31,6 +31,22 @@ Open `http://127.0.0.1:3000`. The UI displays invented catalog entries and ident
 
 ### Conditional durable built catalog contract
 
+`src/legacy-ex-snapshot.js` imports the parsed `EX` array produced by the old
+sales catalog generator into the same app-owned D1 build/participant contract.
+It derives a revision from the fields actually imported, preserves the old
+`eventKey + company id` pair through an additive `0004_legacy_catalog_refs.sql`
+mapping, and keeps the new participant ID stable across name changes and
+rebuilds. Legacy target/near-target flags remain marked
+`legacy_classification_unverified`; registry state is `unknown`. Repeated or
+unsafe old IDs stop the entire import before D1 writes. Contact email/phone
+fields are excluded from the public artifact and revision. An offline Worker
+test covers import, profile isolation, old-link lookup, a revised snapshot,
+notes and one reviewed fake deal. Removed legacy IDs stop resolving in the
+latest snapshot. This is an opt-in internal import contract; the published
+catalog page and `/api/v1/companies` still use demo data. Real source file
+selection, public URL routing, old notes/deal-status migration, full legacy
+financial/card fields and production approval/profile issuers remain open.
+
 `migrations/0002_built_catalog.sql` adds build artifacts, participant membership and build references to the **separate app-owned D1 candidate** created by `0001_s04_domain.sql`. `src/built-catalog-d1.js` persists a validated synthetic build under profile/idempotency key, reads the exact profile-owned participant, binds a stable prelead across rebuilds, and appends a note with D1 replay protection. The existing S-04 D1 repository then reads the same prelead revision and notes for reviewed deal creation. `createDealReviewService` accepts the async D1 participant resolver in its persistent path; its in-memory handler and older demo IDs remain intact.
 
 `fixtures/built-catalog-d1-worker.js` and `test/wrangler.built-catalog-local.toml` are **local test harnesses only**. CI applies both migrations to a temporary D1, exercises build → card → prelead → note, restarts the Worker, verifies the same history under a rebuild, prepares a revision-bound review, restarts again, confirms one fake deal and checks replay on a further process. It also stores a valid artifact with a different company order and rejects malformed read filters. A second test reserves an unknown provider outcome and confirms no second provider POST after restart. Wrangler test files run serially because local Worker runtime ports can collide when separate fixtures start concurrently. This is local Worker/D1 evidence, not a production binding. The Node HTTP service is still in-memory; no new migration is applied to the legacy bot database. Preview HTML, production profile/approval issuer, real catalog import, deployed MCP relay and Weeek test-workspace integration are still open.

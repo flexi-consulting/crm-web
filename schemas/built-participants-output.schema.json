@@ -7,7 +7,7 @@
   "properties": {
     "domainApiVersion": { "const": "1.0.0" },
     "buildId": { "type": "string", "pattern": "^build-[a-f0-9]{24}$" },
-    "exhibitionId": { "type": "string", "pattern": "^demo-expo-[0-9]{3}$" },
+    "exhibitionId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,79}$" },
     "sourceRevision": { "type": "string", "minLength": 1 },
     "items": { "type": "array", "items": {
       "type": "object", "additionalProperties": false,

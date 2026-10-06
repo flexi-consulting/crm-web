@@ -7,7 +7,7 @@
   "required": ["schemaVersion", "exhibitionId", "sourceRevision", "companies"],
   "properties": {
     "schemaVersion": { "const": "1.0.0" },
-    "exhibitionId": { "type": "string", "pattern": "^demo-expo-[0-9]{3}$" },
+    "exhibitionId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,79}$" },
     "sourceRevision": { "type": "string", "minLength": 1 },
     "companies": {
       "type": "array",

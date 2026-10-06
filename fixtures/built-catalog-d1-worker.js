@@ -3,6 +3,7 @@ import { createBuiltCatalogD1Repository } from "../src/built-catalog-d1.js";
 import { createS04D1Repository } from "../src/s04-d1-repository.js";
 import { createS04D1ConfirmedDeals } from "../src/s04-d1-confirmed-deals.js";
 import { createDealReviewService } from "../src/deal-reviews.js";
+import { importLegacyExSnapshot } from "../src/legacy-ex-snapshot.js";
 
 const now = "2026-10-06T09:00:00.000Z";
 let providerCalls = 0;
@@ -37,7 +38,14 @@ export default {
         result = await built.saveBuild({ profileRef: profileId, idempotencyKey: key, build: generated.body });
         return respond(result.status === "stored" ? 201 : result.status === "replay" ? 200 : 409, result);
       }
-      if (path === "/catalog/read") result = await built.readParticipants({ profileRef: profileId, buildId: args.buildId,
+      if (path === "/catalog/import-legacy") {
+        result = await importLegacyExSnapshot({ repository: built, profileRef: profileId,
+          eventKey: args.eventKey, entries: args.entries });
+        return respond(result.status === "stored" ? 201 : result.status === "replay" ? 200 : 422, result);
+      }
+      if (path === "/catalog/resolve-legacy") result = await built.resolveLegacyParticipant({
+        profileRef: profileId, eventKey: args.eventKey, legacyId: args.legacyId });
+      else if (path === "/catalog/read") result = await built.readParticipants({ profileRef: profileId, buildId: args.buildId,
         companyId: args.companyId ?? null, query: args.q ?? "", classification: args.classification ?? null });
       else if (path === "/catalog/bind") result = await built.ensurePrelead({ profileRef: profileId,
         buildId: args.buildId, companyId: args.companyId });

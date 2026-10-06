@@ -56,7 +56,7 @@ test("D1 built catalog, stable prelead/note and reviewed deal survive three Work
   let worker;
   try {
     for (const migration of ["migrations/0001_s04_domain.sql", "migrations/0002_built_catalog.sql",
-      "migrations/0003_weeek_deal_identity.sql"]) {
+      "migrations/0003_weeek_deal_identity.sql", "migrations/0004_legacy_catalog_refs.sql"]) {
       const applied = spawnSync(node, [wrangler, "d1", "execute", "CRM_DB", "--config", config,
         "--local", "--persist-to", root, "--file", migration, "--yes", "--json"], { cwd, encoding: "utf8" });
       assert.equal(applied.status, 0, applied.stderr || applied.stdout);
@@ -150,12 +150,101 @@ test("D1 built catalog, stable prelead/note and reviewed deal survive three Work
   }
 });
 
+test("invented legacy EX snapshot keeps event/id links through D1 rebuild, note and reviewed deal", async () => {
+  const root = mkdtempSync(join(tmpdir(), "crm-legacy-ex-d1-"));
+  let worker;
+  const entries = [
+    { id: "LNG001", n: "Invented Loom Works", s: "A-01", t: 1, nt: 0,
+      inn: "0000000001", ogrn: "0000000000001", ru: 1, rev: 250,
+      href: "https://example.invalid/catalog/loom", w: "https://example.invalid/loom" },
+    { id: "21_dot_12", n: "Invented Supplier", s: "A-02", t: 0, nt: 1, ru: 1,
+      rev: null, href: "https://example.invalid/catalog/supplier" }
+  ];
+  const eventKey = "demo-expo-001";
+  const link = { eventKey, legacyId: "LNG001" };
+  try {
+    for (const migration of ["migrations/0001_s04_domain.sql", "migrations/0002_built_catalog.sql",
+      "migrations/0003_weeek_deal_identity.sql", "migrations/0004_legacy_catalog_refs.sql"]) {
+      const applied = spawnSync(node, [wrangler, "d1", "execute", "CRM_DB", "--config", config,
+        "--local", "--persist-to", root, "--file", migration, "--yes", "--json"], { cwd, encoding: "utf8" });
+      assert.equal(applied.status, 0, applied.stderr || applied.stdout);
+    }
+    worker = await startWorker(root);
+    const imported = await call(worker.base, "/catalog/import-legacy", { eventKey, entries });
+    assert.equal(imported.status, 201, JSON.stringify(imported.body));
+    assert.equal(imported.body.imported, 2);
+    assert.match(imported.body.sourceRevision, /^legacy-ex-sha256-[0-9a-f]{64}$/);
+    assert.equal((await call(worker.base, "/catalog/import-legacy", { eventKey, entries })).status, 200);
+    const blocked = await call(worker.base, "/catalog/import-legacy", { eventKey,
+      entries: [{ ...entries[0], id: "LNG001" }, { ...entries[1], id: "LNG001" }] });
+    assert.equal(blocked.status, 422);
+    assert.equal(blocked.body.status, "legacy_identity_conflict");
+    assert.equal((await call(worker.base, "/catalog/import-legacy", { eventKey,
+      entries: [{ ...entries[0], id: "13C18/13D19" }] })).body.status, "legacy_identity_conflict");
+    const resolved = await call(worker.base, "/catalog/resolve-legacy", link);
+    assert.equal(resolved.status, 200);
+    assert.equal(resolved.body.buildId, imported.body.buildId);
+    assert.match(resolved.body.companyId, /^co-[a-f0-9]{20}$/);
+    assert.equal((await call(worker.base, "/catalog/resolve-legacy", link,
+      { profile: "demo-profile-b" })).status, 404);
+    const card = await call(worker.base, "/catalog/read", { buildId: resolved.body.buildId,
+      companyId: resolved.body.companyId });
+    assert.equal(card.status, 200);
+    assert.equal(card.body.items[0].name, entries[0].n);
+    assert.equal(card.body.items[0].enrichment.revenueRub, 250_000_000);
+    assert.equal(card.body.items[0].registry.status, "unknown");
+    assert.equal(card.body.items[0].qualification.reason, "legacy_classification_unverified");
+    const binding = await call(worker.base, "/catalog/bind", { buildId: resolved.body.buildId,
+      companyId: resolved.body.companyId });
+    assert.equal(binding.status, 201);
+    const noted = await call(worker.base, "/prelead/note", { preleadId: binding.body.prelead.id,
+      operationId: `op-${randomUUID()}`, noteText: "Invented interest" });
+    assert.equal(noted.status, 201);
+    await stopWorker(worker.child);
+    worker = await startWorker(root);
+    assert.equal((await call(worker.base, "/catalog/resolve-legacy", link)).body.companyId,
+      resolved.body.companyId);
+    const revisedEntries = [{ ...entries[0], n: "Invented Loom Works Updated" }, entries[1]];
+    const rebuilt = await call(worker.base, "/catalog/import-legacy", { eventKey, entries: revisedEntries });
+    assert.equal(rebuilt.status, 201);
+    assert.notEqual(rebuilt.body.buildId, imported.body.buildId);
+    const latest = await call(worker.base, "/catalog/resolve-legacy", link);
+    assert.equal(latest.body.companyId, resolved.body.companyId);
+    assert.equal(latest.body.buildId, rebuilt.body.buildId);
+    const rebound = await call(worker.base, "/catalog/bind", { buildId: rebuilt.body.buildId,
+      companyId: latest.body.companyId });
+    assert.equal(rebound.status, 201);
+    assert.equal(rebound.body.prelead.id, binding.body.prelead.id);
+    const draft = { buildId: rebuilt.body.buildId, companyId: latest.body.companyId,
+      exhibitionId: eventKey, title: "Invented catalog deal", companyInn: entries[0].inn,
+      contactName: "Invented Contact", dealComment: "Synthetic review" };
+    const review = await call(worker.base, "/review/prepare", draft);
+    assert.equal(review.status, 201, JSON.stringify(review.body));
+    assert.match(review.body.details.dealComment, /Invented interest/);
+    const deal = await call(worker.base, "/review/confirm",
+      { reviewId: review.body.reviewId, revision: review.body.revision }, { approval: true });
+    assert.equal(deal.status, 201, JSON.stringify(deal.body));
+    assert.equal(deal.body.linkStatus, "linked");
+    assert.equal((await call(worker.base, "/provider/count", {})).body.calls, 1);
+    const reduced = await call(worker.base, "/catalog/import-legacy", { eventKey,
+      entries: [revisedEntries[0]] });
+    assert.equal(reduced.status, 201);
+    assert.equal((await call(worker.base, "/catalog/resolve-legacy",
+      { eventKey, legacyId: "21_dot_12" })).status, 404);
+    assert.equal((await call(worker.base, "/catalog/resolve-legacy", link)).body.companyId,
+      resolved.body.companyId);
+  } finally {
+    if (worker) await stopWorker(worker.child);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("unknown built-participant provider outcome is reserved and never retried after restart", async () => {
   const root = mkdtempSync(join(tmpdir(), "crm-built-unknown-d1-"));
   let worker;
   try {
     for (const migration of ["migrations/0001_s04_domain.sql", "migrations/0002_built_catalog.sql",
-      "migrations/0003_weeek_deal_identity.sql"]) {
+      "migrations/0003_weeek_deal_identity.sql", "migrations/0004_legacy_catalog_refs.sql"]) {
       const applied = spawnSync(node, [wrangler, "d1", "execute", "CRM_DB", "--config", config,
         "--local", "--persist-to", root, "--file", migration, "--yes", "--json"], { cwd, encoding: "utf8" });
       assert.equal(applied.status, 0, applied.stderr || applied.stdout);
