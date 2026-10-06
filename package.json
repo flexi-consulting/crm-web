@@ -6,14 +6,15 @@
   "description": "Synthetic CRM and exhibitions domain API foundation",
   "scripts": {
     "start": "node src/server.js",
-    "test": "node --test"
+    "test": "node --test --test-concurrency=1"
   },
   "devDependencies": {
     "ajv": "^8.17.1",
     "ajv-formats": "^3.0.1",
-    "sql.js": "^1.14.2"
+    "sql.js": "^1.14.2",
+    "wrangler": "4.147.0"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   }
 }

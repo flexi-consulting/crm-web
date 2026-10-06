@@ -93,7 +93,7 @@ export function qualify(company) {
   return { classification: "near_target", target: false, nearTarget: true, reason: !e.inn ? "inn_missing" : e.revenueRub === null ? "revenue_unknown" : r.status === "unknown" ? "registry_unknown" : r.status === "inactive" || r.status === "not_found" ? "registry_not_active" : e.activity === "unknown" ? "activity_unknown" : "outside_target_threshold" };
 }
 
-function validateReport(artifact, report) {
+export function validateReport(artifact, report) {
   const rows = artifact.companies;
   const counts = {
     sourceRecords: report.stages.source.imported,
@@ -217,6 +217,24 @@ export function createCatalogBuildService({ sourceAdapter = createSyntheticSourc
     const { profileId: _profileId, ...body } = build;
     return { status: 200, body };
   }
+  function readParticipants({ profileId, buildId, companyId = null, query = "", classification = null }) {
+    const owned = get({ profileId, buildId });
+    if (owned.status !== 200) return owned;
+    const { artifact, report } = owned.body;
+    if (report.validation?.valid !== true) return { status: 409, body: { error: "validated_build_required", code: "BUILD_NOT_VALIDATED" } };
+    const normalizedQuery = query.trim().toLocaleLowerCase("en");
+    const matches = artifact.companies.filter((company) =>
+      (companyId === null || company.id === companyId) &&
+      (classification === null || company.qualification.classification === classification) &&
+      (!normalizedQuery || `${company.name} ${company.source.country} ${company.source.booth ?? ""}`.toLocaleLowerCase("en").includes(normalizedQuery)));
+    if (companyId !== null && matches.length === 0) return { status: 404, body: { error: "participant_not_found", code: "BUILD_PARTICIPANT_NOT_FOUND" } };
+    return { status: 200, body: {
+      domainApiVersion: "1.0.0", buildId, exhibitionId: artifact.exhibitionId,
+      sourceRevision: artifact.sourceRevision, items: structuredClone(matches).map((company) => ({
+        ...company, detailPath: `/api/v1/catalog-builds/${buildId}/participants/${company.id}`
+      }))
+    } };
+  }
   function preview({ profileId, buildId }) {
     const sourceBuild = builds.get(buildId);
     if (!sourceBuild || sourceBuild.profileId !== profileId) return { status: 404, body: { error: "catalog_build_not_found", code: "BUILD_NOT_FOUND" } };
@@ -245,5 +263,5 @@ export function createCatalogBuildService({ sourceAdapter = createSyntheticSourc
     if (!preview || preview.profileId !== profileId) return { status: 404, body: { error: "catalog_preview_not_found", code: "PREVIEW_NOT_FOUND" } };
     return { status: 200, html: preview.html, descriptor: preview.descriptor };
   }
-  return { build, get, preview, getPreview };
+  return { build, get, readParticipants, preview, getPreview };
 }

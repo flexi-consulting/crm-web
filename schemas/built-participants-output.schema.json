@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crm-web.example.invalid/schemas/built-participants-output.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["domainApiVersion", "buildId", "exhibitionId", "sourceRevision", "items"],
+  "properties": {
+    "domainApiVersion": { "const": "1.0.0" },
+    "buildId": { "type": "string", "pattern": "^build-[a-f0-9]{24}$" },
+    "exhibitionId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,79}$" },
+    "sourceRevision": { "type": "string", "minLength": 1 },
+    "items": { "type": "array", "items": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "name", "source", "enrichment", "registry", "qualification", "detailPath"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^co-[a-f0-9]{20}$" },
+        "name": { "type": "string", "minLength": 1 },
+        "source": { "type": "object" },
+        "enrichment": { "type": "object" },
+        "registry": { "type": "object" },
+        "qualification": { "type": "object", "required": ["classification", "target", "nearTarget", "reason"], "properties": { "classification": { "enum": ["target", "near_target", "not_target"] }, "target": { "type": "boolean" }, "nearTarget": { "type": "boolean" }, "reason": { "type": "string" } } },
+        "detailPath": { "type": "string", "pattern": "^/api/v1/catalog-builds/build-[a-f0-9]{24}/participants/co-[a-f0-9]{20}$" }
+      }
+    } }
+  }
+}

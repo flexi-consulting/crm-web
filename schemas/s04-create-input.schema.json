@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crm-web.example.invalid/schemas/s04-create-input.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["reviewId", "revision"],
+  "properties": {
+    "reviewId": { "type": "string", "pattern": "^review-[0-9a-f-]{36}$" },
+    "revision": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+  }
+}

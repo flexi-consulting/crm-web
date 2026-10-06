@@ -1,0 +1,13 @@
+{
+  "capabilityId": "crm.exhibitions.builtParticipants.read",
+  "version": "1.0.0",
+  "description": "Read participants from one validated synthetic catalog build owned by the trusted profile.",
+  "inputSchemaRef": "schemas/built-participants-input.schema.json",
+  "outputSchemaRef": "schemas/built-participants-output.schema.json",
+  "effect": "read",
+  "requiredScopes": ["crm.catalog.build.read.synthetic"],
+  "handlerBinding": "src/catalog-build.js#createCatalogBuildService.readParticipants",
+  "httpBinding": "GET /api/v1/catalog-builds/{buildId}/participants",
+  "mcpTool": { "name": "crm_built_catalog_participants_read", "protocolVersion": "2025-06-18" },
+  "publication": "offline_test_only"
+}

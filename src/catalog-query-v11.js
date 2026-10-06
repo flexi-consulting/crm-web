@@ -48,9 +48,11 @@ function safeSourceUrl(value) {
   } catch { return null; }
 }
 
-export function renderCatalogV11({ artifact, result, filters = {} }) {
+export function renderCatalogV11({ artifact, result, filters = {}, participantCompanyIds = [] }) {
   if (artifact?.schemaVersion !== "1.1.0" || result?.status !== "ok" || !Array.isArray(result.items))
     return { status: "invalid_catalog_view", html: "" };
+  const participantLinks = new Set(Array.isArray(participantCompanyIds)
+    ? participantCompanyIds.filter(id => /^co-[a-f0-9]{20}$/.test(id)) : []);
   const options = (name, values, selected, labels = {}) => `<label>${name}<select name="${name}"><option value="">Все</option>${values.map(value =>
     `<option value="${escapeHtml(value)}"${selected === value ? " selected" : ""}>${escapeHtml(labels[value] ?? value)}</option>`).join("")}</select></label>`;
   const countries = [...new Set(artifact.companies.map(company => company.source?.country).filter(Boolean))]
@@ -63,6 +65,7 @@ export function renderCatalogV11({ artifact, result, filters = {} }) {
       ${source.description ? `<p>${escapeHtml(source.description)}</p>` : ""}
       <p>Выручка: ${escapeHtml(moneyLabel(enrichment.revenueRub))}${enrichment.revenueYear ? ` (${enrichment.revenueYear})` : ""}</p>
       <p>Прибыль: ${escapeHtml(moneyLabel(enrichment.profitRub))}${enrichment.profitYear ? ` (${enrichment.profitYear})` : ""}</p>
+      ${participantLinks.has(company.id) ? `<p><a href="/catalogs/${encodeURIComponent(artifact.exhibitionId)}/participants/${encodeURIComponent(company.id)}">Карточка CRM и подготовка сделки</a></p>` : ""}
       ${safeHref ? `<a href="${escapeHtml(safeHref)}" rel="noopener noreferrer">Профиль выставки</a>` : ""}</article>`;
   }).join("");
   const html = `<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="robots" content="noindex,nofollow"><title>Каталог ${escapeHtml(artifact.exhibitionId)}</title><main>
@@ -78,7 +81,7 @@ const reply = (status, body) => new Response(JSON.stringify(body), { status, hea
   "x-content-type-options": "nosniff"
 } });
 
-export function createCatalogV11ReadHandler({ repository, resolveTrustedProfile }) {
+export function createCatalogV11ReadHandler({ repository, resolveTrustedProfile, resolveParticipantCompanyIds }) {
   if (typeof repository?.getArtifact !== "function" || typeof resolveTrustedProfile !== "function")
     throw new TypeError("catalog v1.1 repository and trusted profile resolver required");
   return async function handle(request) {
@@ -107,13 +110,53 @@ export function createCatalogV11ReadHandler({ repository, resolveTrustedProfile 
     if (!artifact) return reply(404, { error: "catalog_not_found" });
     const result = queryCatalogV11(artifact, filters);
     if (result.status !== "ok") return reply(400, { error: "invalid_query" });
-    const view = renderCatalogV11({ artifact, result, filters });
+    let participantCompanyIds = [];
+    if (typeof resolveParticipantCompanyIds === "function") {
+      try {
+        const resolved = await resolveParticipantCompanyIds({ profileId: context.profileId, eventKey: match[1] });
+        if (resolved?.status === "ok" && Array.isArray(resolved.companyIds)) participantCompanyIds = resolved.companyIds;
+      } catch { /* Catalog reads stay available while an optional action binding is unavailable. */ }
+    }
+    const view = renderCatalogV11({ artifact, result, filters, participantCompanyIds });
     if (view.status !== "ok") return reply(503, { error: "catalog_unavailable" });
     return new Response(view.html, { status: 200, headers: {
       "content-type": "text/html; charset=utf-8", "cache-control": "private, no-store",
       "x-content-type-options": "nosniff", "referrer-policy": "same-origin",
       "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
     } });
+  };
+}
+
+export function createCatalogV11ParticipantLinkHandler({ repository, resolveTrustedProfile,
+  resolveLegacyParticipant }) {
+  if (typeof repository?.getArtifact !== "function" || typeof resolveTrustedProfile !== "function" ||
+      typeof resolveLegacyParticipant !== "function")
+    throw new TypeError("catalog v1.1 participant-link dependencies required");
+  return async function handle(request) {
+    const url = new URL(request.url);
+    const match = url.pathname.match(/^\/catalogs\/([a-z0-9][a-z0-9-]{0,79})\/participants\/(co-[a-f0-9]{20})$/);
+    if (!match || request.method !== "GET") return reply(404, { error: "not_found" });
+    if (url.searchParams.size) return reply(400, { error: "invalid_query" });
+    let context;
+    try { context = await resolveTrustedProfile(request); } catch {
+      return reply(503, { error: "trusted_profile_unavailable" });
+    }
+    if (!context || typeof context.profileId !== "string" || !context.profileId || !Array.isArray(context.scopes))
+      return reply(503, { error: "trusted_profile_unavailable" });
+    if (!context.scopes.includes("crm.catalog.read")) return reply(403, { error: "required_scope_missing" });
+    let artifact, participant;
+    try {
+      artifact = await repository.getArtifact({ profileId: context.profileId, exhibitionId: match[1] });
+      if (!artifact || !artifact.companies.some(company => company.id === match[2]))
+        return reply(404, { error: "catalog_participant_not_found" });
+      participant = await resolveLegacyParticipant({ profileId: context.profileId,
+        eventKey: match[1], companyId: match[2] });
+    } catch { return reply(503, { error: "catalog_participant_unavailable" }); }
+    if (participant?.status !== 200 || participant.body?.companyId !== match[2] ||
+        !/^build-[a-f0-9]{24}$/.test(participant.body?.buildId ?? ""))
+      return reply(participant?.status === 404 ? 404 : 503, { error: "catalog_participant_unavailable" });
+    return new Response(null, { status: 303, headers: { location: `/catalogs/${participant.body.buildId}/participants/${match[2]}`,
+      "cache-control": "private, no-store", "referrer-policy": "same-origin", "x-content-type-options": "nosniff" } });
   };
 }
 

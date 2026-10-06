@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crm-web.example.invalid/schemas/s03-built-note-input.schema.json",
+  "type": "object", "additionalProperties": false,
+  "required": ["preleadId", "operationId", "noteText"],
+  "properties": {
+    "preleadId": { "type": "string", "pattern": "^built-prelead-[a-f0-9]{24}$" },
+    "operationId": { "type": "string", "pattern": "^op-[0-9a-f-]{36}$" },
+    "noteText": { "type": "string", "minLength": 1, "maxLength": 1000 }
+  }
+}

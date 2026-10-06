@@ -1,0 +1,13 @@
+{
+  "capabilityId": "crm.exhibitions.builtPreleads",
+  "version": "1.1.0",
+  "publication": "offline_test_only",
+  "protocolVersion": "2025-06-18",
+  "handlerBinding": "src/built-catalog-d1-http.js#createBuiltCatalogD1Domain.preleads",
+  "tools": [
+    { "name": "crm_built_prelead_timeline_read", "operation": "getTimeline", "effect": "read", "scope": "crm.preleads.read", "inputSchemaRef": "schemas/s03-built-timeline-input.schema.json", "outputSchemaRef": "schemas/prelead-timeline-response.schema.json", "httpBinding": "GET /api/v1/preleads/{preleadId}/timeline" },
+    { "name": "crm_built_prelead_note_add", "operation": "addNote", "effect": "write", "scope": "crm.preleads.events.append", "inputSchemaRef": "schemas/s03-built-note-input.schema.json", "outputSchemaRef": "schemas/prelead-event-response.schema.json", "httpBinding": "POST /api/v1/preleads/{preleadId}/events" },
+    { "name": "crm_built_prelead_reject", "operation": "reject", "effect": "write", "scope": "crm.preleads.events.append", "inputSchemaRef": "schemas/s03-built-reject-input.schema.json", "outputSchemaRef": "schemas/prelead-event-response.schema.json", "httpBinding": "POST /api/v1/preleads/{preleadId}/events" },
+    { "name": "crm_built_prelead_rejection_undo", "operation": "undoRejection", "effect": "write", "scope": "crm.preleads.events.append", "inputSchemaRef": "schemas/s03-built-undo-input.schema.json", "outputSchemaRef": "schemas/prelead-event-response.schema.json", "httpBinding": "POST /api/v1/preleads/{preleadId}/events" }
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crm-web.example.invalid/schemas/s04-operation-input.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["operationId"],
+  "properties": { "operationId": { "type": "string", "pattern": "^op-[0-9a-f-]{36}$" } }
+}

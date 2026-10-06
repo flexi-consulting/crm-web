@@ -9,6 +9,8 @@ import { createCatalogBuildService } from "./catalog-build.js";
 import { s01ParticipantCapability, readExhibitionParticipants } from "./s01-participants.js";
 import { s01CatalogSearchCapability } from "./s01-catalog-search.js";
 import { createCatalogV11ReadHandler, createCatalogV11SearchHandler } from "./catalog-query-v11.js";
+import { createDealReviewService, normalizeDealReviewRequest } from "./deal-reviews.js";
+import { createParticipantResolver } from "./participant-resolver.js";
 
 const manifest = {
   serviceId: "crm-web.exhibitions",
@@ -89,10 +91,13 @@ async function readJson(request) {
 
 export function createServer({
   resolveTrustedProfile,
+  resolveTrustedReviewReceipt,
+  allowUnsafeSyntheticConfirm = false,
   dealIntents = createDealIntentService(),
-  preleadTimeline = createPreleadTimelineService(),
-  confirmedDeals = createConfirmedDealService(),
   catalogBuilds = createCatalogBuildService(),
+  preleadTimeline = createPreleadTimelineService(),
+  confirmedDeals,
+  reviewService,
   catalogV11Repository,
   resolveCatalogV11TrustedProfile
 } = {}) {
@@ -117,6 +122,9 @@ export function createServer({
     });
     serviceManifest.endpoints.catalogSearch = { method: "GET", path: "/api/v1/catalogs/{exhibitionId}/entries" };
   }
+  const participantResolver = createParticipantResolver({ catalogBuilds, preleadTimeline });
+  const dealService = confirmedDeals ?? createConfirmedDealService({ preleadTimeline, participantResolver });
+  const dealReviews = reviewService ?? createDealReviewService({ confirmedDeals: dealService, preleadTimeline, participantResolver });
   async function trustedProfile(request, response, requiredScope) {
     if (!resolveTrustedProfile) {
       json(response, 503, { error: "trusted_profile_unavailable" });
@@ -158,19 +166,26 @@ export function createServer({
       return response.end(await result.text());
     }
     const isCreateIntent = url.pathname === "/api/v1/deal-intents" && request.method === "POST";
-    const timelineEventMatch = url.pathname.match(/^\/api\/v1\/preleads\/(demo-prelead-[0-9]{3})\/events$/);
+    const timelineEventMatch = url.pathname.match(/^\/api\/v1\/preleads\/((?:demo-prelead-[0-9]{3}|built-prelead-[a-f0-9]{24}))\/events$/);
     const isAppendPreleadEvent = Boolean(timelineEventMatch) && request.method === "POST";
     const isConfirmDeal = url.pathname === "/api/v1/deals/confirm" && request.method === "POST";
+    const isPrepareReview = url.pathname === "/api/v1/deal-reviews" && request.method === "POST";
+    const reviewMatch = url.pathname.match(/^\/api\/v1\/deal-reviews\/(review-[0-9a-f-]{36})$/);
+    const reviewConfirmMatch = url.pathname.match(/^\/api\/v1\/deal-reviews\/(review-[0-9a-f-]{36})\/confirm$/);
+    const isConfirmReview = Boolean(reviewConfirmMatch) && request.method === "POST";
     const dealActionMatch = url.pathname.match(/^\/api\/v1\/deal-operations\/(op-[0-9a-f-]{36})\/(reconcile|repair)$/);
     const isDealAction = Boolean(dealActionMatch) && request.method === "POST";
     const isCatalogBuild = url.pathname === "/api/v1/catalog-builds" && request.method === "POST";
     const catalogBuildMatch = url.pathname.match(/^\/api\/v1\/catalog-builds\/(build-[a-f0-9]{24})$/);
     const isCatalogBuildRead = Boolean(catalogBuildMatch) && (request.method === "GET" || request.method === "HEAD");
+    const builtParticipantsMatch = url.pathname.match(/^\/api\/v1\/catalog-builds\/(build-[a-f0-9]{24})\/participants(?:\/(co-[a-f0-9]{20}))?$/);
+    const builtPreleadMatch = url.pathname.match(/^\/api\/v1\/catalog-builds\/(build-[a-f0-9]{24})\/participants\/(co-[a-f0-9]{20})\/prelead$/);
+    const isBuiltPrelead = Boolean(builtPreleadMatch) && request.method === "POST";
     const catalogBuildPreviewMatch = url.pathname.match(/^\/api\/v1\/catalog-builds\/(build-[a-f0-9]{24})\/preview$/);
     const isCatalogBuildPreview = Boolean(catalogBuildPreviewMatch) && request.method === "POST";
     const catalogPreviewMatch = url.pathname.match(/^\/api\/v1\/catalog-previews\/(preview-[a-f0-9]{24})$/);
     const isCatalogPreviewRead = Boolean(catalogPreviewMatch) && (request.method === "GET" || request.method === "HEAD");
-    if (request.method !== "GET" && request.method !== "HEAD" && !isCreateIntent && !isAppendPreleadEvent && !isConfirmDeal && !isDealAction && !isCatalogBuild && !isCatalogBuildPreview) {
+    if (request.method !== "GET" && request.method !== "HEAD" && !isCreateIntent && !isAppendPreleadEvent && !isConfirmDeal && !isPrepareReview && !isConfirmReview && !isDealAction && !isCatalogBuild && !isCatalogBuildPreview && !isBuiltPrelead) {
       response.setHeader("allow", "GET, HEAD, POST");
       return json(response, 405, { error: "method_not_allowed" });
     }
@@ -223,6 +238,7 @@ export function createServer({
       return json(response, result.status, result.body);
     }
     if (isConfirmDeal) {
+      if (!allowUnsafeSyntheticConfirm) return json(response, 404, { error: "not_found" });
       const context = await trustedProfile(request, response, "crm.deals.confirm.synthetic");
       if (!context) return;
       const idempotencyKey = request.headers["idempotency-key"];
@@ -231,7 +247,36 @@ export function createServer({
       if (parsed.error) return json(response, parsed.error === "content_type_required" ? 415 : 400, { error: parsed.error });
       const normalized = normalizeConfirmedDealRequest(parsed.value);
       if (!normalized) return json(response, 400, { error: "invalid_confirmed_deal_request", operationId: parsed.value?.operationId });
-      const result = await confirmedDeals.create({ profileId: context.profileId, idempotencyKey, request: normalized });
+      const result = await dealService.create({ profileId: context.profileId, idempotencyKey, request: normalized });
+      return json(response, result.status, result.body);
+    }
+    if (isPrepareReview) {
+      const context = await trustedProfile(request, response, "crm.deals.review.synthetic");
+      if (!context) return;
+      const parsed = await readJson(request);
+      if (parsed.error) return json(response, parsed.error === "content_type_required" ? 415 : 400, { error: parsed.error });
+      const draft = normalizeDealReviewRequest(parsed.value);
+      const result = await dealReviews.prepare({ profileId: context.profileId, request: draft ?? parsed.value });
+      return json(response, result.status, result.body);
+    }
+    if (reviewMatch && (request.method === "GET" || request.method === "HEAD")) {
+      const context = await trustedProfile(request, response, "crm.deals.review.synthetic");
+      if (!context) return;
+      const result = await dealReviews.get({ profileId: context.profileId, reviewId: reviewMatch[1] });
+      return json(response, result.status, result.body);
+    }
+    if (isConfirmReview) {
+      const context = await trustedProfile(request, response, "crm.deals.confirm.synthetic");
+      if (!context) return;
+      const parsed = await readJson(request);
+      if (parsed.error) return json(response, parsed.error === "content_type_required" ? 415 : 400, { error: parsed.error });
+      if (!parsed.value || typeof parsed.value !== "object" || Array.isArray(parsed.value) ||
+          Object.keys(parsed.value).some((key) => key !== "revision") || typeof parsed.value.revision !== "string") {
+        return json(response, 400, { error: "invalid_review_confirmation" });
+      }
+      let trustedReceipt;
+      try { trustedReceipt = await resolveTrustedReviewReceipt?.(request, context); } catch {}
+      const result = await dealReviews.confirm({ profileId: context.profileId, reviewId: reviewConfirmMatch[1], revision: parsed.value.revision, trustedReceipt });
       return json(response, result.status, result.body);
     }
     if (isDealAction) {
@@ -240,8 +285,15 @@ export function createServer({
       if (!context) return;
       if (url.searchParams.size > 0) return json(response, 400, { error: "invalid_query" });
       const result = dealActionMatch[2] === "repair"
-        ? await confirmedDeals.repair({ profileId: context.profileId, operationId: dealActionMatch[1] })
-        : await confirmedDeals.reconcile({ profileId: context.profileId, operationId: dealActionMatch[1] });
+        ? await dealService.repair({ profileId: context.profileId, operationId: dealActionMatch[1] })
+        : await dealService.reconcile({ profileId: context.profileId, operationId: dealActionMatch[1] });
+      return json(response, result.status, result.body);
+    }
+    const operationMatch = url.pathname.match(/^\/api\/v1\/deal-operations\/(op-[0-9a-f-]{36})$/);
+    if (operationMatch && (request.method === "GET" || request.method === "HEAD")) {
+      const context = await trustedProfile(request, response, "crm.deals.operations.read.synthetic");
+      if (!context) return;
+      const result = dealService.get({ profileId: context.profileId, operationId: operationMatch[1] });
       return json(response, result.status, result.body);
     }
     if (isCatalogBuild) {
@@ -284,6 +336,32 @@ export function createServer({
       const result = catalogBuilds.get({ profileId: context.profileId, buildId: catalogBuildMatch[1] });
       return json(response, result.status, result.body);
     }
+    if (builtParticipantsMatch && (request.method === "GET" || request.method === "HEAD")) {
+      const context = await trustedProfile(request, response, "crm.catalog.build.read.synthetic");
+      if (!context) return;
+      const keys = [...url.searchParams.keys()];
+      const queryValues = url.searchParams.getAll("q");
+      const classValues = url.searchParams.getAll("classification");
+      if (keys.some((key) => !["q", "classification"].includes(key)) || queryValues.length > 1 || classValues.length > 1 ||
+          (queryValues[0] && [...queryValues[0]].length > 120) ||
+          (classValues[0] && !["target", "near_target", "not_target"].includes(classValues[0])) ||
+          (builtParticipantsMatch[2] && keys.length > 0)) {
+        return json(response, 400, { error: "invalid_query", code: "BUILD_INVALID_QUERY" });
+      }
+      const result = catalogBuilds.readParticipants({ profileId: context.profileId, buildId: builtParticipantsMatch[1],
+        companyId: builtParticipantsMatch[2] ?? null, query: queryValues[0] ?? "", classification: classValues[0] ?? null });
+      return json(response, result.status, result.body);
+    }
+    if (isBuiltPrelead) {
+      const context = await trustedProfile(request, response, "crm.preleads.create.synthetic");
+      if (!context) return;
+      if (url.searchParams.size > 0) return json(response, 400, { error: "invalid_query" });
+      const owned = catalogBuilds.get({ profileId: context.profileId, buildId: builtPreleadMatch[1] });
+      if (owned.status !== 200) return json(response, owned.status, owned.body);
+      const result = participantResolver.ensureBuiltPrelead({ profileId: context.profileId,
+        exhibitionId: owned.body.artifact.exhibitionId, companyId: builtPreleadMatch[2], buildId: builtPreleadMatch[1] });
+      return json(response, result.status, result.body);
+    }
     const intentMatch = url.pathname.match(/^\/api\/v1\/deal-intents\/(demo-intent-[0-9a-f-]{36})$/);
     if (intentMatch && (request.method === "GET" || request.method === "HEAD")) {
       if (url.searchParams.size > 0) return json(response, 400, { error: "invalid_query" });
@@ -292,7 +370,7 @@ export function createServer({
       const result = await dealIntents.get({ profileId: context.profileId, id: intentMatch[1] });
       return json(response, result.status, result.body);
     }
-    const timelineMatch = url.pathname.match(/^\/api\/v1\/preleads\/(demo-prelead-[0-9]{3})\/timeline$/);
+    const timelineMatch = url.pathname.match(/^\/api\/v1\/preleads\/((?:demo-prelead-[0-9]{3}|built-prelead-[a-f0-9]{24}))\/timeline$/);
     if (timelineMatch && (request.method === "GET" || request.method === "HEAD")) {
       if (url.searchParams.size > 0) return json(response, 400, { error: "invalid_query" });
       const context = await trustedProfile(request, response, "crm.preleads.read");

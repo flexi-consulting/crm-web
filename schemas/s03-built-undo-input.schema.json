@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crm-web.example.invalid/schemas/s03-built-undo-input.schema.json",
+  "type": "object", "additionalProperties": false,
+  "required": ["preleadId", "operationId", "targetEventId"],
+  "properties": {
+    "preleadId": { "type": "string", "pattern": "^built-prelead-[a-f0-9]{24}$" },
+    "operationId": { "type": "string", "pattern": "^op-[0-9a-f-]{36}$" },
+    "targetEventId": { "type": "string", "pattern": "^evt-[0-9a-f-]{36}$" }
+  }
+}

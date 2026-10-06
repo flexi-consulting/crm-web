@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { catalog, syntheticProfileCompanies, companies } from "./fixtures.js";
+import { createPreleadTimelineService } from "./prelead-timeline.js";
 
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const keyFor = (profileId, key) => `${profileId}\u0000${key}`;
@@ -38,22 +39,43 @@ export function normalizeConfirmedDealRequest(v) {
   return { companyId: v.companyId, exhibitionId: v.exhibitionId, title: v.title.trim(), summary: v.summary.trim(), confirmation: true, operationId: v.operationId };
 }
 
-export function createConfirmedDealService({ provider = new FakeDealProvider() } = {}) {
+export function createConfirmedDealService({ provider = new FakeDealProvider(), preleadTimeline = createPreleadTimelineService(), participantResolver } = {}) {
   const operations = new Map();
   const idempotency = new Map();
+  const activeBinding = new Map();
   const inFlight = new Map();
   const ownedCompanies = (profileId) => {
     const ids = new Set(syntheticProfileCompanies[profileId] ?? []);
     return companies.filter((company) => ids.has(company.id));
   };
-  const visible = (profileId, request) => ownedCompanies(profileId).some((c) => c.id === request.companyId && c.exhibitionIds.includes(request.exhibitionId)) && catalog.some((e) => e.id === request.exhibitionId);
-  const response = (op, replayed = false) => ({ domainApiVersion: "1.0.0", operationId: op.operationId, status: op.status, companyId: op.request.companyId, exhibitionId: op.request.exhibitionId, ...(op.dealId ? { dealId: op.dealId } : {}), ...(op.linked ? { linkStatus: "linked" } : {}), replayed });
+  const visible = (profileId, request) => participantResolver
+    ? Boolean(participantResolver.resolve({ profileId, exhibitionId: request.exhibitionId, companyId: request.companyId, buildId: request.buildId ?? null }))
+    : ownedCompanies(profileId).some((c) => c.id === request.companyId && c.exhibitionIds.includes(request.exhibitionId)) && catalog.some((e) => e.id === request.exhibitionId);
+  const response = (op, replayed = false) => ({ domainApiVersion: "1.0.0", operationId: op.operationId, status: op.status, companyId: op.request.companyId, exhibitionId: op.request.exhibitionId, ...(op.request.buildId ? { buildId: op.request.buildId } : {}), ...(op.dealId ? { dealId: op.dealId } : {}), ...(op.linked ? { linkStatus: "linked" } : {}), replayed });
+  // Rebuilds may change source revision; one event/company still maps to one deal.
+  const bindingKey = (profileId, request) => JSON.stringify([profileId, request.exhibitionId, request.companyId]);
+
+  async function linkOne(op) {
+    if (op.status !== "created" || !op.dealId) return false;
+    if (op.linked) return true;
+    // The fake provider can simulate an unavailable legacy status writer; the
+    // profile-owned prelead timeline is the authoritative local projection.
+    const providerLinked = await provider.repairLink(op.operationId, op.dealId);
+    if (providerLinked !== true) return false;
+    const linked = preleadTimeline.linkConfirmedDeal({ profileId: op.profileId,
+      companyId: op.request.companyId, exhibitionId: op.request.exhibitionId, buildId: op.request.buildId ?? null,
+      operationId: op.operationId, dealId: op.dealId });
+    op.linked = linked.status === 200 || linked.status === 201;
+    return op.linked;
+  }
 
   async function create({ profileId, idempotencyKey, request }) {
     if (!visible(profileId, request)) return { status: 404, body: { error: "company_or_exhibition_not_found", operationId: request.operationId } };
     const key = keyFor(profileId, idempotencyKey);
     const existingId = idempotency.get(key);
     if (existingId) {
+      const running = inFlight.get(key);
+      if (running) await running;
       const prior = operations.get(existingId);
       if (!same(prior.request, request)) return { status: 409, body: { error: "idempotency_conflict", operationId: request.operationId } };
       if (prior.status === "unknown") {
@@ -65,6 +87,8 @@ export function createConfirmedDealService({ provider = new FakeDealProvider() }
       return { status: 200, body: response(prior, true) };
     }
     if (request.confirmation !== true) return { status: 400, body: { error: "explicit_confirmation_required", operationId: request.operationId } };
+    const boundId = activeBinding.get(bindingKey(profileId, request));
+    if (boundId && boundId !== request.operationId) return { status: 409, body: { error: "participant_deal_exists", operationId: boundId } };
     const existingOp = operations.get(request.operationId);
     if (existingOp && existingOp.profileId !== profileId) return { status: 404, body: { error: "operation_not_found", operationId: request.operationId } };
     if (existingOp) return { status: 409, body: { error: "operation_id_conflict", operationId: request.operationId } };
@@ -72,11 +96,18 @@ export function createConfirmedDealService({ provider = new FakeDealProvider() }
     if (pending) return pending;
     const op = { profileId, operationId: request.operationId, idempotencyKey, request, status: "pending", linked: false };
     operations.set(request.operationId, op); idempotency.set(key, request.operationId);
+    activeBinding.set(bindingKey(profileId, request), request.operationId);
     const task = (async () => {
       try {
         const result = await provider.create({ operationId: op.operationId, request: op.request });
         op.status = result.status === "rejected" ? "rejected" : result.status === "created" && isDealId(result.dealId) ? "created" : "unknown";
         op.dealId = op.status === "created" ? result.dealId : undefined;
+        if (op.status === "rejected" && activeBinding.get(bindingKey(profileId, request)) === op.operationId) {
+          activeBinding.delete(bindingKey(profileId, request));
+        }
+        if (op.status === "created") {
+          try { await linkOne(op); } catch { /* Receipt remains created; link is repairable. */ }
+        }
         return { status: op.status === "created" ? 201 : op.status === "rejected" ? 422 : 202, body: response(op) };
       } catch {
         op.status = "unknown";
@@ -90,6 +121,9 @@ export function createConfirmedDealService({ provider = new FakeDealProvider() }
     let result;
     try { result = await provider.reconcile(op.operationId); }
     catch { return { available: false }; }
+    // A verified creation receipt remains authoritative for this operation;
+    // an eventual or malformed provider read cannot revoke it.
+    if (op.status === "created") return { available: true, status: "created" };
     if (!result || typeof result !== "object") {
       op.status = "unknown"; op.dealId = undefined;
       return { available: true, status: "unknown" };
@@ -98,6 +132,9 @@ export function createConfirmedDealService({ provider = new FakeDealProvider() }
       op.status = "created"; op.dealId = result.dealId;
     } else if (result.status === "rejected") {
       op.status = "rejected"; op.dealId = undefined;
+      if (activeBinding.get(bindingKey(op.profileId, op.request)) === op.operationId) {
+        activeBinding.delete(bindingKey(op.profileId, op.request));
+      }
     } else {
       // An invalid or incomplete success is never evidence that a deal exists.
       op.status = "unknown"; op.dealId = undefined;
@@ -123,9 +160,13 @@ export function createConfirmedDealService({ provider = new FakeDealProvider() }
       if (!result.available) return { status: 503, body: { error: "provider_unavailable", operationId, status: op.status } };
     }
     if (op.status !== "created" || !op.dealId) return { status: 409, body: { error: "created_deal_required", operationId } };
-    try { op.linked = (await provider.repairLink(operationId, op.dealId)) === true; }
+    try { await linkOne(op); }
     catch { return { status: 503, body: { error: "provider_unavailable", operationId, status: op.status } }; }
     return op.linked ? { status: 200, body: response(op) } : { status: 409, body: { error: "link_repair_failed", operationId } };
   }
-  return { create, reconcile, repair };
+  function get({ profileId, operationId }) {
+    const op = ownedOperation(profileId, operationId);
+    return op ? { status: 200, body: response(op) } : { status: 404, body: { error: "operation_not_found", operationId } };
+  }
+  return { create, get, reconcile, repair };
 }

@@ -9,9 +9,10 @@
     "domainApiVersion": { "const": "1.0.0" },
     "operationId": { "type": "string", "pattern": "^op-[0-9a-f-]{36}$" },
     "status": { "enum": ["pending", "created", "unknown", "rejected"] },
-    "companyId": { "type": "string", "pattern": "^demo-company-[0-9]{3}$" },
+    "companyId": { "type": "string", "pattern": "^(demo-company-[0-9]{3}|co-[a-f0-9]{20})$" },
     "exhibitionId": { "type": "string", "pattern": "^demo-expo-[0-9]{3}$" },
-    "dealId": { "type": "string", "pattern": "^demo-deal-[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" },
+    "buildId": { "type": "string", "pattern": "^build-[a-f0-9]{24}$" },
+    "dealId": { "type": "string", "minLength": 1, "maxLength": 256, "pattern": "^(?!\\.{1,2}$)[^\\s\\u0000-\\u001f\\u007f]+$" },
     "linkStatus": { "const": "linked" },
     "replayed": { "type": "boolean" }
   },

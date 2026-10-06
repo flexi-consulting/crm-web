@@ -1,0 +1,9 @@
+name = "crm-web-built-catalog-contract-local"
+main = "../fixtures/built-catalog-d1-worker.js"
+compatibility_date = "2025-04-01"
+compatibility_flags = ["nodejs_compat"]
+
+[[d1_databases]]
+binding = "CRM_DB"
+database_name = "crm-web-built-catalog-contract-local"
+database_id = "00000000-0000-4000-8000-000000000002"

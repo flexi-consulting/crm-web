@@ -12,6 +12,7 @@ const request = (n, extras = {}) => ({ companyId: "demo-company-001", exhibition
 
 async function withServer(run, { provider, resolver } = {}) {
   const server = createServer({
+    allowUnsafeSyntheticConfirm: true,
     ...(provider ? { confirmedDeals: createConfirmedDealService({ provider }) } : {}),
     resolveTrustedProfile: resolver ?? ((req) => ({ profileId: req.headers["x-test-profile"], scopes: (req.headers["x-test-scopes"] ?? "").split(" ").filter(Boolean) }))
   });
