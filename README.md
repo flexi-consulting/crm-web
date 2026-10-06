@@ -10,7 +10,7 @@ It is unmounted by default; the included memory store is only for disposable tes
 An opt-in, read-only consumer of the Control Plane connected-app identity v1 contract is in
 [`src/connected-profile-session.js`](src/connected-profile-session.js). It uses per-request introspection
 for the selected agent profile and exposes S-01 catalog reads and S-04 deal status reads only.
-It is disabled by default and has no live issuer, browser handoff or deployment binding.
+It is disabled by default and has no live issuer or deployment binding.
 See [the boundary and remaining gates](docs/CONNECTED-PROFILE-SESSION.md).
 
 The offline old `USER_ID` to trusted profile audit is documented in [Legacy profile authority](docs/LEGACY-PROFILE-AUTHORITY.md). It yields private binding candidates only; it cannot authorize an import or a live web session.
