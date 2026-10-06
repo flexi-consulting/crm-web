@@ -7,7 +7,8 @@ import { createPreleadTimelineService, normalizePreleadEventRequest } from "./pr
 import { createConfirmedDealService, normalizeConfirmedDealRequest } from "./confirmed-deals.js";
 import { createCatalogBuildService } from "./catalog-build.js";
 import { s01ParticipantCapability, readExhibitionParticipants } from "./s01-participants.js";
-import { createCatalogV11ReadHandler } from "./catalog-query-v11.js";
+import { s01CatalogSearchCapability } from "./s01-catalog-search.js";
+import { createCatalogV11ReadHandler, createCatalogV11SearchHandler } from "./catalog-query-v11.js";
 
 const manifest = {
   serviceId: "crm-web.exhibitions",
@@ -38,6 +39,14 @@ const manifest = {
       effect: s01ParticipantCapability.effect, requiredScopes: s01ParticipantCapability.requiredScopes, operationRef: s01ParticipantCapability.httpBinding
     },
     {
+      id: s01CatalogSearchCapability.capabilityId, version: s01CatalogSearchCapability.version, required: true,
+      inputSchemaRef: s01CatalogSearchCapability.inputSchemaRef, outputSchemaRef: s01CatalogSearchCapability.outputSchemaRef,
+      errorsSchemaRef: s01CatalogSearchCapability.errorsSchemaRef, descriptorRef: "capabilities/s01-exhibition-catalog-search.v1.json",
+      handlerBinding: s01CatalogSearchCapability.handlerBinding, mcpTool: s01CatalogSearchCapability.mcpTool,
+      effect: s01CatalogSearchCapability.effect, requiredScopes: s01CatalogSearchCapability.requiredScopes,
+      operationRef: s01CatalogSearchCapability.httpBinding
+    },
+    {
       id: "crm.company.read", version: "1.0.0", required: false,
       inputSchemaRef: "schemas/company-query.schema.json", outputSchemaRef: "schemas/company.schema.json",
       effect: "read", requiredScopes: ["crm.companies.read"], operationRef: "GET /api/v1/companies/{id}"
@@ -61,7 +70,8 @@ const manifest = {
   compatibility: { deprecatedCapabilities: [] },
   endpoints: {
     readiness: { method: "GET", path: "/api/v1/readiness" },
-    catalog: { method: "GET", path: "/api/v1/catalog" }
+    catalog: { method: "GET", path: "/api/v1/catalog" },
+    catalogSearch: { method: "GET", path: "/api/v1/catalogs/{exhibitionId}/entries" }
   }
 };
 
@@ -100,6 +110,9 @@ export function createServer({
   const catalogV11Read = catalogV11Repository
     ? createCatalogV11ReadHandler({ repository: catalogV11Repository, resolveTrustedProfile: resolveCatalogV11TrustedProfile })
     : null;
+  const catalogV11Search = catalogV11Repository
+    ? createCatalogV11SearchHandler({ repository: catalogV11Repository, resolveTrustedProfile: resolveCatalogV11TrustedProfile })
+    : null;
   async function trustedProfile(request, response, requiredScope) {
     if (!resolveTrustedProfile) {
       json(response, 503, { error: "trusted_profile_unavailable" });
@@ -127,6 +140,16 @@ export function createServer({
       }
       const webRequest = new Request(`http://crm.local${request.url}`, { method: "GET", headers });
       const result = await catalogV11Read(webRequest);
+      response.writeHead(result.status, Object.fromEntries(result.headers));
+      return response.end(await result.text());
+    }
+    if (catalogV11Search && /^\/api\/v1\/catalogs\/[a-z0-9][a-z0-9-]{0,79}\/entries$/.test(url.pathname)) {
+      const headers = new Headers();
+      for (const [name, value] of Object.entries(request.headers)) {
+        if (value !== undefined) headers.set(name, Array.isArray(value) ? value.join(", ") : value);
+      }
+      const webRequest = new Request(`http://crm.local${request.url}`, { method: request.method, headers });
+      const result = await catalogV11Search(webRequest);
       response.writeHead(result.status, Object.fromEntries(result.headers));
       return response.end(await result.text());
     }

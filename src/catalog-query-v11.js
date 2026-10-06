@@ -117,6 +117,80 @@ export function createCatalogV11ReadHandler({ repository, resolveTrustedProfile 
   };
 }
 
+const searchError = (status, error) => new Response(JSON.stringify({ error }), { status, headers: {
+  "content-type": "application/json; charset=utf-8", "cache-control": "private, no-store",
+  "x-content-type-options": "nosniff"
+} });
+
+function clientCatalogItem(company) {
+  const source = company.source ?? {};
+  const enrichment = company.enrichment ?? {};
+  const enriched = enrichment.status === "found";
+  return {
+    id: company.id,
+    name: company.name,
+    country: source.country,
+    booth: source.booth ?? null,
+    category: source.category ?? null,
+    description: source.description ?? null,
+    segment: source.segment ?? null,
+    revenueRub: enriched ? enrichment.revenueRub : null,
+    revenueYear: enriched ? enrichment.revenueYear : null,
+    profitRub: enriched ? enrichment.profitRub : null,
+    profitYear: enriched ? enrichment.profitYear : null,
+    activity: enriched ? enrichment.activity : "unknown",
+    website: enriched ? enrichment.website : null,
+    classification: company.qualification?.classification ?? "unknown"
+  };
+}
+
+// Structured app-owned read for the Agent capability. The browser page and
+// Agent search share queryCatalogV11; the projection intentionally excludes
+// registry internals, tax identifiers, duplicate source IDs and provenance.
+export function createCatalogV11SearchHandler({ repository, resolveTrustedProfile }) {
+  if (typeof repository?.getArtifact !== "function" || typeof resolveTrustedProfile !== "function")
+    throw new TypeError("catalog v1.1 repository and trusted profile resolver required");
+  return async function handle(request) {
+    const url = new URL(request.url);
+    const match = url.pathname.match(/^\/api\/v1\/catalogs\/([a-z0-9][a-z0-9-]{0,79})\/entries$/);
+    if (!match || request.method !== "GET") return searchError(404, "not_found");
+    let context;
+    try { context = await resolveTrustedProfile(request); } catch {
+      return searchError(503, "trusted_profile_unavailable");
+    }
+    if (!context || typeof context.profileId !== "string" || !context.profileId || !Array.isArray(context.scopes))
+      return searchError(503, "trusted_profile_unavailable");
+    if (!context.scopes.includes("crm.catalog.read")) return searchError(403, "required_scope_missing");
+
+    const allowed = ["query", "classification", "country", "revenueBand", "profitBand", "limit", "offset"];
+    const keys = [...url.searchParams.keys()];
+    if (keys.some(key => !allowed.includes(key)) || keys.some(key => url.searchParams.getAll(key).length !== 1))
+      return searchError(400, "invalid_query");
+    const limitText = url.searchParams.get("limit");
+    const offsetText = url.searchParams.get("offset");
+    const limit = limitText === null ? 25 : /^(?:[1-9]|[1-9][0-9]|100)$/.test(limitText) ? Number(limitText) : null;
+    const offset = offsetText === null ? 0 : /^(?:0|[1-9][0-9]{0,4})$/.test(offsetText) ? Number(offsetText) : null;
+    if (limit === null || offset === null || offset > 20_000) return searchError(400, "invalid_query");
+    const filters = { query: url.searchParams.get("query") ?? "",
+      classification: url.searchParams.get("classification") || null,
+      country: url.searchParams.has("country") ? url.searchParams.get("country") : null,
+      revenueBand: url.searchParams.get("revenueBand") || null,
+      profitBand: url.searchParams.get("profitBand") || null };
+    let artifact;
+    try { artifact = await repository.getArtifact({ profileId: context.profileId, exhibitionId: match[1] }); }
+    catch { return searchError(503, "catalog_unavailable"); }
+    if (!artifact) return searchError(404, "catalog_not_found");
+    const result = queryCatalogV11(artifact, filters);
+    if (result.status !== "ok") return searchError(400, "invalid_query");
+    return new Response(JSON.stringify({ domainApiVersion: "1.0.0", artifactVersion: artifact.schemaVersion,
+      exhibitionId: artifact.exhibitionId, sourceRevision: artifact.sourceRevision, total: result.total,
+      limit, offset, items: result.items.slice(offset, offset + limit).map(clientCatalogItem) }), { status: 200, headers: {
+      "content-type": "application/json; charset=utf-8", "cache-control": "private, no-store",
+      "x-content-type-options": "nosniff"
+    } });
+  };
+}
+
 const sha256 = value => createHash("sha256").update(value).digest("hex");
 const profileRefOk = value => typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value);
 const exactKeys = (value, keys) => value && typeof value === "object" && !Array.isArray(value) &&

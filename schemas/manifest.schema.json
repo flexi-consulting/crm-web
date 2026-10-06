@@ -34,10 +34,11 @@
     },
     "endpoints": {
       "type": "object",
-      "required": ["readiness", "catalog"],
+      "required": ["readiness", "catalog", "catalogSearch"],
       "properties": {
         "readiness": { "$ref": "#/$defs/endpoint" },
-        "catalog": { "$ref": "#/$defs/endpoint" }
+        "catalog": { "$ref": "#/$defs/endpoint" },
+        "catalogSearch": { "$ref": "#/$defs/endpoint" }
       },
       "additionalProperties": false
     }
