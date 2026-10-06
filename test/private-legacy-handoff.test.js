@@ -27,9 +27,13 @@ test("private capture copies exact HTML and source JSON bytes and quarantines al
     await writeFile(join(data, "enriched.json"), JSON.stringify([{ n: "Invented source" }]));
     const backup = join(root, "backup");
     const captured = await captureLegacyCatalogs({ sourceRoot, outputDir: backup });
-    assert.deepEqual(captured, { files: 2, html: 1, sourceJson: 1, duplicateIds: 1, unsafeIds: 1 });
+    assert.deepEqual({ ...captured, manifestSha256: undefined },
+      { files: 2, html: 1, sourceJson: 1, duplicateIds: 1, unsafeIds: 1,
+        manifestSha256: undefined });
+    assert.match(captured.manifestSha256, /^[a-f0-9]{64}$/);
     assert.equal((await stat(backup)).mode & 0o777, 0o700);
     const manifest = await verifyLegacyCatalogBackup(backup);
+    assert.equal(manifest.manifestSha256, captured.manifestSha256);
     const catalog = manifest.records.find((item) => item.kind === "deployed_html");
     assert.deepEqual(await readFile(join(backup, "objects", catalog.objectSha256)), rawHtml);
     assert.equal((await stat(join(backup, "objects", catalog.objectSha256))).mode & 0o777, 0o600);
@@ -67,6 +71,11 @@ test("private capture copies exact HTML and source JSON bytes and quarantines al
     /local_d1_endpoint_required/);
     assert.equal(calls, 1);
     const object = join(backup, "objects", catalog.objectSha256);
+    const reportFile = join(backup, "identity-quarantine.json");
+    const originalReport = await readFile(reportFile);
+    await writeFile(reportFile, Buffer.concat([originalReport, Buffer.from(" ")]));
+    await assert.rejects(verifyLegacyCatalogBackup(backup), /legacy_backup_byte_mismatch/);
+    await writeFile(reportFile, originalReport);
     await writeFile(object, Buffer.concat([rawHtml, Buffer.from("tamper")]));
     await assert.rejects(verifyLegacyCatalogBackup(backup), /legacy_backup_byte_mismatch/);
     await mkdir(join(root, ".git"));

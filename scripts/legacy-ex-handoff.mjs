@@ -9,7 +9,8 @@ try {
     process.stdout.write(JSON.stringify(result) + "\n");
   } else if (mode === "verify" && args.length === 1) {
     const manifest = await verifyLegacyCatalogBackup(args[0]);
-    process.stdout.write(JSON.stringify({ verifiedFiles: manifest.records.length }) + "\n");
+    process.stdout.write(JSON.stringify({ verifiedFiles: manifest.records.length,
+      manifestSha256: manifest.manifestSha256 }) + "\n");
   } else if (mode === "restore-local" && args.length === 3) {
     const receipts = await restoreLegacyCatalogsLocal({ backupDir: args[0],
       mappingFile: args[1], endpoint: args[2] });

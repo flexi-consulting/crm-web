@@ -87,8 +87,10 @@ export function identityQuarantine(entries) {
 }
 
 async function privateJson(path, value) {
-  await writeFile(path, JSON.stringify(value, null, 2) + "\n", { flag: "wx", mode: 0o600 });
+  const bytes = Buffer.from(JSON.stringify(value, null, 2) + "\n");
+  await writeFile(path, bytes, { flag: "wx", mode: 0o600 });
   await chmod(path, 0o600);
+  return digest(bytes);
 }
 
 export async function captureLegacyCatalogs({ sourceRoot, outputDir }) {
@@ -126,19 +128,29 @@ export async function captureLegacyCatalogs({ sourceRoot, outputDir }) {
     }
     records.push(record);
   }
-  const manifest = { version: 1, records };
-  await privateJson(join(out, "manifest.json"), manifest);
-  await privateJson(join(out, "identity-quarantine.json"), { version: 1, catalogs: quarantine });
+  const quarantineSha256 = await privateJson(join(out, "identity-quarantine.json"),
+    { version: 1, catalogs: quarantine });
+  const manifest = { version: 1, quarantineSha256, records };
+  const manifestSha256 = await privateJson(join(out, "manifest.json"), manifest);
   return { files: records.length, html: records.filter((item) => item.kind === "deployed_html").length,
     sourceJson: records.filter((item) => item.kind === "source_json").length,
     duplicateIds: quarantine.reduce((sum, item) => sum + (item.duplicates ?? []).reduce((n, group) => n + group.indices.length - 1, 0), 0),
-    unsafeIds: quarantine.reduce((sum, item) => sum + (item.unsafe?.length ?? 0), 0) };
+    unsafeIds: quarantine.reduce((sum, item) => sum + (item.unsafe?.length ?? 0), 0),
+    manifestSha256 };
 }
 
 export async function verifyLegacyCatalogBackup(backupDir) {
   const root = resolve(backupDir);
-  const manifest = JSON.parse(await readFile(join(root, "manifest.json"), "utf8"));
-  if (manifest.version !== 1 || !Array.isArray(manifest.records)) throw new Error("legacy_manifest_invalid");
+  const manifestBytes = await readFile(join(root, "manifest.json"));
+  const manifest = JSON.parse(manifestBytes.toString("utf8"));
+  if (manifest.version !== 1 || !Array.isArray(manifest.records) ||
+      !/^[a-f0-9]{64}$/.test(manifest.quarantineSha256 ?? ""))
+    throw new Error("legacy_manifest_invalid");
+  const quarantineBytes = await readFile(join(root, "identity-quarantine.json"));
+  if (digest(quarantineBytes) !== manifest.quarantineSha256)
+    throw new Error("legacy_backup_byte_mismatch");
+  const quarantine = JSON.parse(quarantineBytes.toString("utf8"));
+  const expectedQuarantine = [];
   for (const record of manifest.records) {
     if (!/^[a-f0-9]{64}$/.test(record.objectSha256 ?? "") ||
         !Number.isSafeInteger(record.bytes) || record.bytes < 0 ||
@@ -146,8 +158,21 @@ export async function verifyLegacyCatalogBackup(backupDir) {
     const bytes = await readFile(join(root, "objects", record.objectSha256));
     if (bytes.length !== record.bytes || digest(bytes) !== record.objectSha256)
       throw new Error("legacy_backup_byte_mismatch");
+    if (record.kind === "deployed_html") {
+      try {
+        const parsed = parseLegacyExHtml(bytes);
+        expectedQuarantine.push({ sourcePath: record.sourcePath,
+          objectSha256: record.objectSha256, eventKey: parsed.eventKey,
+          ...identityQuarantine(parsed.entries) });
+      } catch (error) {
+        expectedQuarantine.push({ sourcePath: record.sourcePath,
+          objectSha256: record.objectSha256, error: error.message });
+      }
+    }
   }
-  return manifest;
+  if (JSON.stringify(quarantine) !== JSON.stringify({ version: 1, catalogs: expectedQuarantine }))
+    throw new Error("legacy_quarantine_invalid");
+  return { ...manifest, manifestSha256: digest(manifestBytes) };
 }
 
 function applyIdentityResolution(entries, resolutions) {
