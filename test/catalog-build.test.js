@@ -6,6 +6,7 @@ import { readFile } from "node:fs/promises";
 import { createServer } from "../src/server.js";
 import { createCatalogBuildService, createSyntheticSourceAdapter, createSyntheticEnrichmentAdapter, createSyntheticRegistryAdapter, normalizeEnrichment, normalizeRegistry, qualify } from "../src/catalog-build.js";
 import { renderCatalogPreview } from "../src/catalog-preview.js";
+import { queryCatalogV11, renderCatalogV11 } from "../src/catalog-query-v11.js";
 
 const scopes = ["crm.catalog.build.synthetic", "crm.catalog.build.read.synthetic", "crm.catalog.preview.synthetic", "crm.catalog.preview.read.synthetic"];
 const headers = (profileId, granted = scopes) => ({ "x-test-profile": profileId, "x-test-scopes": granted.join(" ") });
@@ -100,6 +101,42 @@ test("S-01 v1.1 metadata schema preserves synthetic legacy filter fields with ex
   const leakedField = structuredClone(artifact);
   leakedField.companies[0].source.email = "synthetic@example.invalid";
   assert.equal(validate(leakedField), false, "schema remains allowlist based");
+
+  const rows = [
+    { ...structuredClone(company), name: "Below Revenue", enrichment: { ...company.enrichment, revenueRub: 99_999_999, profitRub: -1 }, source: { ...company.source, category: "Synthetic apparel" } },
+    { ...structuredClone(company), id: "co-1123456789abcdef0123", name: "Revenue Boundary", enrichment: { ...company.enrichment, revenueRub: 100_000_000, profitRub: 0 }, source: { ...company.source, country: "RU", category: "Synthetic lingerie" } },
+    { ...structuredClone(company), id: "co-2123456789abcdef0123", name: "Revenue Upper Boundary", enrichment: { ...company.enrichment, revenueRub: 1_500_000_000, profitRub: 30_000_000 } },
+    { ...structuredClone(company), id: "co-3123456789abcdef0123", name: "Revenue Above", enrichment: { ...company.enrichment, revenueRub: 1_500_000_001, profitRub: 200_000_000 } },
+    { ...structuredClone(company), id: "co-4123456789abcdef0123", name: "Unknown Finance", enrichment: { ...company.enrichment, revenueRub: null, profitRub: null } }
+  ];
+  const queryArtifact = { ...artifact, companies: rows };
+  const names = args => queryCatalogV11(queryArtifact, args).items.map(row => row.name).sort();
+  assert.deepEqual(names({ revenueBand: "0-100" }), ["Below Revenue"]);
+  assert.deepEqual(names({ revenueBand: "100-1500" }), ["Revenue Boundary", "Revenue Upper Boundary"]);
+  assert.deepEqual(names({ revenueBand: "1500+" }), ["Revenue Above"]);
+  assert.deepEqual(names({ profitBand: "loss" }), ["Below Revenue"]);
+  assert.deepEqual(names({ profitBand: "0-30" }), ["Revenue Boundary"]);
+  assert.deepEqual(names({ profitBand: "30-200" }), ["Revenue Upper Boundary"]);
+  assert.deepEqual(names({ profitBand: "200+" }), ["Revenue Above"]);
+  assert.deepEqual(names({ query: "apparel" }), ["Below Revenue"]);
+  assert.deepEqual(names({ country: "fictionland" }), ["Below Revenue", "Revenue Above", "Revenue Upper Boundary", "Unknown Finance"]);
+  assert.deepEqual(names({ country: "RU", classification: "unknown" }), ["Revenue Boundary"]);
+  assert.deepEqual(queryCatalogV11(artifact, { revenueBand: "unsafe" }), { status: "invalid_query" });
+  const filtered = queryCatalogV11(queryArtifact, { revenueBand: "100-1500", profitBand: "30-200" });
+  const view = renderCatalogV11({ artifact: queryArtifact, result: filtered,
+    filters: { revenueBand: "100-1500", profitBand: "30-200" } });
+  assert.equal(view.status, "ok");
+  assert.match(view.html, /<option value="100-1500" selected>/);
+  assert.match(view.html, /<option value="30-200" selected>/);
+  assert.match(view.html, /Найдено: 1/);
+  const hostile = structuredClone(queryArtifact);
+  hostile.companies = [{ ...structuredClone(company), name: '<img src=x onerror="bad">',
+    source: { ...company.source, category: "<script>bad</script>", description: "<b>bad</b>",
+      href: "https://example.invalid/a\\\" onmouseover=bad" } }];
+  const safeView = renderCatalogV11({ artifact: hostile, result: queryCatalogV11(hostile), filters: {} });
+  assert.equal(safeView.html.includes("<img src=x"), false);
+  assert.equal(safeView.html.includes("<script>bad</script>"), false);
+  assert.equal(safeView.html.includes('onmouseover=bad'), false);
 });
 
 test("build artifacts and reports are deterministic; same key replays without another adapter call", async () => {
