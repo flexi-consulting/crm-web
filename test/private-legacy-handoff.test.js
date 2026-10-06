@@ -94,3 +94,50 @@ test("private capture copies exact HTML and source JSON bytes and quarantines al
       outputDir: join(root, "accidental-public-backup") }), /legacy_private_output_in_git_worktree/);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+test("preflights every catalog decision before the first local D1 write", async () => {
+  const root = await mkdtemp(join(tmpdir(), "crm-private-preflight-"));
+  try {
+    const sourceRoot = join(root, "users"), backup = join(root, "backup");
+    const sourceRows = [
+      { eventKey: "invented-first", row: { id: "FIRST001", n: "First Invented", s: "A-1", t: 0, nt: 0, ru: 1 } },
+      { eventKey: "invented-second", row: { id: "SECOND01", n: "Second Invented", s: "A-2", t: 0, nt: 0, ru: 1 } }
+    ];
+    for (const item of sourceRows) {
+      const dir = join(sourceRoot, "invented-owner", "projects", "invented-project", "deploy", item.eventKey);
+      await mkdir(dir, { recursive: true });
+      await writeFile(join(dir, "index.html"), html([item.row]).replace("invented-expo-2026", item.eventKey));
+    }
+    await captureLegacyCatalogs({ sourceRoot, outputDir: backup });
+    const manifest = await verifyLegacyCatalogBackup(backup);
+    const records = manifest.records.filter((record) => record.kind === "deployed_html");
+    const profileBinding = { status: "confirmed", issuer: "control-plane", legacyUserId: "invented-owner",
+      principalId: "synthetic-principal", profileId: "demo-profile-a", evidenceSha256: "c".repeat(64) };
+    const packet = { version: 1, status: "private_review_required", approvedForImport: false,
+      manifestSha256: manifest.manifestSha256, owners: [{ legacyUserId: "invented-owner",
+        catalogs: records.map(record => ({ sourcePath: record.sourcePath, sourceSha256: record.objectSha256,
+          eventKey: record.eventKey })) }] };
+    const catalogs = [];
+    for (const [index, record] of records.entries()) {
+      const bytes = await readFile(join(backup, "objects", record.objectSha256));
+      const parsed = parseLegacyExHtml(bytes);
+      const decisions = { version: 1, status: "reviewed", packetSha256: hash(JSON.stringify(packet)),
+        manifestSha256: manifest.manifestSha256, sourcePath: record.sourcePath,
+        sourceSha256: record.objectSha256, eventKey: record.eventKey,
+        legacyUserId: "invented-owner", profileId: profileBinding.profileId,
+        principalId: profileBinding.principalId, profileBindingEvidenceSha256: profileBinding.evidenceSha256,
+        reviewerEvidenceSha256: "d".repeat(64), rows: index === 1 ? [] : parsed.entries.map((row, rowIndex) => ({
+          index: rowIndex, rowSha256: hash(JSON.stringify(row)), outcome: "include",
+          replacement: row, evidenceSha256: "e".repeat(64) })) };
+      catalogs.push({ sourcePath: record.sourcePath, sourceSha256: record.objectSha256, profileBinding, decisions });
+    }
+    const reviewBundleFile = join(root, "private-review-bundle.json");
+    await writeFile(reviewBundleFile, JSON.stringify({ version: 1, manifestSha256: manifest.manifestSha256,
+      packet, catalogs }));
+    let calls = 0;
+    await assert.rejects(restoreLegacyCatalogsLocal({ backupDir: backup, reviewBundleFile,
+      endpoint: "http://127.0.0.1:8787/", fetchImpl: async () => { calls++; } }),
+    /legacy_review_row_decision_coverage_invalid/);
+    assert.equal(calls, 0);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});

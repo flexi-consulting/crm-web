@@ -217,7 +217,7 @@ test("D1 built catalog, stable prelead/note and reviewed deal survive three Work
   }
 });
 
-test("private byte receipt and explicit mapping restore one invented EX catalog to local D1", async () => {
+test("private byte receipt and reviewed row decisions restore one invented EX catalog to local D1", async () => {
   const root = mkdtempSync(join(tmpdir(), "crm-private-d1-"));
   let worker;
   try {
