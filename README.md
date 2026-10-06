@@ -83,6 +83,18 @@ or Node service and has no production token resolver. Weeek workspace status
 scope, real deal IDs, read consistency, and actual provider behavior need an
 authorized test workspace canary before a live write can be enabled.
 
+The OpenAPI `Deal.id` is an opaque string unique within the deal resource of a
+workspace, with no published numeric or UUID pattern. The D1 operation ledger
+and reviewed output schema therefore accept a bounded, printable opaque ID,
+retain the exact value, and reject a second operation claiming the same deal ID
+within one profile through additive `0003_weeek_deal_identity.sql`. A replay
+must retain both the ID and correlation marker;
+an ID collision leaves the later operation `unknown`, without another POST or a
+catalog link. The test accepts invented numeric and punctuation-bearing IDs.
+The production profile-to-Weeek-workspace binding remains unverified, so this
+profile-scoped uniqueness rule is a conservative contract, not proof of global
+ID uniqueness or live workspace identity.
+
 `src/weeek-correlation-provider.js` is an injected-transport contract exercise, not a configured Weeek client. The [current official Weeek OpenAPI asset](https://developers.weeek.net/assets/weeek.yaml-Bhx55p8P.js) documents `POST /crm/statuses/{statusId}/deals` with a writable `description`, `GET /crm/statuses/{statusId}/deals` with `limit`/`offset` and `hasMoreDeals`, and `GET /crm/deals/{id}` with the description. It does **not** document a POST idempotency key or guarantee that `search` matches descriptions, so the adapter never uses search to prove uniqueness. The legacy [sales skill create flow](https://github.com/trained-assist/trained-assist-sales-skill/blob/main/src/mcp-skills/tools/30-weeek.js) sends a plain POST; its separate [catalog binding flow](https://github.com/trained-assist/trained-assist-sales-skill/blob/main/src/mcp-skills/tools/92-flexi-sales.js) records `creating` before POST and asks for manual lookup after an uncertain result.
 
 In the synthetic contract, a marker containing operation ID plus a hash of trusted profile and reviewed request hash is written into the deal description. The provider treats a create response as evidence only after `GET /crm/deals/{id}` returns the same marker and reviewed title/description. After a timeout, reconciliation scans every page in an injected profile-scoped status set, accepts exactly one compatible marker, then verifies that deal by ID. A missing marker, changed fields, multiple matches, failed read, incomplete status set, or page cap leaves `unknown`; no retry POST occurs. This does not prove that real Weeek search is reliable, that a configured status set is exhaustive, or that reads are immediately consistent. Absence can never authorize another POST. The current D1 ledger also validates **synthetic** deal IDs only; real Weeek ID format and workspace uniqueness require a separate migration/identity review. Production binding remains blocked until those contracts and a full status scope are verified with a test workspace and real approval issuer.

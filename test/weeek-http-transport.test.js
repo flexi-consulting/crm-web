@@ -8,6 +8,7 @@ const input = { profileId: "demo-profile-a", operationId, requestHash: "a".repea
   request: { statusId: "status-a", title: "Invented Components", source: "Example Expo",
     dealType: "direct", companyInn: "0000000001", contactName: "Example Contact",
     dealComment: "Synthetic interest" } };
+const dealId = "deal.2026:42";
 const ok = (body) => new Response(JSON.stringify({ success: true, ...body }),
   { status: 200, headers: { "content-type": "application/json" } });
 
@@ -21,10 +22,10 @@ test("profile token and exact Weeek endpoints carry a reviewed marker through ti
     assert.equal(parsed.origin, "https://api.weeek.net");
     assert.equal(options.headers.Authorization, "Bearer private-profile-a-token");
     if (options.method === "POST") {
-      stored = { id: "deal-a", statusId: "status-a", ...JSON.parse(options.body) };
+      stored = { id: dealId, statusId: "status-a", ...JSON.parse(options.body) };
       throw new Error("synthetic_timeout_after_post");
     }
-    if (parsed.pathname.endsWith("/deals/deal-a")) return ok({ deal: stored });
+    if (parsed.pathname.endsWith("/deals/deal.2026%3A42")) return ok({ deal: stored });
     if (parsed.pathname.endsWith("/statuses/status-a/deals"))
       return ok({ deals: [stored], hasMoreDeals: false });
     if (parsed.pathname.endsWith("/statuses/status-b/deals"))
@@ -43,13 +44,13 @@ test("profile token and exact Weeek endpoints carry a reviewed marker through ti
   await assert.rejects(provider.create(input), /synthetic_timeout_after_post/);
   const outcome = await provider.reconcile(input);
   assert.equal(outcome.status, "created");
-  assert.equal(outcome.dealId, "deal-a");
+  assert.equal(outcome.dealId, dealId);
   assert.match(stored.description, /\[crm-web-s04:op-/);
   assert.deepEqual(calls.map((call) => [call.method, call.path]), [
     ["POST", "/public/v1/crm/statuses/status-a/deals"],
     ["GET", "/public/v1/crm/statuses/status-a/deals"],
     ["GET", "/public/v1/crm/statuses/status-b/deals"],
-    ["GET", "/public/v1/crm/deals/deal-a"]
+    ["GET", "/public/v1/crm/deals/deal.2026%3A42"]
   ]);
   assert.equal(calls[1].query.get("limit"), "100");
   assert.equal(calls[1].query.get("offset"), "0");

@@ -1,5 +1,4 @@
-const syntheticDealId = (value) => typeof value === "string" &&
-  /^demo-deal-[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value);
+import { isWeeekDealId } from "./weeek-deal-id.js";
 const changed = (result) => Number(result?.meta?.changes ?? 0) === 1;
 const operationView = (row) => row && ({
   operationId: row.operation_id, profileRef: row.profile_ref, eventId: row.event_id,
@@ -137,13 +136,24 @@ export function createS04D1Repository(db) {
   }
 
   async function recordCreated({ profileRef, operationId, dealId, providerRef = null, now }) {
-    if (!syntheticDealId(dealId)) return { status: "invalid_deal_id" };
-    const result = await db.prepare(`UPDATE s04_deal_operations SET status = 'created', deal_id = ?,
-      provider_ref = ?, updated_at = ? WHERE profile_ref = ? AND operation_id = ? AND status = 'unknown'`)
-      .bind(dealId, providerRef, now, profileRef, operationId).run();
+    if (!isWeeekDealId(dealId)) return { status: "invalid_deal_id" };
+    let result;
+    try {
+      result = await db.prepare(`UPDATE s04_deal_operations SET status = 'created', deal_id = ?,
+        provider_ref = ?, updated_at = ? WHERE profile_ref = ? AND operation_id = ? AND status = 'unknown'`)
+        .bind(dealId, providerRef, now, profileRef, operationId).run();
+    } catch {
+      try {
+        const collision = await db.prepare(`SELECT operation_id FROM s04_deal_operations
+          WHERE profile_ref = ? AND deal_id = ?`).bind(profileRef, dealId).first();
+        return { status: collision && collision.operation_id !== operationId
+          ? "deal_id_conflict" : "storage_unavailable" };
+      } catch { return { status: "storage_unavailable" }; }
+    }
     if (changed(result)) return { status: "created", operation: await getOperation({ profileRef, operationId }) };
     const current = await getOperation({ profileRef, operationId });
-    return current?.status === "created" && current.dealId === dealId
+    return current?.status === "created" && current.dealId === dealId &&
+      current.providerRef === providerRef
       ? { status: "replay", operation: current }
       : { status: current ? "outcome_conflict" : "operation_not_found", operation: current };
   }
@@ -151,7 +161,7 @@ export function createS04D1Repository(db) {
   async function linkVerifiedDeal({ profileRef, operationId, now }) {
     const operation = await getOperation({ profileRef, operationId });
     if (!operation) return { status: "operation_not_found" };
-    if (operation.status !== "created" || !syntheticDealId(operation.dealId)) return { status: "created_deal_required" };
+    if (operation.status !== "created" || !isWeeekDealId(operation.dealId)) return { status: "created_deal_required" };
     const eventId = `evt-link-${operationId}`;
     const existing = await db.prepare("SELECT payload_json FROM s04_prelead_events WHERE event_id = ? AND prelead_id = ?")
       .bind(eventId, operation.preleadId).first();

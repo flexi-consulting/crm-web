@@ -1,4 +1,6 @@
 const BASE = "https://api.weeek.net/public/v1";
+import { isWeeekDealId } from "./weeek-deal-id.js";
+
 const safeId = (value) => typeof value === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(value);
 const safeProfile = (value) => typeof value === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(value);
 
@@ -36,7 +38,7 @@ export function createWeeekHttpTransport({ fetchImpl = globalThis.fetch, resolve
           typeof body.description !== "string") throw new Error("weeek_create_invalid");
       const data = await call(profileId, `/crm/statuses/${encodeURIComponent(statusId)}/deals`,
         { method: "POST", body });
-      if (!safeId(data.deal?.id)) throw new Error("weeek_response_invalid");
+      if (!isWeeekDealId(data.deal?.id)) throw new Error("weeek_response_invalid");
       return { success: true, deal: data.deal };
     },
     async listDeals({ profileId, statusId, limit, offset }) {
@@ -46,14 +48,14 @@ export function createWeeekHttpTransport({ fetchImpl = globalThis.fetch, resolve
       const data = await call(profileId,
         `/crm/statuses/${encodeURIComponent(statusId)}/deals?${params}`);
       if (!Array.isArray(data.deals) || typeof data.hasMoreDeals !== "boolean" ||
-          data.deals.length > limit || data.deals.some((deal) => !safeId(deal?.id)))
+          data.deals.length > limit || data.deals.some((deal) => !isWeeekDealId(deal?.id)))
         throw new Error("weeek_response_invalid");
       return { success: true, deals: data.deals, hasMoreDeals: data.hasMoreDeals };
     },
     async getDeal({ profileId, dealId }) {
-      if (!safeId(dealId)) throw new Error("weeek_deal_id_invalid");
+      if (!isWeeekDealId(dealId)) throw new Error("weeek_deal_id_invalid");
       const data = await call(profileId, `/crm/deals/${encodeURIComponent(dealId)}`);
-      if (!data.deal || !safeId(data.deal.id) || data.deal.id !== dealId)
+      if (!data.deal || !isWeeekDealId(data.deal.id) || data.deal.id !== dealId)
         throw new Error("weeek_response_invalid");
       return { success: true, deal: data.deal };
     }

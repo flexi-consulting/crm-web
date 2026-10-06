@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isWeeekDealId } from "./weeek-deal-id.js";
 
 // Contract-only provider: transport is injected. This module has no token,
 // fetch, endpoint binding, or production registration.
@@ -18,7 +19,7 @@ const descriptionFor = (request, marker) => [
   `Contact: ${clean(request.contactName)}`,
   marker
 ].join("\n");
-const validDeal = (deal, expected) => deal && typeof deal.id === "string" && deal.id.length > 0 &&
+const validDeal = (deal, expected) => deal && isWeeekDealId(deal.id) &&
   deal.title === expected.title && deal.description === expected.description &&
   deal.description.split(expected.marker).length === 2;
 

@@ -10,7 +10,7 @@
     "revision": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
     "operationId": { "type": "string", "pattern": "^op-[0-9a-f-]{36}$" },
     "status": { "enum": ["prepared", "pending", "created", "unknown", "rejected"] },
-    "dealId": { "type": "string", "pattern": "^demo-deal-[0-9a-f-]{36}$" },
+    "dealId": { "type": "string", "minLength": 1, "maxLength": 256, "pattern": "^(?!\\.{1,2}$)[^\\s\\u0000-\\u001f\\u007f]+$" },
     "linkStatus": { "const": "linked" },
     "details": {
       "type": "object", "additionalProperties": false,

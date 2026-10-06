@@ -55,7 +55,8 @@ test("D1 built catalog, stable prelead/note and reviewed deal survive three Work
   const root = mkdtempSync(join(tmpdir(), "crm-built-catalog-d1-"));
   let worker;
   try {
-    for (const migration of ["migrations/0001_s04_domain.sql", "migrations/0002_built_catalog.sql"]) {
+    for (const migration of ["migrations/0001_s04_domain.sql", "migrations/0002_built_catalog.sql",
+      "migrations/0003_weeek_deal_identity.sql"]) {
       const applied = spawnSync(node, [wrangler, "d1", "execute", "CRM_DB", "--config", config,
         "--local", "--persist-to", root, "--file", migration, "--yes", "--json"], { cwd, encoding: "utf8" });
       assert.equal(applied.status, 0, applied.stderr || applied.stdout);
@@ -153,7 +154,8 @@ test("unknown built-participant provider outcome is reserved and never retried a
   const root = mkdtempSync(join(tmpdir(), "crm-built-unknown-d1-"));
   let worker;
   try {
-    for (const migration of ["migrations/0001_s04_domain.sql", "migrations/0002_built_catalog.sql"]) {
+    for (const migration of ["migrations/0001_s04_domain.sql", "migrations/0002_built_catalog.sql",
+      "migrations/0003_weeek_deal_identity.sql"]) {
       const applied = spawnSync(node, [wrangler, "d1", "execute", "CRM_DB", "--config", config,
         "--local", "--persist-to", root, "--file", migration, "--yes", "--json"], { cwd, encoding: "utf8" });
       assert.equal(applied.status, 0, applied.stderr || applied.stdout);

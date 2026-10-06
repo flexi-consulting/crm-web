@@ -10,7 +10,7 @@ const wrangler = new URL("../node_modules/wrangler/bin/wrangler.js", import.meta
 const compatibleNode = process.env.CRM_S04_WRANGLER_NODE || process.execPath;
 const cwd = new URL("..", import.meta.url).pathname;
 const config = "test/wrangler.s04-local.toml";
-const migration = "migrations/0001_s04_domain.sql";
+const migrations = ["migrations/0001_s04_domain.sql", "migrations/0003_weeek_deal_identity.sql"];
 const now = "2026-10-06T09:00:00.000Z";
 const expiresAt = "2027-01-01T00:00:00.000Z";
 const uuid = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -57,6 +57,13 @@ async function call(base, path, body) {
   assert.equal(response.status, 200, JSON.stringify(result));
   return result;
 }
+function migrate(root) {
+  for (const migration of migrations) {
+    const result = spawnSync(compatibleNode, [wrangler, "d1", "execute", "CRM_DB", "--config", config,
+      "--local", "--persist-to", root, "--file", migration, "--yes", "--json"], { cwd, encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+  }
+}
 async function reviewedCall(base, path, body, { profile = "demo-profile-a", approval = false,
   correlation = false } = {}) {
   const response = await fetch(`${base}${path}`, { method: "POST", headers: {
@@ -70,9 +77,7 @@ test("reviewed D1 reservation reconciles a mock Weeek timeout by marker without 
   const root = mkdtempSync(join(tmpdir(), "crm-s04-correlation-d1-"));
   let running;
   try {
-    const migrated = spawnSync(compatibleNode, [wrangler, "d1", "execute", "CRM_DB", "--config", config,
-      "--local", "--persist-to", root, "--file", migration, "--yes", "--json"], { cwd, encoding: "utf8" });
-    assert.equal(migrated.status, 0, migrated.stderr || migrated.stdout);
+    migrate(root);
     running = await startWorker(root);
     const draft = { companyId: "demo-company-001", exhibitionId: "demo-expo-001",
       title: "Timeout and recover", companyInn: "1234567890",
@@ -112,9 +117,7 @@ test("reviewed S-04 HTTP contract persists trusted approval, survives restart, a
     title: "Synthetic catalog deal", companyInn: "1234567890", contactName: "Example Person",
     dealComment: "Asked for catalog" };
   try {
-    const migrated = spawnSync(compatibleNode, [wrangler, "d1", "execute", "CRM_DB", "--config", config,
-      "--local", "--persist-to", root, "--file", migration, "--yes", "--json"], { cwd, encoding: "utf8" });
-    assert.equal(migrated.status, 0, migrated.stderr || migrated.stdout);
+    migrate(root);
     running = await startWorker(root);
     await call(running.base, "/seed-prelead", { preleadId: "prelead-reviewed-a",
       profileRef: "demo-profile-a", eventId: draft.exhibitionId, companyId: draft.companyId });
@@ -186,9 +189,7 @@ test("local Worker D1 reserves once, survives restart, and links only a verified
   const root = mkdtempSync(join(tmpdir(), "crm-s04-d1-"));
   let running;
   try {
-    const migrated = spawnSync(compatibleNode, [wrangler, "d1", "execute", "CRM_DB", "--config", config,
-      "--local", "--persist-to", root, "--file", migration, "--yes", "--json"], { cwd, encoding: "utf8" });
-    assert.equal(migrated.status, 0, migrated.stderr || migrated.stdout);
+    migrate(root);
     running = await startWorker(root);
     const a = fixture(1);
     await call(running.base, "/seed", a);
@@ -207,11 +208,16 @@ test("local Worker D1 reserves once, survives restart, and links only a verified
     assert.equal((await call(running.base, "/get", winner)).status, "unknown");
     assert.equal((await call(running.base, "/reserve", winner)).status, "replay");
     assert.equal((await call(running.base, "/link", winner)).status, "created_deal_required");
-    assert.equal((await call(running.base, "/created", { ...winner, dealId: "invalid" })).status, "invalid_deal_id");
-    const dealId = `demo-deal-${winner.operationId.slice(3)}`;
-    assert.equal((await call(running.base, "/created", { ...winner, dealId })).status, "created");
-    assert.equal((await call(running.base, "/created", { ...winner, dealId })).status, "replay");
+    assert.equal((await call(running.base, "/created", { ...winner, dealId: " " })).status, "invalid_deal_id");
+    assert.equal((await call(running.base, "/created", { ...winner, dealId: ".." })).status, "invalid_deal_id");
+    const dealId = "12345678901234567890";
+    const providerRef = `[crm-web-s04:${winner.operationId}:${"a".repeat(64)}]`;
+    assert.equal((await call(running.base, "/created", { ...winner, dealId, providerRef })).status, "created");
+    assert.equal((await call(running.base, "/created", { ...winner, dealId, providerRef })).status, "replay");
+    assert.equal((await call(running.base, "/created", { ...winner, dealId,
+      providerRef: "different-marker" })).status, "outcome_conflict");
     assert.equal((await call(running.base, "/get", winner)).linkStatus, "pending");
+    assert.equal((await call(running.base, "/get", winner)).providerRef, providerRef);
     await call(running.base, "/fail-link-update", {});
     assert.equal((await call(running.base, "/link", winner)).status, "link_conflict");
     assert.deepEqual((await call(running.base, "/events", winner)).events, []);
@@ -225,6 +231,13 @@ test("local Worker D1 reserves once, survives restart, and links only a verified
     assert.equal(JSON.parse(linked.events[0].payload_json).dealId, dealId);
     assert.equal(linked.revision, 1);
     assert.equal((await call(running.base, "/get", winner)).linkStatus, "linked");
+    const conflicting = fixture(4);
+    await call(running.base, "/seed", conflicting);
+    assert.equal((await call(running.base, "/reserve", conflicting)).status, "reserved_unknown");
+    assert.equal((await call(running.base, "/created", { ...conflicting, dealId,
+      providerRef: "different-operation-marker" })).status, "deal_id_conflict");
+    assert.equal((await call(running.base, "/get", conflicting)).status, "unknown");
+    assert.equal((await call(running.base, "/events", conflicting)).events.length, 0);
     const stale = fixture(3);
     await call(running.base, "/seed", stale);
     await call(running.base, "/advance-prelead", stale);

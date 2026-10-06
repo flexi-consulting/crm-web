@@ -54,7 +54,8 @@ async function request(base, method, path, body, { profile = "demo-profile-a", a
   return { status: response.status, body: await response.json() };
 }
 function migrate(root) {
-  for (const migration of ["migrations/0001_s04_domain.sql", "migrations/0002_built_catalog.sql"]) {
+  for (const migration of ["migrations/0001_s04_domain.sql", "migrations/0002_built_catalog.sql",
+    "migrations/0003_weeek_deal_identity.sql"]) {
     const applied = spawnSync(node, [wrangler, "d1", "execute", "CRM_DB", "--config", config,
       "--local", "--persist-to", root, "--file", migration, "--yes", "--json"], { cwd, encoding: "utf8" });
     assert.equal(applied.status, 0, applied.stderr || applied.stdout);
