@@ -1,5 +1,9 @@
 # CRM Web
 
+An optional profile-free read-only exhibition facts projection is described in
+[`docs/PUBLIC-EXHIBITION-FACTS.md`](docs/PUBLIC-EXHIBITION-FACTS.md). It is disabled
+by default; no captured event has the separate publication-rights approval yet.
+
 Independent CRM and exhibitions web service. This work is a local synthetic API/domain-logic foundation. Catalog and company reads use fixtures; the exhibition extension adds a hidden synthetic catalog-build pipeline; the sales extension prepares in-memory intents and includes an unadvertised synthetic confirmed-deal state machine behind a fake provider. None of these routes writes to a live CRM or scrapes live sites. Mutating deal-intent, prelead timeline, confirmed-deal, and catalog-build routes are omitted from the published manifest, so the agent cannot discover them as capabilities.
 
 ## Run locally
