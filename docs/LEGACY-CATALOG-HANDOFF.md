@@ -17,8 +17,20 @@ Read-only GCP inventory on 2026-10-06, with no names or contact data extracted i
 | `exhibitors.json` | 3 files / 388 rows |
 | `targets.json` | 3 files / 120 rows |
 | `requisites_enrichment.json` | 2 files / 191 rows |
+| Named source JSON bytes, combined | 1,334,102 |
+
+The deployed HTML byte total needs a fresh read-only check when GCP SSH is
+reachable through a backup or disk mount; the failed transfer produced no
+verified source backup. The old VM was `TERMINATED` by 2026-10-06 05:46 UTC.
+Read-only GCP metadata at 06:00 UTC showed one attached 200 GB persistent disk
+in `READY` state and one 200 GB migration snapshot still `CREATING`; no usable
+snapshot contents were inspected. Do not restart the old VM for this handoff.
+After the snapshot reaches `READY`, use a separate verified read-only mount or
+existing backup, then run capture and verify from that source. Check the
+snapshot point-in-time against any later writes before claiming final parity.
 
 Run `node scripts/legacy-ex-handoff.mjs capture SOURCE_USERS_ROOT NEW_PRIVATE_DIR` on a private filesystem. The tool discovers the exact known layouts, copies every deployed HTML and named source JSON byte for byte into content-addressed objects, and writes owner-only `manifest.json` with source path, byte count and SHA-256. `identity-quarantine.json` is private and lists duplicate/unsafe IDs with row indexes. Console output contains aggregate counts only. Run `verify PRIVATE_DIR` after any transfer; a modified or missing byte fails the receipt.
+The capture directory and private mapping file must live outside every Git worktree; the CLI rejects paths inside one.
 
 `restore-local PRIVATE_DIR PRIVATE_MAPPING_JSON http://127.0.0.1:PORT/` targets only the opt-in local CRM Web Worker/D1 contract fixture. The private mapping must name every captured HTML by its source path and SHA-256, state a trusted target profile and matching event key, and resolve every conflicting row index. For a duplicate safe ID, exactly one row must keep the original ID; the operator assigns distinct safe IDs to the others. Unsafe IDs require safe replacements. Preflight verifies all captured bytes and all mappings before sending the first catalog to D1. Successful D1 replies must match the projected build ID and source revision. This does not install or deploy a Worker.
 

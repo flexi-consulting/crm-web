@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFile, writeFile, mkdir, readdir, lstat, chmod, realpath } from "node:fs/promises";
-import { basename, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { projectLegacyExSnapshot } from "./legacy-ex-snapshot.js";
 
 const SOURCE_NAMES = new Set(["enriched.json", "targets.json", "requisites_enrichment.json",
@@ -8,6 +8,17 @@ const SOURCE_NAMES = new Set(["enriched.json", "targets.json", "requisites_enric
 const idOk = (id) => typeof id === "string" && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(id);
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const isInside = (root, path) => path === root || path.startsWith(`${root}${sep}`);
+async function outsideGitWorkspace(path) {
+  let current = resolve(path);
+  while (true) {
+    try { await lstat(join(current, ".git")); throw new Error("legacy_private_output_in_git_worktree"); }
+    catch (error) { if (error?.message === "legacy_private_output_in_git_worktree") throw error;
+      if (error?.code !== "ENOENT" && error?.code !== "ENOTDIR") throw error; }
+    const parent = dirname(current);
+    if (parent === current) return;
+    current = parent;
+  }
+}
 async function dirs(path) {
   try { return (await readdir(path, { withFileTypes: true })).filter((item) => item.isDirectory())
     .map((item) => join(path, item.name)); } catch { return []; }
@@ -83,6 +94,7 @@ async function privateJson(path, value) {
 export async function captureLegacyCatalogs({ sourceRoot, outputDir }) {
   const root = await realpath(resolve(sourceRoot));
   const out = resolve(outputDir);
+  await outsideGitWorkspace(out);
   await mkdir(out, { mode: 0o700 });
   await chmod(out, 0o700);
   const objectDir = join(out, "objects");
@@ -157,6 +169,7 @@ function applyIdentityResolution(entries, resolutions) {
 }
 
 export async function prepareLegacyRestore({ backupDir, mappingFile }) {
+  await outsideGitWorkspace(resolve(mappingFile));
   const manifest = await verifyLegacyCatalogBackup(backupDir);
   const mapping = JSON.parse(await readFile(resolve(mappingFile), "utf8"));
   if (mapping.version !== 1 || !Array.isArray(mapping.catalogs)) throw new Error("legacy_mapping_invalid");

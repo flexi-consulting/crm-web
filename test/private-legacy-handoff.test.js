@@ -69,5 +69,8 @@ test("private capture copies exact HTML and source JSON bytes and quarantines al
     const object = join(backup, "objects", catalog.objectSha256);
     await writeFile(object, Buffer.concat([rawHtml, Buffer.from("tamper")]));
     await assert.rejects(verifyLegacyCatalogBackup(backup), /legacy_backup_byte_mismatch/);
+    await mkdir(join(root, ".git"));
+    await assert.rejects(captureLegacyCatalogs({ sourceRoot,
+      outputDir: join(root, "accidental-public-backup") }), /legacy_private_output_in_git_worktree/);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
