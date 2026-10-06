@@ -8,6 +8,7 @@ import { createHash } from "node:crypto";
 import { createServer } from "../src/server.js";
 import { createCatalogBuildService, createSyntheticSourceAdapter, createSyntheticEnrichmentAdapter, createSyntheticRegistryAdapter, normalizeEnrichment, normalizeRegistry, qualify } from "../src/catalog-build.js";
 import { renderCatalogPreview } from "../src/catalog-preview.js";
+import { importLegacyExSnapshotV11, projectLegacyExSnapshotV11 } from "../src/legacy-ex-snapshot.js";
 import { queryCatalogV11, renderCatalogV11, createCatalogV11ReadHandler,
   createCatalogV11SearchHandler, createCatalogV11D1Repository } from "../src/catalog-query-v11.js";
 import initSqlJs from "sql.js";
@@ -281,6 +282,93 @@ test("S-01 v1.1 D1 repository persists durable profile-scoped artifacts and veri
     [malformedJson, malformedSha, "demo-profile-a"]);
   await assert.rejects(repo.getArtifact({ profileId: "demo-profile-a", exhibitionId: artifact.exhibitionId }), /artifact is invalid/);
   db.close();
+});
+
+test("legacy v1.1 projection preserves catalog display semantics through durable HTTP read without contacts", async () => {
+  class D1Statement {
+    constructor(db, sql, values = []) { this.db = db; this.sql = sql; this.values = values; }
+    bind(...values) { return new D1Statement(this.db, this.sql, values); }
+    async first() {
+      const statement = this.db.prepare(this.sql);
+      try { statement.bind(this.values); return statement.step() ? statement.getAsObject() : null; }
+      finally { statement.free(); }
+    }
+    async run() { this.db.run(this.sql, this.values); return { meta: { changes: this.db.getRowsModified() } }; }
+  }
+  class LocalD1 { constructor(db) { this.db = db; } prepare(sql) { return new D1Statement(this.db, sql); } }
+  const baseRows = [
+    { id: "SYN001", n: "Synthetic below", s: "A-1", t: 0, nt: 1, inn: null, ogrn: null, ru: 1,
+      country: "Sample Federation", cat: "Synthetic textile", b: "<b>Synthetic catalog description</b>", seg: "Synthetic retail",
+      rev: 99.999999, ry: 2025, prof: -0.000001, py: 2024, href: "https://example.invalid/synthetic-profile" },
+    { id: "SYN002", n: "Synthetic lower edge", s: "B-2", t: 0, nt: 0, inn: null, ogrn: null, ru: 0,
+      country: null, cat: "Synthetic footwear", b: "Lower edge description", seg: null,
+      rev: 100, ry: null, prof: 0, py: null },
+    { id: "SYN003", n: "Synthetic upper edge", s: null, t: 0, nt: 0, inn: null, ogrn: null, ru: 0,
+      country: "Sampleland", cat: "Synthetic equipment", b: null, seg: null,
+      rev: 1500, ry: 2023, prof: 30, py: 2022 },
+    { id: "SYN004", n: "Synthetic above", s: "D-4", t: 0, nt: 0, inn: null, ogrn: null, ru: 0,
+      country: "Sampleland", cat: null, b: null, seg: null,
+      rev: 1500.000001, ry: 2026, prof: 200, py: 2025 }
+  ];
+  const rowsWithUnapprovedContacts = [{ ...baseRows[0], phone: "synthetic-contact-do-not-import", email: "synthetic-contact-do-not-import" }, ...baseRows.slice(1)];
+  const projected = projectLegacyExSnapshotV11({ profileRef: "demo-profile-a", eventKey: "synthetic-legacy-v11", entries: rowsWithUnapprovedContacts });
+  assert.equal(projected.status, "projected");
+  assert.equal(projected.artifact.schemaVersion, "1.1.0");
+  const below = projected.artifact.companies.find(company => company.name === "Synthetic below");
+  const lowerEdge = projected.artifact.companies.find(company => company.name === "Synthetic lower edge");
+  assert.equal(below.source.country, "Sample Federation");
+  assert.equal(below.source.category, "Synthetic textile");
+  assert.equal(below.source.segment, "Synthetic retail");
+  assert.equal(below.enrichment.revenueRub, 99_999_999);
+  assert.equal(below.enrichment.revenueYear, 2025);
+  assert.equal(below.enrichment.profitRub, -1);
+  assert.equal(below.enrichment.profitYear, 2024);
+  assert.equal(lowerEdge.source.country, "unknown");
+  assert.equal(lowerEdge.enrichment.revenueRub, 100_000_000);
+  assert.equal(lowerEdge.enrichment.revenueYear, null);
+  assert.equal(lowerEdge.enrichment.profitRub, 0);
+  assert.equal(lowerEdge.enrichment.profitYear, null);
+  assert.equal(JSON.stringify(projected.artifact).includes("synthetic-contact-do-not-import"), false);
+  const noContacts = projectLegacyExSnapshotV11({ profileRef: "demo-profile-a", eventKey: "synthetic-legacy-v11", entries: baseRows });
+  assert.equal(noContacts.artifact.sourceRevision, projected.artifact.sourceRevision);
+  assert.equal(projectLegacyExSnapshotV11({ profileRef: "demo-profile-a", eventKey: "synthetic-legacy-v11",
+    entries: [{ ...baseRows[0], rev: Number.MAX_VALUE }] }).status, "legacy_record_invalid");
+  assert.equal(projectLegacyExSnapshotV11({ profileRef: "demo-profile-a", eventKey: "synthetic-legacy-v11",
+    entries: [{ ...baseRows[0], ry: 1800 }] }).status, "legacy_record_invalid");
+
+  const SQL = await initSqlJs();
+  const db = new SQL.Database();
+  db.run(await readFile(new URL("../migrations/0010_catalog_v11_artifacts.sql", import.meta.url), "utf8"));
+  const repo = createCatalogV11D1Repository(new LocalD1(db), () => "2026-10-06T00:00:00.000Z");
+  const input = { repository: repo, profileRef: "demo-profile-a", eventKey: "synthetic-legacy-v11", entries: rowsWithUnapprovedContacts };
+  assert.equal((await importLegacyExSnapshotV11(input)).status, "stored");
+  assert.equal((await importLegacyExSnapshotV11(input)).status, "replay");
+  const server = createServer({ catalogV11Repository: repo,
+    resolveCatalogV11TrustedProfile: async () => ({ profileId: "demo-profile-a", scopes: ["crm.catalog.read"] }) });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const address = server.address();
+    const origin = `http://127.0.0.1:${address.port}`;
+    const search = async query => fetch(`${origin}/api/v1/catalogs/synthetic-legacy-v11/entries${query}`).then(response => response.json());
+    assert.deepEqual((await search("?query=synthetic%20textile")).items.map(item => item.name), ["Synthetic below"]);
+    assert.deepEqual((await search("?country=Sample%20Federation")).items.map(item => item.name), ["Synthetic below"]);
+    assert.deepEqual((await search("?revenueBand=0-100")).items.map(item => item.name), ["Synthetic below"]);
+    assert.deepEqual((await search("?revenueBand=100-1500")).items.map(item => item.name).sort(),
+      ["Synthetic lower edge", "Synthetic upper edge"]);
+    assert.deepEqual((await search("?revenueBand=1500%2B")).items.map(item => item.name), ["Synthetic above"]);
+    assert.deepEqual((await search("?profitBand=loss")).items.map(item => item.name), ["Synthetic below"]);
+    assert.deepEqual((await search("?profitBand=0-30")).items.map(item => item.name), ["Synthetic lower edge"]);
+    assert.deepEqual((await search("?profitBand=30-200")).items.map(item => item.name), ["Synthetic upper edge"]);
+    assert.deepEqual((await search("?profitBand=200%2B")).items.map(item => item.name), ["Synthetic above"]);
+    const page = await fetch(`${origin}/catalogs/synthetic-legacy-v11?profitBand=loss`);
+    assert.equal(page.status, 200);
+    const html = await page.text();
+    assert.match(html, /&lt;b&gt;Synthetic catalog description&lt;\/b&gt;/);
+    assert.equal(html.includes("synthetic-contact-do-not-import"), false);
+  } finally {
+    await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    db.close();
+  }
 });
 
 test("build artifacts and reports are deterministic; same key replays without another adapter call", async () => {
