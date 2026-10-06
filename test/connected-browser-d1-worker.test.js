@@ -218,6 +218,8 @@ test("browser S-04 confirms through D1 and Weeek HTTP, then reconciles an accept
     assert.equal(prepare.status, 201);
     const reviewHtml = await prepare.text();
     assert.match(reviewHtml, /Проверьте данные сделки/);
+    assert.match(reviewHtml, /Перейти к проверке в Control Plane/);
+    assert.match(reviewHtml, /После него вернитесь сюда и отдельно отправьте сделку в Weeek/);
     assert.match(reviewHtml, /status-lead-A/);
     const reviewId = reviewHtml.match(/name="reviewId" value="(review-[0-9a-f-]{36})"/)?.[1];
     const revision = reviewHtml.match(/name="revision" value="([0-9a-f]{64})"/)?.[1];

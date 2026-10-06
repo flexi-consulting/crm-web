@@ -39,7 +39,7 @@ export function renderS04DealReview({ review, csrfToken }) {
   if (!review || !/^review-[0-9a-f-]{36}$/.test(review.reviewId ?? "") ||
       typeof review.revision !== "string" || !csrf(csrfToken))
     return shell("Не удалось подготовить сделку", "<h1>Не удалось подготовить сделку</h1><p>Обновите страницу и проверьте доступ.</p>");
-  return shell("Проверка сделки", `<h1>Проверьте данные сделки</h1><section class="card">${detailsMarkup(review.details)}</section><p>После подтверждения запись будет отправлена в Weeek. Если ответ потеряется, система сначала проверит результат и не отправит повторный запрос на создание.</p><form method="post" action="/deal-workflow/confirm">${hidden("_csrf", csrfToken)}${hidden("reviewId", review.reviewId)}${hidden("revision", review.revision)}<button type="submit">Подтверждаю создание сделки</button></form>`);
+  return shell("Проверка сделки", `<h1>Проверьте данные сделки</h1><section class="card">${detailsMarkup(review.details)}</section><p>Далее Control Plane покажет те же данные для отдельного подтверждения. После него вернитесь сюда и отдельно отправьте сделку в Weeek. Если ответ Weeek потеряется, система сначала проверит результат и не отправит повторный запрос на создание.</p><form method="post" action="/deal-workflow/confirm">${hidden("_csrf", csrfToken)}${hidden("reviewId", review.reviewId)}${hidden("revision", review.revision)}<button type="submit">Перейти к проверке в Control Plane</button></form>`);
 }
 
 export function renderS04DealOutcome({ result, csrfToken, approvalIssuer }) {
