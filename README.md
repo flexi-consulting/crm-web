@@ -138,6 +138,12 @@ In the synthetic contract, a marker containing operation ID plus a hash of trust
 
 ## Ownership and integration boundary
 
+### Opt-in durable connected browser read
+
+`src/connected-browser-worker.js` composes the #32 BFF with the real D1 catalog/deal-status read handler. `migrations/0005_connected_browser_sessions.sql` stores hashed pending/session handles, one-use PKCE transactions and server-side tokens in the **separate CRM Web D1**. `DELETE ... RETURNING` consumes a callback atomically across Worker instances. Expired rows are refused and pruned on new login or an optional Worker scheduled invocation. The Worker returns 404 until `CRM_CONNECTED_BROWSER_ENABLED=true`; missing bindings/configuration fail closed with 503. No browser input supplies a trusted profile, read scope or deal approval, and POST deal routes remain closed. The local Worker test crosses two restarts, races callback replay, reads the real profile-scoped catalog, checks revocation, CSRF and CP outage, and records zero egress outside the injected CP port.
+
+Deployment requires the exact same HTTPS callback in both `CRM_CONNECTED_REDIRECT_URI` and Control Plane `CONNECTED_APP_REDIRECT_URIS["crm-web"]`; `CRM_CONNECTED_PUBLIC_ORIGIN` must be its origin. `CRM_CONNECTED_CP_ISSUER` is the exact HTTPS CP issuer. `CRM_CONNECTED_CP_SERVICE_KEY` is a Worker secret matching the CP service key for `crm-web`, never a `[vars]` value. Only the local test config uses invented origins and credentials. The existing Control Plane production Worker still has no platform-session resolver, and no CRM production Worker/D1 binding, secret, registered callback, private profile mapping, catalog import or deployment is supplied here. This opt-in path cannot yet authorize a real browser.
+
 This app owns CRM/exhibition domain APIs and data. Consumers integrate against the versioned contract rather than application internals. The existing static `flexi-consulting/exhibitions` site and `flexi-crm-automation` project are distinct sources to integrate later; this repository does not move or modify either. This slice does not connect to live D1/CRM data, write CRM records, include credentials, or contain private catalog snapshots. Live integrations, authentication, deployment, and operational recovery need separate reviewed design and implementation.
 
 ## S-01 offline MCP contract pilot

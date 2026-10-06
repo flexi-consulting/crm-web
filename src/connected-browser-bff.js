@@ -126,7 +126,7 @@ export function createCrmConnectedBrowserHandler({ enabled = false, issuer, allo
         return error(401, "connected_session_inactive");
       const newHandle = random();
       await store.putSession(await digest(newHandle), { token: exchanged.token, csrf: random(),
-        createdAt: now() });
+        createdAt: now(), expiresAt: exchanged.expiresAt });
       const previous = readCookie(request, SESSION);
       if (previous) await store.deleteSession(await digest(previous));
       return redirect(publicOrigin, [cookie(PENDING, "", 0, "Lax"), cookie(SESSION, newHandle, 3600)]);
