@@ -9,7 +9,8 @@ const rows = [
     href: "https://example.invalid/loom", w: "https://example.invalid" },
   { id: "SYN002", n: "Invented Parts", s: "A-02", t: 0, nt: 1, ru: 1, rev: null }
 ];
-const sourceSha256 = "a".repeat(64), manifestSha256 = "b".repeat(64), profileEvidenceSha256 = "c".repeat(64);
+const sourceBytes = Buffer.from(`const EVENT_KEY = 'invented-expo-2026';\nconst EX = ${JSON.stringify(rows)};\n`);
+const sourceSha256 = hash(sourceBytes), manifestSha256 = "b".repeat(64), profileEvidenceSha256 = "c".repeat(64);
 const packet = { version: 1, status: "private_review_required", approvedForImport: false, manifestSha256,
   owners: [{ legacyUserId: "old-owner-01", proposedPrincipalId: null, proposedProfileId: null,
     reviewerDecision: "pending", catalogs: [{ sourcePath: "old-owner-01/catalog.html", sourceSha256, eventKey: "invented-expo-2026" }] }] };
@@ -22,7 +23,7 @@ const decisions = (sourceRows = rows) => ({ version: 1, status: "reviewed", pack
   reviewerEvidenceSha256: "d".repeat(64), rows: sourceRows.map((row, index) => ({ index,
     rowSha256: hash(JSON.stringify(row)), outcome: "include", replacement: row, evidenceSha256: "e".repeat(64) })) });
 const args = (overrides = {}) => ({ packet, manifestSha256, sourceSha256, sourcePath: "old-owner-01/catalog.html",
-  eventKey: "invented-expo-2026", profileBinding, entries: rows, decisions: decisions(), ...overrides });
+  eventKey: "invented-expo-2026", profileBinding, sourceBytes, decisions: decisions(), ...overrides });
 
 test("review gate binds exact source, complete row decisions, CP profile evidence and produces only a projection", () => {
   const result = prepareApprovedLegacyImport(args());
@@ -62,9 +63,9 @@ test("only explicit evidence-backed exclusion or complete valid replacement can 
 });
 
 test("binds decision packet to exact owner, source path, source bytes, and event", () => {
-  assert.equal(prepareApprovedLegacyImport(args({ sourceSha256: "f".repeat(64) })).status, "source_not_in_review_packet");
+  assert.equal(prepareApprovedLegacyImport(args({ sourceSha256: "f".repeat(64) })).status, "source_bytes_mismatch");
   assert.equal(prepareApprovedLegacyImport(args({ sourcePath: "other/catalog.html" })).status, "source_not_in_review_packet");
-  assert.equal(prepareApprovedLegacyImport(args({ eventKey: "other-expo" })).status, "source_not_in_review_packet");
+  assert.equal(prepareApprovedLegacyImport(args({ eventKey: "other-expo" })).status, "source_event_mismatch");
 });
 
 test("writes the approved projection through the app-owned repository and reports replay safely", async () => {
