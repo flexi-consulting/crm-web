@@ -7,6 +7,7 @@ import { createPreleadTimelineService, normalizePreleadEventRequest } from "./pr
 import { createConfirmedDealService, normalizeConfirmedDealRequest } from "./confirmed-deals.js";
 import { createCatalogBuildService } from "./catalog-build.js";
 import { s01ParticipantCapability, readExhibitionParticipants } from "./s01-participants.js";
+import { createCatalogV11ReadHandler } from "./catalog-query-v11.js";
 
 const manifest = {
   serviceId: "crm-web.exhibitions",
@@ -90,8 +91,15 @@ export function createServer({
   dealIntents = createDealIntentService(),
   preleadTimeline = createPreleadTimelineService(),
   confirmedDeals = createConfirmedDealService(),
-  catalogBuilds = createCatalogBuildService()
+  catalogBuilds = createCatalogBuildService(),
+  catalogV11Repository,
+  resolveCatalogV11TrustedProfile
 } = {}) {
+  if (catalogV11Repository && typeof resolveCatalogV11TrustedProfile !== "function")
+    throw new TypeError("v1.1 catalog repository requires a trusted profile resolver");
+  const catalogV11Read = catalogV11Repository
+    ? createCatalogV11ReadHandler({ repository: catalogV11Repository, resolveTrustedProfile: resolveCatalogV11TrustedProfile })
+    : null;
   async function trustedProfile(request, response, requiredScope) {
     if (!resolveTrustedProfile) {
       json(response, 503, { error: "trusted_profile_unavailable" });
@@ -112,6 +120,16 @@ export function createServer({
 
   return nodeCreateServer(async (request, response) => {
     const url = new URL(request.url ?? "/", "http://localhost");
+    if (catalogV11Read && /^\/catalogs\/[a-z0-9][a-z0-9-]{0,79}$/.test(url.pathname) && request.method === "GET") {
+      const headers = new Headers();
+      for (const [name, value] of Object.entries(request.headers)) {
+        if (value !== undefined) headers.set(name, Array.isArray(value) ? value.join(", ") : value);
+      }
+      const webRequest = new Request(`http://crm.local${request.url}`, { method: "GET", headers });
+      const result = await catalogV11Read(webRequest);
+      response.writeHead(result.status, Object.fromEntries(result.headers));
+      return response.end(await result.text());
+    }
     const isCreateIntent = url.pathname === "/api/v1/deal-intents" && request.method === "POST";
     const timelineEventMatch = url.pathname.match(/^\/api\/v1\/preleads\/(demo-prelead-[0-9]{3})\/events$/);
     const isAppendPreleadEvent = Boolean(timelineEventMatch) && request.method === "POST";

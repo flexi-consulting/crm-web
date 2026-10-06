@@ -202,6 +202,16 @@ test("S-01 v1.1 D1 repository persists durable profile-scoped artifacts and veri
   const page = await persistedHandler(new Request(`https://crm.example.invalid/catalogs/${artifact.exhibitionId}`));
   assert.equal(page.status, 200);
   assert.match(await page.text(), /Synthetic durable row/);
+  const server = createServer({ catalogV11Repository: repo,
+    resolveCatalogV11TrustedProfile: async () => ({ profileId: "demo-profile-a", scopes: ["crm.catalog.read"] }) });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const address = server.address();
+    const transported = await fetch(`http://127.0.0.1:${address.port}/catalogs/${artifact.exhibitionId}`);
+    assert.equal(transported.status, 200);
+    assert.match(transported.headers.get("content-type"), /text\/html/);
+    assert.match(await transported.text(), /Synthetic durable row/);
+  } finally { await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
   db.run("UPDATE crm_catalog_v11_artifacts SET artifact_json=? WHERE profile_ref=?",
     [JSON.stringify({ ...revisionTwo, sourceRevision: "forged" }), "demo-profile-a"]);
   assert.equal(await repo.getArtifact({ profileId: "demo-profile-a", exhibitionId: artifact.exhibitionId }), null);
