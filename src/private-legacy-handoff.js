@@ -2,6 +2,10 @@ import { createHash } from "node:crypto";
 import { readFile, writeFile, mkdir, readdir, lstat, chmod, realpath } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { projectLegacyExSnapshot } from "./legacy-ex-snapshot.js";
+import { prepareApprovedLegacyImport } from "./legacy-import-approval.js";
+import { parseLegacyExHtml } from "./legacy-ex-html.js";
+
+export { parseLegacyExHtml } from "./legacy-ex-html.js";
 
 const SOURCE_NAMES = new Set(["enriched.json", "targets.json", "requisites_enrichment.json",
   "exhibitors.json", "ex-array.json"]);
@@ -45,32 +49,6 @@ async function discover(sourceRoot) {
     }
   }
   return found.sort((a, b) => a.path.localeCompare(b.path));
-}
-
-export function parseLegacyExHtml(bytes) {
-  const html = bytes.toString("utf8");
-  const eventMatch = html.match(/\bconst EVENT_KEY\s*=\s*['"]([a-z0-9][a-z0-9-]{0,79})['"]\s*;/);
-  const marker = /\bconst EX\s*=\s*/g.exec(html);
-  if (!eventMatch || !marker) throw new Error("legacy_html_header_invalid");
-  const start = html.indexOf("[", marker.index + marker[0].length);
-  if (start < 0 || html.slice(marker.index + marker[0].length, start).trim())
-    throw new Error("legacy_ex_array_missing");
-  let depth = 0, inString = false, escaped = false, end = -1;
-  for (let index = start; index < html.length; index++) {
-    const ch = html[index];
-    if (inString) {
-      if (escaped) escaped = false;
-      else if (ch === "\\") escaped = true;
-      else if (ch === '"') inString = false;
-    } else if (ch === '"') inString = true;
-    else if (ch === "[") depth++;
-    else if (ch === "]" && --depth === 0) { end = index + 1; break; }
-  }
-  if (end < 0 || html.slice(end).trimStart()[0] !== ";") throw new Error("legacy_ex_array_invalid");
-  let entries;
-  try { entries = JSON.parse(html.slice(start, end)); } catch { throw new Error("legacy_ex_array_invalid"); }
-  if (!Array.isArray(entries)) throw new Error("legacy_ex_array_invalid");
-  return { eventKey: eventMatch[1], entries };
 }
 
 export function identityQuarantine(entries) {
@@ -237,12 +215,22 @@ export async function restoreLegacyCatalogsLocal({ backupDir, reviewBundleFile, 
   const url = new URL(endpoint);
   if (url.protocol !== "http:" || !["127.0.0.1", "localhost", "[::1]"].includes(url.hostname) ||
       url.pathname !== "/" || url.search || url.hash) throw new Error("local_d1_endpoint_required");
-  const results = [];
+  const preflight = [];
   for (const record of html) {
     const review = byPath.get(record.sourcePath);
     if (!review || review.sourceSha256 !== record.objectSha256 || !review.profileBinding || !review.decisions)
       throw new Error("legacy_review_bundle_invalid");
     const sourceBytes = await readFile(join(resolve(backupDir), "objects", record.objectSha256));
+    const prepared = prepareApprovedLegacyImport({ packet: bundle.packet,
+      manifestSha256: manifest.manifestSha256, sourceSha256: record.objectSha256,
+      sourcePath: record.sourcePath, eventKey: record.eventKey,
+      profileBinding: review.profileBinding, decisions: review.decisions, sourceBytes });
+    if (prepared.status !== "reviewed_projection_ready")
+      throw new Error(`legacy_review_${prepared.status}`);
+    preflight.push({ record, review, sourceBytes });
+  }
+  const results = [];
+  for (const { record, review, sourceBytes } of preflight) {
     const response = await fetchImpl(new URL("/catalog/import-reviewed-legacy", url), { method: "POST",
       headers: { "content-type": "application/json", "x-test-profile": review.profileBinding.profileId },
       body: JSON.stringify({ packet: bundle.packet, manifestSha256: manifest.manifestSha256,

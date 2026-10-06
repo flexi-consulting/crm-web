@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { projectLegacyExSnapshot } from "./legacy-ex-snapshot.js";
-import { parseLegacyExHtml } from "./private-legacy-handoff.js";
+import { parseLegacyExHtml } from "./legacy-ex-html.js";
 
 const sha = (value) => createHash("sha256").update(value).digest("hex");
 const shaOk = (value) => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
