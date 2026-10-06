@@ -150,6 +150,11 @@ export default {
         expires_at_ms FROM connected_browser_sessions`).all();
       return Response.json({ pending: pending.results ?? [], sessions: sessions.results ?? [] });
     }
+    if (url.pathname === "/__missing-encryption-key") {
+      const withoutEncryptionKey = { ...env, CRM_CONNECTED_BFF_ENCRYPTION_KEY: undefined };
+      return connected(new Request("https://crm.example.invalid/catalogs/build-aaaaaaaaaaaaaaaaaaaaaaaa", request),
+        withoutEncryptionKey);
+    }
     if (url.pathname === "/__clock-offset") {
       clockOffset = Number(url.searchParams.get("milliseconds") ?? 0);
       return Response.json({ clockOffset });

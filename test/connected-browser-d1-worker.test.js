@@ -64,6 +64,12 @@ test("Worker Fetch uses atomic D1 browser handoff and real profile-scoped catalo
   try {
     migrate(root);
     worker = await start(root);
+    const missingKey = await call(worker.base, "/__missing-encryption-key");
+    assert.equal(missingKey.status, 503);
+    assert.deepEqual(await missingKey.json(), { error: "connected_browser_unavailable" });
+    assert.deepEqual(await (await call(worker.base, "/__cp-count")).json(), {
+      cpCalls: 0, foreignEgress: 0, approvalPrepareCalls: 0, approvalConsumeCalls: 0, weeekCreatePosts: 0
+    }, "missing encryption key fails closed before external requests or writes");
     const { buildId } = await (await call(worker.base, "/__seed")).json();
     const deepLink = await call(worker.base, `/catalogs/${buildId}`);
     assert.equal(deepLink.status, 303);
