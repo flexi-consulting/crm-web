@@ -14,8 +14,13 @@ const bearer = "Bearer invented-opaque-token-0001";
 const contractRaw = readFileSync(new URL("../contracts/connected-app-identity-v1/contract.json", import.meta.url));
 const schemaRaw = readFileSync(new URL("../contracts/connected-app-identity-v1/response.schema.json", import.meta.url));
 const source = JSON.parse(readFileSync(new URL("../contracts/connected-app-identity-v1/source.json", import.meta.url)));
+const agentContextRaw = readFileSync(new URL("../contracts/agent-profile-context-v1/contract.json", import.meta.url));
+const agentContextSchemaRaw = readFileSync(new URL("../contracts/agent-profile-context-v1/profile-context.schema.json", import.meta.url));
+const agentContextSource = JSON.parse(readFileSync(new URL("../contracts/agent-profile-context-v1/source.json", import.meta.url)));
 const contract = JSON.parse(contractRaw);
 const schema = JSON.parse(schemaRaw);
+const agentContext = JSON.parse(agentContextRaw);
+const agentContextSchema = JSON.parse(agentContextSchemaRaw);
 const request = (path, options = {}) => new Request(`https://crm.example.invalid${path}`, {
   method: options.method ?? "GET", headers: { authorization: options.authorization ?? bearer,
     ...(options.cookie ? { cookie: options.cookie } : {}) }
@@ -60,9 +65,16 @@ function fixture() {
 test("pinned Control Plane v1 contract grants separate CRM reads and deal creation", () => {
   const sha = bytes => createHash("sha256").update(bytes).digest("hex");
   assert.equal(source.repository, "trained-assist/trained-assist-control-plane");
-  assert.equal(source.revision, "a455214645f2a5a05207e8a6ea1ea6ad0215476f");
+  assert.equal(source.revision, "85988bbfe30410cd8dde5d8df57b21dd421aedaa");
   assert.equal(sha(contractRaw), source.contractSha256);
   assert.equal(sha(schemaRaw), source.responseSchemaSha256);
+  assert.equal(source.agentProfileContext.repository, "trained-assist/trained-assist-agent");
+  assert.equal(source.agentProfileContext.revision, "4a60c2e4c45eca9de1b84bba55e38bb83e1478c8");
+  assert.equal(sha(agentContextRaw), source.agentProfileContext.contractSha256);
+  assert.equal(sha(agentContextSchemaRaw), source.agentProfileContext.schemaSha256);
+  assert.equal(agentContextSource.revision, source.agentProfileContext.revision);
+  assert.equal(sha(agentContextRaw), agentContextSource.artifacts["contract.json"]);
+  assert.equal(sha(agentContextSchemaRaw), agentContextSource.artifacts["profile-context.schema.json"]);
   assert.equal(contract.urn, "urn:trained-assist:connected-app-identity:v1");
   assert.equal(contract.status, "offline_contract_only");
   assert.deepEqual(contract.audiences["crm-web"],
@@ -73,6 +85,16 @@ test("pinned Control Plane v1 contract grants separate CRM reads and deal creati
   assert.equal(contract.token.agentRunRequired, false);
   assert.equal(contract.token.legacyAgentCookieAllowed, false);
   assert.equal(contract.rules.oldWebJwtOrRunTokenAccepted, false);
+  assert.deepEqual(contract.agentProfileAuthority, {
+    urn: agentContext.urn, version: agentContext.version, owner: agentContext.owner,
+    sourceRevision: agentContextSource.revision,
+    sourcePath: agentContextSource.contractPath,
+    contextSchemaPath: "contracts/agent-profile-context-v1/profile-context.schema.json",
+    contextFields: agentContextSchema.required, runtimeStatus: "not_wired",
+  });
+  assert.equal(agentContext.status, "contract_only");
+  assert.equal(agentContext.authority.legacyPerProfileJwtAllowed, false);
+  assert.equal(agentContext.authority.browserReadableSelectionCookieAllowed, false);
 });
 
 test("S-01 catalog list and card use one current selected profile on every read", async () => {
