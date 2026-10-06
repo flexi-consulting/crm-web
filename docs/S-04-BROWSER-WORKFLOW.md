@@ -20,7 +20,7 @@ Migration `0008_cp_approval_intents.sql` stores the revision/payload-bound Contr
 
 ## Live gates
 
-- The CRM Worker now calls the Control Plane prepare/consume approval endpoints using its registered service credential and the current server-held app token. The endpoint contract and CRM scope grant still need to be merged, deployed and configured before a real session can use this path.
+- The CRM Worker now calls the Control Plane prepare/consume approval endpoints using its registered service credential and the current server-held app token. CP's opt-in receipt implementation is in draft [#85](https://github.com/trained-assist/trained-assist-control-plane/pull/85); the write-scope vocabulary is in draft [#80](https://github.com/trained-assist/trained-assist-control-plane/pull/80). Neither is merged, deployed or configured for a live CRM session.
 - Verify the live platform membership resolver binds the approving principal to the selected profile, and that the Control Plane receipt issuer enforces one-use confirmation of the exact payload/revision.
 - Supply a private, profile-bound Weeek credential resolver and reviewed workspace/status binding. Verify the full writable status set, API permissions, opaque deal ID, description marker preservation, list/detail read consistency and timeout-after-accept reconciliation in a disposable Weeek workspace.
 - Apply the ordered migrations to a dedicated app-owned D1 binding, verify its identity and recovery/rollback, and complete a private synthetic canary before route activation. Legacy catalog import and old deal/notes ownership remain separately gated by CRM migration issue #3.
