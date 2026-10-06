@@ -1,6 +1,6 @@
 # Legacy site note and deal-link recovery
 
-The site notes endpoint and the Telegram deal bot share a legacy D1 database. Its site prelead key is `site_<normalized eventKey>_<normalized companyId>`, where each segment is trimmed, replaces non-ASCII word/punctuation runs with `-`, collapses dashes, truncates to 80 characters, and the whole key is lowercased. Distinct catalog IDs can therefore produce the same note key. A note key also lacks a trusted profile reference.
+The site notes endpoint and the Telegram deal bot share a legacy D1 database. Its site prelead key is `site_<normalized eventKey>_<normalized companyId>`, where each segment is trimmed, replaces runs of characters outside ASCII letters, digits, underscore, dot and hyphen with `-`, collapses dashes, truncates to 80 characters, and the whole key is lowercased. Distinct catalog IDs can therefore produce the same note key. A note key also lacks a trusted profile reference.
 
 ## Private source inventory, 2026-10-06
 
