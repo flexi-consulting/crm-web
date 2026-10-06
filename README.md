@@ -72,6 +72,17 @@ The local Worker also exercises the existing S-04 review domain handler through 
 
 ### Conditional Weeek correlation contract
 
+`src/weeek-http-transport.js` implements the documented public Weeek REST
+shape behind that correlation contract. It uses a fixed HTTPS API origin,
+requires an injected profile-bound token resolver, and maps create/list/detail
+responses into the existing provider port. The offline HTTP fixture tests the
+exact endpoint/method/query/body sequence, token isolation, malformed response
+handling, and a timeout after POST that reconciles by scanning configured
+statuses without a second POST. The transport is not registered in the Worker
+or Node service and has no production token resolver. Weeek workspace status
+scope, real deal IDs, read consistency, and actual provider behavior need an
+authorized test workspace canary before a live write can be enabled.
+
 `src/weeek-correlation-provider.js` is an injected-transport contract exercise, not a configured Weeek client. The [current official Weeek OpenAPI asset](https://developers.weeek.net/assets/weeek.yaml-Bhx55p8P.js) documents `POST /crm/statuses/{statusId}/deals` with a writable `description`, `GET /crm/statuses/{statusId}/deals` with `limit`/`offset` and `hasMoreDeals`, and `GET /crm/deals/{id}` with the description. It does **not** document a POST idempotency key or guarantee that `search` matches descriptions, so the adapter never uses search to prove uniqueness. The legacy [sales skill create flow](https://github.com/trained-assist/trained-assist-sales-skill/blob/main/src/mcp-skills/tools/30-weeek.js) sends a plain POST; its separate [catalog binding flow](https://github.com/trained-assist/trained-assist-sales-skill/blob/main/src/mcp-skills/tools/92-flexi-sales.js) records `creating` before POST and asks for manual lookup after an uncertain result.
 
 In the synthetic contract, a marker containing operation ID plus a hash of trusted profile and reviewed request hash is written into the deal description. The provider treats a create response as evidence only after `GET /crm/deals/{id}` returns the same marker and reviewed title/description. After a timeout, reconciliation scans every page in an injected profile-scoped status set, accepts exactly one compatible marker, then verifies that deal by ID. A missing marker, changed fields, multiple matches, failed read, incomplete status set, or page cap leaves `unknown`; no retry POST occurs. This does not prove that real Weeek search is reliable, that a configured status set is exhaustive, or that reads are immediately consistent. Absence can never authorize another POST. The current D1 ledger also validates **synthetic** deal IDs only; real Weeek ID format and workspace uniqueness require a separate migration/identity review. Production binding remains blocked until those contracts and a full status scope are verified with a test workspace and real approval issuer.

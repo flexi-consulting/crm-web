@@ -27,7 +27,7 @@ export function createWeeekCorrelationProvider({ transport, resolveStatusIds, pa
   if (!transport?.createDeal || !transport?.listDeals || !transport?.getDeal ||
       typeof resolveStatusIds !== "function") throw new Error("provider_contract_required");
   async function verifyDeal(dealId, expected) {
-    const result = await transport.getDeal({ dealId: String(dealId) });
+    const result = await transport.getDeal({ profileId: expected.profileId, dealId: String(dealId) });
     return result?.success === true && validDeal(result.deal, expected) &&
       result.deal.id === String(dealId) ? result.deal : null;
   }
@@ -37,12 +37,12 @@ export function createWeeekCorrelationProvider({ transport, resolveStatusIds, pa
         !clean(request.source) || !clean(request.dealType) ||
         !clean(request.companyInn) || !clean(request.contactName) ||
         !clean(request.dealComment)) throw new Error("invalid_reviewed_deal_fields");
-    return { title: request.title, description: descriptionFor(request, marker), marker };
+    return { profileId, title: request.title, description: descriptionFor(request, marker), marker };
   }
   async function create(input) {
     const expected = expectedFor(input);
     // Weeek documents no idempotency key. The D1 caller must reserve before this POST.
-    const response = await transport.createDeal({ statusId: input.request.statusId,
+    const response = await transport.createDeal({ profileId: input.profileId, statusId: input.request.statusId,
       body: { title: expected.title, description: expected.description } });
     if (response?.success !== true || !response.deal?.id) return { status: "unknown" };
     const verified = await verifyDeal(response.deal.id, expected);
@@ -65,7 +65,7 @@ export function createWeeekCorrelationProvider({ transport, resolveStatusIds, pa
         for (let page = 0; page < maxPages; page++) {
           // Scan the whole configured status set. The API's `search` behavior is
           // unspecified, so it cannot establish uniqueness or absence.
-          const response = await transport.listDeals({ statusId, limit: pageSize,
+          const response = await transport.listDeals({ profileId: input.profileId, statusId, limit: pageSize,
             offset: page * pageSize });
           if (response?.success !== true || !Array.isArray(response.deals) ||
               typeof response.hasMoreDeals !== "boolean")
