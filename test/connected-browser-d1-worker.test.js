@@ -41,7 +41,8 @@ async function stop(child) {
 }
 function migrate(root) {
   for (const file of ["0001_s04_domain.sql", "0002_built_catalog.sql", "0003_weeek_deal_identity.sql",
-    "0004_legacy_catalog_refs.sql", "0005_connected_browser_sessions.sql"]) {
+    "0004_legacy_catalog_refs.sql", "0005_connected_browser_sessions.sql",
+    "0006_connected_browser_mode.sql"]) {
     const result = spawnSync(node, [wrangler, "d1", "execute", "CRM_DB", "--config", config,
       "--local", "--persist-to", root, "--file", `migrations/${file}`, "--yes", "--json"],
     { cwd, encoding: "utf8" });
@@ -62,6 +63,7 @@ test("Worker Fetch uses atomic D1 browser handoff and real profile-scoped catalo
     const deepLink = await call(worker.base, `/catalogs/${buildId}`);
     assert.equal(deepLink.status, 303);
     assert.equal(new URL(deepLink.headers.get("location")).searchParams.get("returnTo"), `/catalogs/${buildId}`);
+    assert.equal(new URL(deepLink.headers.get("location")).searchParams.get("from"), "catalog");
     const startResponse = await call(worker.base, new URL(deepLink.headers.get("location")).pathname +
       new URL(deepLink.headers.get("location")).search);
     assert.equal(startResponse.status, 303, await startResponse.clone().text());
@@ -115,7 +117,7 @@ test("Worker Fetch uses atomic D1 browser handoff and real profile-scoped catalo
     assert.equal(counts.foreignEgress, 0);
     assert.ok(counts.cpCalls >= 3);
     await call(worker.base, "/__cp-control?mode=active");
-    const expiringStart = await call(worker.base, "/auth/connected/start");
+    const expiringStart = await call(worker.base, "/auth/connected/start?from=catalog");
     const expiringTarget = new URL(expiringStart.headers.get("location"));
     const expiringPending = cookie(expiringStart, "__Host-crm-connected-pending");
     await call(worker.base, "/__clock-offset?milliseconds=301000");
@@ -124,7 +126,7 @@ test("Worker Fetch uses atomic D1 browser handoff and real profile-scoped catalo
     { headers: { cookie: expiringPending } });
     assert.equal(expired.status, 401);
     await call(worker.base, "/__clock-offset?milliseconds=0");
-    const sessionStart = await call(worker.base, "/auth/connected/start");
+    const sessionStart = await call(worker.base, "/auth/connected/start?from=catalog");
     const sessionTarget = new URL(sessionStart.headers.get("location"));
     const sessionCallback = await call(worker.base, `/auth/connected/callback?code=${"c".repeat(64)}` +
       `&state=${sessionTarget.searchParams.get("state")}&iss=${encodeURIComponent("https://cp.example.invalid")}`,
@@ -134,6 +136,26 @@ test("Worker Fetch uses atomic D1 browser handoff and real profile-scoped catalo
     await call(worker.base, "/__clock-offset?milliseconds=301000");
     assert.equal((await call(worker.base, `/catalogs/${buildId}`,
       { headers: { cookie: expiringSession } })).status, 401);
+    await call(worker.base, "/__clock-offset?milliseconds=0");
+    await call(worker.base, "/__cp-control?mode=deals_only");
+    const dealStart = await call(worker.base, "/auth/connected/start?from=deals");
+    assert.equal(dealStart.status, 303);
+    const dealTarget = new URL(dealStart.headers.get("location"));
+    assert.equal(dealTarget.searchParams.get("scope"), "crm.deals.read");
+    const dealCallback = await call(worker.base, `/auth/connected/callback?code=${"c".repeat(64)}` +
+      `&state=${dealTarget.searchParams.get("state")}&iss=${encodeURIComponent("https://cp.example.invalid")}`,
+    { headers: { cookie: cookie(dealStart, "__Host-crm-connected-pending") } });
+    assert.equal(dealCallback.status, 303);
+    const dealSession = cookie(dealCallback, "__Host-crm-connected-session");
+    assert.equal((await call(worker.base, "/deals", { headers: { cookie: dealSession } })).status, 200);
+    assert.equal((await call(worker.base, `/catalogs/${buildId}`, { headers: { cookie: dealSession } })).status, 403);
+    await call(worker.base, "/__cp-control?mode=catalog_only");
+    const deniedDeal = await call(worker.base, "/deals", { headers: { cookie: dealSession } });
+    assert.equal(deniedDeal.status, 303);
+    assert.equal(new URL(deniedDeal.headers.get("location")).searchParams.get("from"), "deals");
+    assert.equal((await call(worker.base, "/auth/connected/start")).status, 200);
+    const catalogStart = await call(worker.base, "/auth/connected/start?from=catalog");
+    assert.equal(new URL(catalogStart.headers.get("location")).searchParams.get("scope"), "crm.catalog.read");
   } finally {
     if (worker) await stop(worker.child);
     rmSync(root, { recursive: true, force: true });

@@ -4,8 +4,14 @@ const AUDIENCE = "crm-web";
 const PENDING = "__Host-crm-connected-pending";
 const SESSION = "__Host-crm-connected-session";
 const AUTH_PATH = "/v1/connected-app-sessions/authorize";
-const SCOPES = ["crm.catalog.read", "crm.deals.read"];
+const MODES = Object.freeze({ catalog: { scope: "crm.catalog.read" },
+  deals: { scope: "crm.deals.read" } });
 const CATALOG_PATH = /^\/catalogs\/build-[a-f0-9]{24}(?:\/participants\/co-[a-f0-9]{20})?$/;
+const DEAL_PATH = /^\/api\/v1\/(?:deal-reviews\/review-|deal-operations\/op-)[0-9a-f-]{36}$/;
+const returnAllowed = (mode, path) => mode === "catalog" ? CATALOG_PATH.test(path) :
+  path === "/deals" || DEAL_PATH.test(path);
+const modeForPath = (path) => CATALOG_PATH.test(path) ? "catalog" :
+  path === "/deals" || DEAL_PATH.test(path) ? "deals" : null;
 const encoder = new TextEncoder();
 const random = () => {
   const bytes = new Uint8Array(32);
@@ -26,6 +32,9 @@ const redirect = (location, cookies = []) => {
   for (const value of cookies) headers.append("set-cookie", value);
   return new Response(null, { status: 303, headers });
 };
+const page = (body) => new Response(`<!doctype html><html lang="ru"><meta charset="utf-8"><title>CRM</title><body>${body}</body></html>`,
+  { status: 200, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store",
+    "content-security-policy": "default-src 'none'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'" } });
 function readCookie(request, name) {
   const values = (request.headers.get("cookie") ?? "").split(";").map((part) => part.trim())
     .filter((part) => part.startsWith(`${name}=`));
@@ -97,15 +106,19 @@ export function createCrmConnectedBrowserHandler({ enabled = false, issuer, allo
     if (url.origin !== publicOrigin) return error(400, "invalid_origin");
     if (url.pathname === "/auth/connected/start" && request.method === "GET") {
       const returns = url.searchParams.getAll("returnTo");
-      if (url.searchParams.size > 1 || returns.length > 1 ||
-          (url.searchParams.size && returns.length !== 1)) return error(400, "invalid_auth_request");
-      const returnPath = returns[0] ?? defaultReturnPath;
-      if (!CATALOG_PATH.test(returnPath)) return error(400, "invalid_return_path");
+      const modes = url.searchParams.getAll("from");
+      if (!url.searchParams.size) return page('<h1>CRM</h1><p>Выберите раздел.</p><p><a href="/auth/connected/start?from=catalog">Каталоги</a> · <a href="/auth/connected/start?from=deals">Сделки</a></p>');
+      if (url.searchParams.size !== modes.length + returns.length ||
+          modes.length !== 1 || returns.length > 1 || !Object.hasOwn(MODES, modes[0]))
+        return error(400, "invalid_auth_request");
+      const mode = modes[0];
+      const returnPath = returns[0] ?? (mode === "catalog" ? defaultReturnPath : "/deals");
+      if (!returnAllowed(mode, returnPath)) return error(400, "invalid_return_path");
       const handle = random(), state = random(), verifier = random();
-      await store.putPending(await digest(handle), { state, verifier, returnPath, createdAt: now() });
+      await store.putPending(await digest(handle), { state, verifier, returnPath, mode, createdAt: now() });
       const target = new URL(AUTH_PATH, issuer);
       for (const [key, value] of Object.entries({ response_type: "code", client_id: AUDIENCE,
-        redirect_uri: redirectUri, scope: SCOPES.join(" "), state,
+        redirect_uri: redirectUri, scope: MODES[mode].scope, state,
         code_challenge_method: "S256", code_challenge: await challenge(verifier) }))
         target.searchParams.set(key, value);
       return redirect(target.href, [cookie(PENDING, handle, 300, "Lax")]);
@@ -115,7 +128,8 @@ export function createCrmConnectedBrowserHandler({ enabled = false, issuer, allo
       const transaction = handle ? await store.takePending(await digest(handle)) : null;
       const keys = [...url.searchParams.keys()];
       const code = url.searchParams.get("code"), state = url.searchParams.get("state");
-      if (!transaction || !CATALOG_PATH.test(transaction.returnPath) ||
+      if (!transaction || !Object.hasOwn(MODES, transaction.mode) ||
+          !returnAllowed(transaction.mode, transaction.returnPath) ||
           now() - transaction.createdAt > 300_000 || keys.length !== 3 ||
           new Set(keys).size !== 3 || keys.some((key) => !["code", "state", "iss"].includes(key)) ||
           !safeHex(code) || state !== transaction.state || url.searchParams.get("iss") !== issuer)
@@ -129,7 +143,7 @@ export function createCrmConnectedBrowserHandler({ enabled = false, issuer, allo
       try { identity = await introspect({ token: exchanged.token, audience: AUDIENCE }); }
       catch { return error(503, "connected_identity_unavailable"); }
       if (!activeIdentity(identity, issuer, Math.floor(now() / 1000)) ||
-          identity.exp > exchanged.expiresAt || !SCOPES.every((scope) => identity.scopes.includes(scope)))
+          identity.exp > exchanged.expiresAt || !identity.scopes.includes(MODES[transaction.mode].scope))
         return error(401, "connected_session_inactive");
       const newHandle = random();
       const sessionExpiresAt = Math.min(exchanged.expiresAt, identity.exp);
@@ -154,12 +168,24 @@ export function createCrmConnectedBrowserHandler({ enabled = false, issuer, allo
     if (request.headers.has("authorization")) return error(400, "untrusted_browser_authorization");
     const handle = readCookie(request, SESSION);
     if (!handle) {
-      if (CATALOG_PATH.test(url.pathname) && !url.searchParams.size)
-        return redirect(`${publicOrigin}/auth/connected/start?${new URLSearchParams({ returnTo: url.pathname })}`);
+      const mode = modeForPath(url.pathname);
+      if (mode && !url.searchParams.size)
+        return redirect(`${publicOrigin}/auth/connected/start?${new URLSearchParams({ from: mode, returnTo: url.pathname })}`);
       return error(401, "connected_session_required");
     }
     const session = await store.getSession(await digest(handle));
     if (!safeHex(session?.token)) return error(401, "connected_session_required");
+    if (url.pathname === "/deals") {
+      if (url.searchParams.size) return error(400, "invalid_query");
+      let identity;
+      try { identity = await introspect({ token: session.token, audience: AUDIENCE }); }
+      catch { return error(503, "connected_identity_unavailable"); }
+      const active = activeIdentity(identity, issuer, Math.floor(now() / 1000));
+      if (!active) return error(401, "connected_session_inactive");
+      if (!active.scopes.includes(MODES.deals.scope))
+        return redirect(`${publicOrigin}/auth/connected/start?from=deals`);
+      return page('<h1>Сделки</h1><p>Откройте ссылку на конкретный статус сделки из каталога или уведомления.</p><p><a href="/auth/connected/start?from=catalog">Каталоги</a></p>');
+    }
     if (url.pathname === "/auth/connected/session") {
       if (url.searchParams.size) return error(400, "invalid_query");
       let identity;

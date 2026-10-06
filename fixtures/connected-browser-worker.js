@@ -17,7 +17,9 @@ const cpFetch = async (url, options) => {
   if (url.endsWith("/introspect")) return new Response(JSON.stringify(cpMode === "revoked"
     ? { active: false } : { active: true, iss: issuer, aud: "crm-web", sub: "principal_A",
       profileId: "profile_A", sessionId: "session_A", nbf: now - 10, exp: now + 300,
-      scopes: ["crm.catalog.read", "crm.deals.read"] }), { status: 200 });
+      scopes: cpMode === "catalog_only" ? ["crm.catalog.read"] :
+        cpMode === "deals_only" ? ["crm.deals.read"] :
+          ["crm.catalog.read", "crm.deals.read"] }), { status: 200 });
   foreignEgress++;
   throw new Error("unexpected_cp_path");
 };

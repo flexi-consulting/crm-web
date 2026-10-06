@@ -19,14 +19,14 @@ const request = (path, options = {}) => new Request(`${origin}${path}`, {
 function fixture() {
   const store = createMemoryCrmBrowserStore();
   const calls = [];
-  let selected = "profile_A", available = true;
+  let selected = "profile_A", available = true, scopes = ["crm.catalog.read", "crm.deals.read"];
   const introspect = async ({ token: received, audience }) => {
     calls.push(["introspect", received, audience]);
     if (!available) throw new Error("unavailable");
     if (selected !== "profile_A") return { active: false };
     return { active: true, iss: issuer, aud: "crm-web", sub: "principal_A",
       profileId: selected, sessionId: "session_A", nbf: Math.floor(now / 1000) - 10,
-      exp: Math.floor(now / 1000) + 300, scopes: ["crm.catalog.read", "crm.deals.read"] };
+      exp: Math.floor(now / 1000) + 300, scopes };
   };
   const handler = createCrmConnectedBrowserHandler({ enabled: true, issuer,
     allowedIssuerOrigins: [issuer], publicOrigin: origin, redirectUri: callback,
@@ -41,11 +41,14 @@ function fixture() {
         { headers: { "content-type": "application/json" } });
     } });
   return { handler, calls, setSelected: (value) => { selected = value; },
+    setScopes: (value) => { scopes = value; },
     setAvailable: (value) => { available = value; } };
 }
 
-async function signIn(f) {
-  const start = await f.handler(request("/auth/connected/start"));
+async function signIn(f, mode = "catalog", returnTo) {
+  const params = new URLSearchParams({ from: mode });
+  if (returnTo) params.set("returnTo", returnTo);
+  const start = await f.handler(request(`/auth/connected/start?${params}`));
   assert.equal(start.status, 303);
   const target = new URL(start.headers.get("location"));
   assert.equal(target.origin, issuer);
@@ -53,11 +56,12 @@ async function signIn(f) {
   assert.equal(target.searchParams.get("redirect_uri"), callback);
   assert.equal(target.searchParams.get("code_challenge_method"), "S256");
   assert.equal(target.searchParams.get("code_challenge")?.length, 43);
+  assert.equal(target.searchParams.get("scope"), mode === "catalog" ? "crm.catalog.read" : "crm.deals.read");
   const pending = cookie(start, "__Host-crm-connected-pending");
   const path = `/auth/connected/callback?code=${code}&state=${target.searchParams.get("state")}&iss=${encodeURIComponent(issuer)}`;
   const callbackResponse = await f.handler(request(path, { headers: { cookie: pending } }));
   assert.equal(callbackResponse.status, 303);
-  assert.equal(callbackResponse.headers.get("location"), `${origin}/catalogs/${build}`);
+  assert.equal(callbackResponse.headers.get("location"), `${origin}${returnTo ?? (mode === "catalog" ? `/catalogs/${build}` : "/deals")}`);
   const session = cookie(callbackResponse, "__Host-crm-connected-session");
   assert.ok(session);
   assert.match(session, /^__Host-crm-connected-session=[a-f0-9]{64}$/);
@@ -135,7 +139,7 @@ test("configuration and CP transport refuse redirects and arbitrary origins", as
 
 test("callback rejects wrong issuer and consumes the pending transaction", async () => {
   const f = fixture();
-  const start = await f.handler(request("/auth/connected/start"));
+  const start = await f.handler(request("/auth/connected/start?from=catalog"));
   const target = new URL(start.headers.get("location"));
   const pending = cookie(start, "__Host-crm-connected-pending");
   const wrong = `/auth/connected/callback?code=${code}&state=${target.searchParams.get("state")}` +
@@ -144,4 +148,27 @@ test("callback rejects wrong issuer and consumes the pending transaction", async
   const correct = wrong.replace(encodeURIComponent("https://other.example.invalid"), encodeURIComponent(issuer));
   assert.equal((await f.handler(request(correct, { headers: { cookie: pending } }))).status, 401);
   assert.equal(f.calls.filter(([kind]) => kind === "exchange").length, 0);
+});
+
+test("neutral entry and separate catalog/deal grants preserve an earlier session on denial", async () => {
+  const f = fixture();
+  const chooser = await f.handler(request("/auth/connected/start"));
+  assert.equal(chooser.status, 200);
+  assert.match(await chooser.text(), /from=catalog.*from=deals/);
+  f.setScopes(["crm.catalog.read"]);
+  const { session } = await signIn(f);
+  assert.equal((await f.handler(request(`/catalogs/${build}`, { headers: { cookie: session } }))).status, 200);
+  const denied = await f.handler(request("/auth/connected/start?from=deals"));
+  const target = new URL(denied.headers.get("location"));
+  const pending = cookie(denied, "__Host-crm-connected-pending");
+  const callback = await f.handler(request(`/auth/connected/callback?code=${code}&state=${target.searchParams.get("state")}` +
+    `&iss=${encodeURIComponent(issuer)}`, { headers: { cookie: `${pending}; ${session}` } }));
+  assert.equal(callback.status, 401);
+  assert.equal((await f.handler(request(`/catalogs/${build}`, { headers: { cookie: session } }))).status, 200);
+  f.setScopes(["crm.deals.read"]);
+  const deal = await signIn(f, "deals");
+  assert.equal((await f.handler(request("/deals", { headers: { cookie: deal.session } }))).status, 200);
+  assert.equal((await f.handler(request(`/catalogs/${build}`, { headers: { cookie: deal.session } }))).status, 403);
+  assert.equal((await f.handler(request("/auth/connected/start?from=deals&returnTo=%2F%2Fevil.invalid"))).status, 400);
+  assert.equal((await f.handler(request("/auth/connected/start?from=catalog&returnTo=%2Fdeals"))).status, 400);
 });
