@@ -21,8 +21,10 @@ async function freePort() {
 }
 async function startWorker(root) {
   const port = await freePort();
+  const inspectorPort = await freePort();
   const child = spawn(node, [wrangler, "dev", "--config", config, "--ip", "127.0.0.1",
-    "--port", String(port), "--persist-to", root, "--log-level", "error"],
+    "--port", String(port), "--inspector-port", String(inspectorPort),
+    "--persist-to", root, "--log-level", "error"],
     { cwd, stdio: ["ignore", "pipe", "pipe"] });
   let logs = "";
   child.stdout.on("data", (part) => { logs += part; });
@@ -88,6 +90,14 @@ test("D1 built catalog, stable prelead/note and reviewed deal survive three Work
     const replayBuild = await call(worker.base, "/catalog/build", { exhibitionId: "demo-expo-001", idempotencyKey: "durable-build-a" });
     assert.equal(replayBuild.status, 200);
     assert.equal(replayBuild.body.buildId, buildId);
+    const permuted = await call(worker.base, "/catalog/build", { exhibitionId: "demo-expo-001",
+      idempotencyKey: "durable-permuted", reverseArtifact: true });
+    assert.equal(permuted.status, 201);
+    const permutedRead = await call(worker.base, "/catalog/read", { buildId: permuted.body.buildId });
+    assert.equal(permutedRead.status, 200);
+    assert.equal(permutedRead.body.items.length, 4);
+    assert.equal((await call(worker.base, "/catalog/read", { buildId: permuted.body.buildId, q: 42 })).status, 400);
+    assert.equal((await call(worker.base, "/catalog/read", { buildId: permuted.body.buildId, classification: "unsafe" })).status, 400);
     const rebuilt = await call(worker.base, "/catalog/build", { exhibitionId: "demo-expo-001", idempotencyKey: "durable-build-b" });
     assert.equal(rebuilt.status, 201);
     const rebound = await call(worker.base, "/catalog/bind", { buildId: rebuilt.body.buildId, companyId });

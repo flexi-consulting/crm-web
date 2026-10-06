@@ -59,6 +59,11 @@ export function createBuiltCatalogD1Repository(db, now = () => new Date().toISOS
   }
 
   async function readParticipants({ profileRef, buildId, companyId = null, query = "", classification = null }) {
+    if (!/^build-[a-f0-9]{24}$/.test(buildId ?? "") ||
+        (companyId !== null && !/^co-[a-f0-9]{20}$/.test(companyId)) ||
+        typeof query !== "string" || [...query].length > 120 ||
+        (classification !== null && !["target", "near_target", "not_target"].includes(classification)))
+      return { status: 400, body: { error: "invalid_query" } };
     const build = await getBuild({ profileRef, buildId });
     if (!build) return { status: 404, body: { error: "catalog_build_not_found" } };
     if (build.report.validation?.valid !== true) return { status: 409, body: { error: "validated_build_required" } };
@@ -67,8 +72,8 @@ export function createBuiltCatalogD1Repository(db, now = () => new Date().toISOS
     let items;
     try { items = (rows.results ?? []).map((row) => JSON.parse(row.participant_json)); }
     catch { return { status: 503, body: { error: "catalog_artifact_invalid" } }; }
-    if (items.length !== build.artifact.companies.length ||
-        items.some((item, index) => JSON.stringify(item) !== JSON.stringify(build.artifact.companies[index])))
+    const expected = new Map(build.artifact.companies.map((item) => [item.id, JSON.stringify(item)]));
+    if (items.length !== expected.size || items.some((item) => expected.get(item.id) !== JSON.stringify(item)))
       return { status: 503, body: { error: "catalog_artifact_incomplete" } };
     const q = query.trim().toLocaleLowerCase("en");
     items = items.filter((item) => (companyId === null || item.id === companyId) &&

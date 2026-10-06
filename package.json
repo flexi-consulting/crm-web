@@ -6,7 +6,7 @@
   "description": "Synthetic CRM and exhibitions domain API foundation",
   "scripts": {
     "start": "node src/server.js",
-    "test": "node --test"
+    "test": "node --test --test-concurrency=1"
   },
   "devDependencies": {
     "ajv": "^8.17.1",

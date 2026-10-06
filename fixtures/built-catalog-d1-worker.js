@@ -33,6 +33,7 @@ export default {
         const generated = await createCatalogBuildService().build({ profileId, idempotencyKey: key,
           exhibitionId: args.exhibitionId });
         if (generated.status !== 201) return respond(generated.status, generated.body);
+        if (args.reverseArtifact === true) generated.body.artifact.companies.reverse();
         result = await built.saveBuild({ profileRef: profileId, idempotencyKey: key, build: generated.body });
         return respond(result.status === "stored" ? 201 : result.status === "replay" ? 200 : 409, result);
       }
