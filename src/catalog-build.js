@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { renderCatalogPreview, catalogPreviewGeneratorRevision } from "./catalog-preview.js";
+import { CATALOG_BUILD_SCHEMA_VERSION } from "./catalog-version.js";
 
 export const syntheticBuildSources = {
   "demo-expo-001": {
@@ -109,12 +110,13 @@ export function validateReport(artifact, report) {
     registryInactive: rows.filter((x) => x.registry.status === "inactive").length,
     targets: rows.filter((x) => x.qualification.target).length,
     nearTargets: rows.filter((x) => x.qualification.nearTarget).length,
-    notTargets: rows.filter((x) => x.qualification.classification === "not_target").length
+    notTargets: rows.filter((x) => x.qualification.classification === "not_target").length,
+    unknowns: rows.filter((x) => x.qualification.classification === "unknown").length
   };
   const ids = rows.map((x) => x.id);
   const issues = [];
   if (ids.some((id) => !/^co-[a-f0-9]{20}$/.test(id)) || new Set(ids).size !== ids.length) issues.push({ code: "unsafe_or_duplicate_company_id" });
-  if (counts.targets + counts.nearTargets + counts.notTargets !== rows.length) issues.push({ code: "qualification_counts_mismatch" });
+  if (counts.targets + counts.nearTargets + counts.notTargets + counts.unknowns !== rows.length) issues.push({ code: "qualification_counts_mismatch" });
   if (counts.sourceRecords !== counts.uniqueCompanies + counts.duplicateRecords) issues.push({ code: "source_counts_mismatch" });
   if (counts.enrichmentFound + counts.enrichmentNotFound + counts.enrichmentUnavailable !== rows.length) issues.push({ code: "enrichment_counts_mismatch" });
   if (counts.registryOk + counts.registryUnknown + counts.registrySanctioned + counts.registryNotFound + counts.registryInactive !== rows.length) issues.push({ code: "registry_counts_mismatch" });
@@ -193,9 +195,9 @@ export function createCatalogBuildService({ sourceAdapter = createSyntheticSourc
         companies.push(company);
       }
       companies.sort((a, b) => a.id.localeCompare(b.id));
-      const artifact = { schemaVersion: "1.0.0", exhibitionId, sourceRevision: source.sourceRevision, companies };
+      const artifact = { schemaVersion: CATALOG_BUILD_SCHEMA_VERSION, exhibitionId, sourceRevision: source.sourceRevision, companies };
       const report = {
-        schemaVersion: "1.0.0", exhibitionId, sourceRevision: source.sourceRevision,
+        schemaVersion: CATALOG_BUILD_SCHEMA_VERSION, exhibitionId, sourceRevision: source.sourceRevision,
         stages: { source: { status: "complete", imported: imported.length }, dedup: { status: "complete", removed: duplicateRecords.length }, enrichment: { status: companies.some((x) => x.enrichment.status === "unavailable") ? "partial" : "complete" }, registry: { status: companies.some((x) => x.registry.status === "unknown") ? "partial" : "complete" }, qualification: { status: "complete" }, artifact: { status: "complete" } },
         providerErrors, validation: null
       };

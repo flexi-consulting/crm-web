@@ -54,8 +54,12 @@ sales catalog generator into the same app-owned D1 build/participant contract.
 It derives a revision from the fields actually imported, preserves the old
 `eventKey + company id` pair through an additive `0004_legacy_catalog_refs.sql`
 mapping, and keeps the new participant ID stable across name changes and
-rebuilds. Legacy target/near-target flags remain marked
-`legacy_classification_unverified`; registry state is `unknown`. Repeated or
+rebuilds. Explicit legacy target/near-target flags retain their provenance;
+missing qualification flags are represented as
+`unknown`, and `not_target` is emitted only when both flags explicitly say
+zero. Registry state is `unknown`. The build artifact/report schema and the
+offline S-02 participant capability are versioned at `1.1.0` for this additive
+classification contract. Repeated or
 unsafe old IDs stop the entire import before D1 writes. Contact email/phone
 fields are excluded from the public artifact and revision. An offline Worker
 test covers import, profile isolation, old-link lookup, a revised snapshot,

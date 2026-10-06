@@ -374,7 +374,8 @@ test("invented legacy EX snapshot keeps event/id links through D1 rebuild, note 
       inn: "0000000001", ogrn: "0000000000001", ru: 1, rev: 250,
       href: "https://example.invalid/catalog/loom", w: "https://example.invalid/loom" },
     { id: "21_dot_12", n: "Invented Supplier", s: "A-02", t: 0, nt: 1, ru: 1,
-      rev: null, href: "https://example.invalid/catalog/supplier" }
+      rev: null, href: "https://example.invalid/catalog/supplier" },
+    { id: "21_dot_13", n: "Invented Unclassified Participant", s: "A-03", t: 0, ru: 1 }
   ];
   const eventKey = "demo-expo-001";
   const link = { eventKey, legacyId: "LNG001" };
@@ -388,9 +389,17 @@ test("invented legacy EX snapshot keeps event/id links through D1 rebuild, note 
     worker = await startWorker(root);
     const imported = await call(worker.base, "/catalog/import-legacy", { eventKey, entries });
     assert.equal(imported.status, 201, JSON.stringify(imported.body));
-    assert.equal(imported.body.imported, 2);
+    assert.equal(imported.body.imported, 3);
     assert.match(imported.body.sourceRevision, /^legacy-ex-sha256-[0-9a-f]{64}$/);
     assert.equal((await call(worker.base, "/catalog/import-legacy", { eventKey, entries })).status, 200);
+    const unknownClass = await call(worker.base, "/catalog/read", {
+      buildId: imported.body.buildId, classification: "unknown" });
+    assert.equal(unknownClass.status, 200);
+    assert.equal(unknownClass.body.items.length, 1);
+    assert.equal(unknownClass.body.items[0].qualification.classification, "unknown");
+    assert.equal(unknownClass.body.items[0].qualification.target, false);
+    assert.equal((await call(worker.base, "/catalog/read", {
+      buildId: imported.body.buildId, classification: "not_target" })).body.items.length, 0);
     const blocked = await call(worker.base, "/catalog/import-legacy", { eventKey,
       entries: [{ ...entries[0], id: "LNG001" }, { ...entries[1], id: "LNG001" }] });
     assert.equal(blocked.status, 422);
@@ -420,7 +429,7 @@ test("invented legacy EX snapshot keeps event/id links through D1 rebuild, note 
     worker = await startWorker(root);
     assert.equal((await call(worker.base, "/catalog/resolve-legacy", link)).body.companyId,
       resolved.body.companyId);
-    const revisedEntries = [{ ...entries[0], n: "Invented Loom Works Updated" }, entries[1]];
+    const revisedEntries = [{ ...entries[0], n: "Invented Loom Works Updated" }, entries[1], entries[2]];
     const rebuilt = await call(worker.base, "/catalog/import-legacy", { eventKey, entries: revisedEntries });
     assert.equal(rebuilt.status, 201);
     assert.notEqual(rebuilt.body.buildId, imported.body.buildId);
@@ -447,6 +456,8 @@ test("invented legacy EX snapshot keeps event/id links through D1 rebuild, note 
     assert.equal(reduced.status, 201);
     assert.equal((await call(worker.base, "/catalog/resolve-legacy",
       { eventKey, legacyId: "21_dot_12" })).status, 404);
+    assert.equal((await call(worker.base, "/catalog/resolve-legacy",
+      { eventKey, legacyId: "21_dot_13" })).status, 404);
     assert.equal((await call(worker.base, "/catalog/resolve-legacy", link)).body.companyId,
       resolved.body.companyId);
   } finally {

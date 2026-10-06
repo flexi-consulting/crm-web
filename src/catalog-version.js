@@ -1,0 +1,1 @@
+export const CATALOG_BUILD_SCHEMA_VERSION = "1.1.0";

@@ -117,7 +117,8 @@ test("opt-in public-shaped D1 HTTP routes and offline MCP share one durable S01/
       { headers: { "x-test-scopes": "" } })).status, 403);
     assert.equal((await fetch(`${worker.base}${browserPath}`, { headers: { "x-test-disable": "true" } })).status, 404);
     assert.equal((await fetch(`${worker.base}${browserPath}?q=a&q=b`)).status, 400);
-    assert.equal((await fetch(`${worker.base}${browserPath}?classification=unknown`)).status, 400);
+    assert.equal((await fetch(`${worker.base}${browserPath}?classification=unknown`)).status, 200);
+    assert.equal((await fetch(`${worker.base}${browserPath}?classification=invalid`)).status, 400);
     assert.equal((await fetch(`${worker.base}${browserPath}/participants/${company.id}?q=a`)).status, 400);
     assert.equal((await fetch(`${worker.base}${browserPath}?q=${"x".repeat(121)}`)).status, 400);
     const legacyEvent = "invented-expo-2026";

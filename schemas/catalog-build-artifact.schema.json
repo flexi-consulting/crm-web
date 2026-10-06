@@ -6,7 +6,7 @@
   "additionalProperties": false,
   "required": ["schemaVersion", "exhibitionId", "sourceRevision", "companies"],
   "properties": {
-    "schemaVersion": { "const": "1.0.0" },
+    "schemaVersion": { "const": "1.1.0" },
     "exhibitionId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,79}$" },
     "sourceRevision": { "type": "string", "minLength": 1 },
     "companies": {
@@ -41,7 +41,7 @@
           },
           "qualification": {
             "type": "object", "additionalProperties": false, "required": ["classification", "target", "nearTarget", "reason"],
-            "properties": { "classification": { "enum": ["target", "near_target", "not_target"] }, "target": { "type": "boolean" }, "nearTarget": { "type": "boolean" }, "reason": { "type": "string" } }
+            "properties": { "classification": { "enum": ["target", "near_target", "not_target", "unknown"] }, "target": { "type": "boolean" }, "nearTarget": { "type": "boolean" }, "reason": { "type": "string" } }
           }
         }
       }

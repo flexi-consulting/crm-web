@@ -299,7 +299,7 @@ export function createServer({
       const classValues = url.searchParams.getAll("classification");
       if (keys.some((key) => !["q", "classification"].includes(key)) || queryValues.length > 1 || classValues.length > 1 ||
           (queryValues[0] && [...queryValues[0]].length > 120) ||
-          (classValues[0] && !["target", "near_target", "not_target"].includes(classValues[0])) ||
+          (classValues[0] && !["target", "near_target", "not_target", "unknown"].includes(classValues[0])) ||
           (builtParticipantsMatch[2] && keys.length > 0)) {
         return json(response, 400, { error: "invalid_query", code: "BUILD_INVALID_QUERY" });
       }

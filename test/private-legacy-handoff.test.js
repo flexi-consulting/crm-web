@@ -95,6 +95,24 @@ test("private capture copies exact HTML and source JSON bytes and quarantines al
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test("current legacy source shape imports only supported facts and preserves missing classification as unknown", async () => {
+  const bytes = await readFile(new URL("./fixtures/legacy-ex-current-shape.synthetic.html", import.meta.url));
+  const parsed = parseLegacyExHtml(bytes);
+  assert.equal(parsed.eventKey, "synthetic-current-source-shape");
+  assert.deepEqual(Object.keys(parsed.entries[0]), ["id", "n", "s", "c", "b", "w", "p", "e", "ru", "t",
+    "cats", "dir", "dirpos", "rev", "ry", "prof", "py"]);
+  const projected = projectLegacyExSnapshot({ profileRef: "demo-profile-a", ...parsed });
+  assert.equal(projected.status, "projected");
+  const byName = Object.fromEntries(projected.build.artifact.companies.map((company) => [company.name, company]));
+  assert.equal(byName["Synthetic Exhibitor 001"].qualification.classification, "target");
+  assert.equal(byName["Synthetic Exhibitor 002"].qualification.classification, "unknown");
+  assert.equal(projected.build.report.validation.counts.unknowns, 1);
+  const serialized = JSON.stringify(projected.build.artifact);
+  for (const sourceOnly of ["+7 000 000-00-01", "contact001@example.invalid", "Synthetic Director 001",
+    "Synthetic role", "Synthetic product summary", "Synthetic category", "Sample City"])
+    assert.equal(serialized.includes(sourceOnly), false, `source-only field leaked: ${sourceOnly}`);
+});
+
 test("preflights every catalog decision before the first local D1 write", async () => {
   const root = await mkdtemp(join(tmpdir(), "crm-private-preflight-"));
   try {

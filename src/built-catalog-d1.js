@@ -1,12 +1,13 @@
 import { createHash } from "node:crypto";
 import { catalog } from "./fixtures.js";
 import { validateReport } from "./catalog-build.js";
+import { CATALOG_BUILD_SCHEMA_VERSION } from "./catalog-version.js";
 
 const sha = (value) => createHash("sha256").update(value).digest("hex");
 const preleadId = (profileRef, eventId, companyId) => `built-prelead-${sha(JSON.stringify([profileRef, eventId, companyId])).slice(0, 24)}`;
 const changed = (result) => Number(result?.meta?.changes ?? 0) === 1;
 const validBuild = (build) => build?.buildId && /^build-[a-f0-9]{24}$/.test(build.buildId) &&
-  build.artifact?.schemaVersion === "1.0.0" && /^[a-z0-9][a-z0-9-]{0,79}$/.test(build.artifact.exhibitionId) &&
+  build.artifact?.schemaVersion === CATALOG_BUILD_SCHEMA_VERSION && /^[a-z0-9][a-z0-9-]{0,79}$/.test(build.artifact.exhibitionId) &&
   typeof build.artifact.sourceRevision === "string" && build.artifact.sourceRevision.length > 0 &&
   Array.isArray(build.artifact.companies) && build.artifact.companies.length <= 20_000 &&
   build.report?.validation?.valid === true && build.report.exhibitionId === build.artifact.exhibitionId &&
@@ -117,7 +118,7 @@ export function createBuiltCatalogD1Repository(db, now = () => new Date().toISOS
     if (!/^build-[a-f0-9]{24}$/.test(buildId ?? "") ||
         (companyId !== null && !/^co-[a-f0-9]{20}$/.test(companyId)) ||
         typeof query !== "string" || [...query].length > 120 ||
-        (classification !== null && !["target", "near_target", "not_target"].includes(classification)))
+        (classification !== null && !["target", "near_target", "not_target", "unknown"].includes(classification)))
       return { status: 400, body: { error: "invalid_query" } };
     const build = await getBuild({ profileRef, buildId });
     if (!build) return { status: 404, body: { error: "catalog_build_not_found" } };

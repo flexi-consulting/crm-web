@@ -47,7 +47,7 @@ test("synthetic build imports, deduplicates, enriches, qualifies, and reconciles
       sourceRecords: 5, uniqueCompanies: 4, duplicateRecords: 1,
       enrichmentFound: 3, enrichmentNotFound: 0, enrichmentUnavailable: 1,
       registryOk: 1, registryUnknown: 1, registrySanctioned: 1, registryNotFound: 0, registryInactive: 1,
-      targets: 1, nearTargets: 2, notTargets: 1
+      targets: 1, nearTargets: 2, notTargets: 1, unknowns: 0
     });
     const companies = body.artifact.companies;
     assert.equal(companies.length, 4);
@@ -257,7 +257,7 @@ test("preview renders required catalog sections, cards, links, filters, badges, 
     assert.equal(pageResponse.status, 200);
     assert.match(pageResponse.headers.get("content-security-policy"), /connect-src 'none'/);
     const html = await pageResponse.text();
-    for (const token of ["data-preview-only=\"true\"", "id=\"searchInput\"", "data-filter=\"target\"", "data-filter=\"near\"", "data-filter=\"not-target\"", "data-filter=\"registry-review\"", "id=\"alphaNav\"", "id=\"catalog\"", "class=\"company-card", "class=\"target-badge\"", "class=\"near-badge\"", "class=\"not-target-badge\"", "class=\"enrichment-badge", "class=\"registry-badge", "class=\"card-link profile-link\"", "class=\"card-link website-link\""]) assert.ok(html.includes(token), `missing ${token}`);
+    for (const token of ["data-preview-only=\"true\"", "id=\"searchInput\"", "data-filter=\"target\"", "data-filter=\"near\"", "data-filter=\"not-target\"", "data-filter=\"unknown\"", "data-filter=\"registry-review\"", "id=\"alphaNav\"", "id=\"catalog\"", "class=\"company-card", "class=\"target-badge\"", "class=\"near-badge\"", "class=\"not-target-badge\"", "class=\"enrichment-badge", "class=\"registry-badge", "class=\"card-link profile-link\"", "class=\"card-link website-link\""]) assert.ok(html.includes(token), `missing ${token}`);
     const inlineScript = html.match(/<script>([\s\S]*?)<\/script>/)?.[1];
     assert.ok(inlineScript);
     assert.doesNotThrow(() => new vm.Script(inlineScript));
@@ -281,6 +281,23 @@ test("preview renders required catalog sections, cards, links, filters, badges, 
     enrichmentAdapter: { async enrich(record) { enrichmentCalls++; return enrichmentFixtures.enrich(record); } },
     registryAdapter: { async check(record) { registryCalls++; return registryFixtures.check(record); } }
   });
+});
+
+test("legacy qualification unknown renders explicitly and is not styled as not-target", () => {
+  const rendered = renderCatalogPreview({ buildId: `build-${"a".repeat(24)}`, artifact: {
+    schemaVersion: "1.1.0", exhibitionId: "synthetic-current-source-shape", sourceRevision: "synthetic-revision",
+    companies: [{ id: `co-${"b".repeat(20)}`, name: "Synthetic unknown participant",
+      source: { sourceRecordId: `src-${"c".repeat(24)}`, country: "RU", booth: "A-01", href: null,
+        duplicateSourceRecordIds: [] },
+      enrichment: { status: "found", inn: null, ogrn: null, revenueRub: 250000000,
+        activity: "unknown", website: null, provenance: { provider: "synthetic", fixtureRef: "synthetic" } },
+      registry: { status: "unknown", provenance: { source: "synthetic", fixtureRef: "synthetic" } },
+      qualification: { classification: "unknown", target: false, nearTarget: false,
+        reason: "legacy_classification_unverified" } }]
+  }, buildReport: { validation: { valid: true } } });
+  assert.equal(rendered.valid, true);
+  assert.match(rendered.html, /СТАТУС НЕ ПОДТВЕРЖДЁН/);
+  assert.doesNotMatch(rendered.html, /НЕ ЦЕЛЕВАЯ/);
 });
 
 test("preview escapes hostile company names and omits unsafe links", async () => {
