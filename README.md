@@ -1,5 +1,7 @@
 # CRM Web
 
+The offline [legacy notes recovery gate](docs/LEGACY-NOTES-RECOVERY.md) records the private S-03/S-04 source correlation and invented golden cases. Its evidence classifier is not a published capability or a live data importer.
+
 Independent CRM and exhibitions web service. This work is a local synthetic API/domain-logic foundation. Catalog and company reads use fixtures; the exhibition extension adds a hidden synthetic catalog-build pipeline; the sales extension prepares in-memory intents and includes an unadvertised synthetic confirmed-deal state machine behind a fake provider. None of these routes writes to a live CRM or scrapes live sites. Mutating deal-intent, prelead timeline, confirmed-deal, and catalog-build routes are omitted from the published manifest, so the agent cannot discover them as capabilities.
 
 ## Run locally
