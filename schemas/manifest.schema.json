@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crm-web.example.invalid/schemas/manifest.schema.json",
+  "title": "C14 connected application manifest",
+  "type": "object",
+  "required": ["serviceId", "release", "platformContractRange", "domainApiVersion", "capabilities", "readiness", "compatibility", "endpoints"],
+  "properties": {
+    "serviceId": { "const": "crm-web.exhibitions" },
+    "release": {
+      "type": "object",
+      "required": ["version", "sourceRevision", "environment"],
+      "properties": {
+        "version": { "type": "string", "minLength": 1 },
+        "sourceRevision": { "type": "string", "minLength": 1 },
+        "environment": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "platformContractRange": { "const": ">=1.0.0 <2.0.0" },
+    "domainApiVersion": { "const": "1.0.0" },
+    "capabilities": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/capability" }
+    },
+    "readiness": { "$ref": "#/$defs/readiness" },
+    "compatibility": {
+      "type": "object",
+      "required": ["deprecatedCapabilities"],
+      "properties": {
+        "deprecatedCapabilities": { "type": "array", "items": { "$ref": "#/$defs/deprecatedCapability" } }
+      },
+      "additionalProperties": false
+    },
+    "endpoints": {
+      "type": "object",
+      "required": ["readiness", "catalog"],
+      "properties": {
+        "readiness": { "$ref": "#/$defs/endpoint" },
+        "catalog": { "$ref": "#/$defs/endpoint" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "readiness": {
+      "type": "object",
+      "required": ["status", "scope", "reason", "checked"],
+      "properties": {
+        "status": { "enum": ["ready", "degraded", "blocked", "unavailable"] },
+        "scope": { "const": "local_process_only" },
+        "reason": {
+          "type": "object",
+          "required": ["code"],
+          "properties": { "code": { "type": "string", "minLength": 1 } },
+          "additionalProperties": false
+        },
+        "checked": {
+          "type": "object",
+          "required": ["serviceId", "release", "platformContractRange", "domainApiVersion"],
+          "properties": {
+            "serviceId": { "type": "string" },
+            "release": {
+              "type": "object",
+              "required": ["version", "sourceRevision", "environment"],
+              "properties": {
+                "version": { "type": "string" },
+                "sourceRevision": { "type": "string" },
+                "environment": { "type": "string" }
+              },
+              "additionalProperties": false
+            },
+            "platformContractRange": { "type": "string" },
+            "domainApiVersion": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "endpoint": {
+      "type": "object",
+      "required": ["method", "path"],
+      "properties": {
+        "method": { "const": "GET" },
+        "path": { "type": "string", "pattern": "^/api/v1/" }
+      },
+      "additionalProperties": false
+    },
+    "capability": {
+      "type": "object",
+      "required": ["id", "version", "required", "inputSchemaRef", "outputSchemaRef", "effect", "requiredScopes", "operationRef"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+        "required": { "type": "boolean" },
+        "inputSchemaRef": { "type": "string", "pattern": "^schemas/[^ ]+\\.schema\\.json$" },
+        "outputSchemaRef": { "type": "string", "pattern": "^schemas/[^ ]+\\.schema\\.json$" },
+        "errorsSchemaRef": { "type": "string", "pattern": "^schemas/[^ ]+\\.schema\\.json$" },
+        "descriptorRef": { "type": "string", "pattern": "^capabilities/[^ ]+\\.json$" },
+        "handlerBinding": { "type": "string", "minLength": 1 },
+        "mcpTool": { "type": "object", "required": ["name", "protocolVersion"], "properties": { "name": { "type": "string" }, "protocolVersion": { "type": "string" } }, "additionalProperties": false },
+        "effect": { "enum": ["read", "write", "external_mutation"] },
+        "requiredScopes": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "operationRef": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "deprecatedCapability": {
+      "type": "object",
+      "required": ["id", "version", "replacement"],
+      "properties": {
+        "id": { "type": "string" },
+        "version": { "type": "string" },
+        "replacement": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  }
+}

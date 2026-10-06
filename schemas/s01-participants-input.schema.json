@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crm-web.example.invalid/schemas/s01-participants-input.schema.json",
+  "title": "S-01 exhibition participant lookup input",
+  "type": "object",
+  "properties": {},
+  "additionalProperties": false
+}

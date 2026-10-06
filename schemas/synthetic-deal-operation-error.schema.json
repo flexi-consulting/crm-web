@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crm-web.example.invalid/schemas/synthetic-deal-operation-error.schema.json",
+  "title": "Synthetic deal operation safe error",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["error", "operationId", "status"],
+  "properties": {
+    "error": { "const": "provider_unavailable" },
+    "operationId": { "type": "string", "pattern": "^op-[0-9a-f-]{36}$" },
+    "status": { "enum": ["pending", "created", "unknown", "rejected"] }
+  }
+}

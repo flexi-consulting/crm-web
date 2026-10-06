@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crm-web.example.invalid/schemas/s01-participants-output.schema.json",
+  "title": "S-01 profile-scoped exhibition participants",
+  "type": "object",
+  "required": ["domainApiVersion", "items"],
+  "properties": {
+    "domainApiVersion": { "const": "1.0.0" },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "country", "exhibitionIds", "exhibitions", "qualification"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^demo-company-[0-9]{3}$" },
+          "name": { "type": "string", "minLength": 1 },
+          "country": { "type": "string", "minLength": 1 },
+          "exhibitionIds": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^demo-expo-[0-9]{3}$" } },
+          "exhibitions": { "type": "array", "items": { "type": "object", "required": ["id", "name", "city", "country", "startsOn", "endsOn", "website"], "properties": { "id": { "type": "string", "pattern": "^demo-expo-[0-9]{3}$" }, "name": { "type": "string", "minLength": 1 }, "city": { "type": "string", "minLength": 1 }, "country": { "type": "string", "minLength": 1 }, "startsOn": { "type": "string", "format": "date" }, "endsOn": { "type": "string", "format": "date" }, "website": { "type": "string", "format": "uri" } }, "additionalProperties": false } },
+          "qualification": {
+            "type": "object", "required": ["qualification", "reason"],
+            "properties": { "qualification": { "enum": ["target", "review", "unreviewed"] }, "reason": { "type": "string", "minLength": 1 } },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

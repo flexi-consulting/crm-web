@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crm-web.example.invalid/schemas/catalog-preview-error.schema.json",
+  "title": "Synthetic catalog preview typed error",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["error", "code"],
+  "properties": {
+    "error": { "type": "string" },
+    "code": { "enum": ["PREVIEW_INVALID_QUERY", "BUILD_NOT_FOUND", "BUILD_NOT_VALIDATED", "PREVIEW_VALIDATION_FAILED", "PREVIEW_NOT_FOUND"] },
+    "report": { "$ref": "https://crm-web.example.invalid/schemas/catalog-preview-report.schema.json" }
+  }
+}

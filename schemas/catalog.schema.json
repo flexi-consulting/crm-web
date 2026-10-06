@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crm-web.example.invalid/schemas/catalog.schema.json",
+  "title": "Versioned exhibition catalog response",
+  "type": "object",
+  "required": ["domainApiVersion", "items"],
+  "properties": {
+    "domainApiVersion": { "const": "1.0.0" },
+    "items": { "type": "array", "items": { "$ref": "#/$defs/exhibition" } }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "exhibition": {
+      "type": "object",
+      "required": ["id", "name", "city", "country", "startsOn", "endsOn", "website"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^demo-expo-[0-9]{3}$" },
+        "name": { "type": "string", "minLength": 1 },
+        "city": { "type": "string", "minLength": 1 },
+        "country": { "type": "string", "minLength": 1 },
+        "startsOn": { "type": "string", "format": "date" },
+        "endsOn": { "type": "string", "format": "date" },
+        "website": { "type": "string", "format": "uri" }
+      },
+      "additionalProperties": false
+    }
+  }
+}

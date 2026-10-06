@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crm-web.example.invalid/schemas/s01-participants-errors.schema.json",
+  "title": "S-01 capability error envelope",
+  "type": "object",
+  "required": ["code", "message"],
+  "properties": {
+    "code": { "enum": ["AUTH_CONTEXT_UNAVAILABLE", "SCOPE_DENIED", "INVALID_ARGUMENTS", "UNKNOWN_TOOL", "CAPABILITY_VERSION_MISMATCH", "DOMAIN_UNAVAILABLE"] },
+    "message": { "type": "string", "minLength": 1 }
+  },
+  "additionalProperties": false
+}

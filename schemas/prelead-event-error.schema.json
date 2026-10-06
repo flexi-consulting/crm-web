@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crm-web.example.invalid/schemas/prelead-event-error.schema.json",
+  "title": "Typed prelead event error",
+  "type": "object",
+  "required": ["error"],
+  "properties": {
+    "error": {
+      "enum": ["prelead_not_found", "idempotency_conflict", "prelead_already_rejected", "undo_not_applicable", "required_scope_missing", "trusted_profile_unavailable", "invalid_event_request", "content_type_required", "invalid_json", "request_too_large", "invalid_query"]
+    },
+    "operationId": { "type": "string", "pattern": "^op-[0-9a-f-]{36}$" }
+  },
+  "additionalProperties": false
+}

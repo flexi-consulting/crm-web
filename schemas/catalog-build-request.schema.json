@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crm-web.example.invalid/schemas/catalog-build-request.schema.json",
+  "title": "Synthetic catalog build request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["exhibitionId"],
+  "properties": { "exhibitionId": { "type": "string", "pattern": "^demo-expo-[0-9]{3}$" } }
+}

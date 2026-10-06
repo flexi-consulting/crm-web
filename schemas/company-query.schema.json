@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crm-web.example.invalid/schemas/company-query.schema.json",
+  "title": "Scoped synthetic company query",
+  "type": "object",
+  "properties": {},
+  "additionalProperties": false
+}

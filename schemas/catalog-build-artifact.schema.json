@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crm-web.example.invalid/schemas/catalog-build-artifact.schema.json",
+  "title": "Synthetic exhibition catalog build artifact",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "exhibitionId", "sourceRevision", "companies"],
+  "properties": {
+    "schemaVersion": { "const": "1.0.0" },
+    "exhibitionId": { "type": "string", "pattern": "^demo-expo-[0-9]{3}$" },
+    "sourceRevision": { "type": "string", "minLength": 1 },
+    "companies": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "name", "source", "enrichment", "registry", "qualification"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^co-[a-f0-9]{20}$" },
+          "name": { "type": "string", "minLength": 1 },
+          "source": {
+            "type": "object", "additionalProperties": false,
+            "required": ["sourceRecordId", "country", "booth", "href", "duplicateSourceRecordIds"],
+            "properties": {
+              "sourceRecordId": { "type": "string", "pattern": "^src-[a-z0-9-]{1,48}$" },
+              "country": { "type": "string" }, "booth": { "type": ["string", "null"] }, "href": { "type": ["string", "null"], "pattern": "^https?:\\/\\/[^\\s]+$" },
+              "duplicateSourceRecordIds": { "type": "array", "items": { "type": "string", "pattern": "^src-[a-z0-9-]{1,48}$" } }
+            }
+          },
+          "enrichment": {
+            "type": "object", "additionalProperties": false,
+            "required": ["status", "inn", "ogrn", "revenueRub", "activity", "website", "provenance"],
+            "properties": {
+              "status": { "enum": ["found", "not_found", "unavailable"] }, "inn": { "type": ["string", "null"] }, "ogrn": { "type": ["string", "null"] },
+              "revenueRub": { "type": ["integer", "null"], "minimum": 0 }, "activity": { "enum": ["manufacturer", "distributor", "service", "unknown"] },
+              "website": { "type": ["string", "null"], "pattern": "^https?:\\/\\/[^\\s]+$" }, "provenance": { "type": "object", "additionalProperties": false, "required": ["provider", "fixtureRef"], "properties": { "provider": { "type": "string", "minLength": 1 }, "fixtureRef": { "type": "string", "minLength": 1 } } }
+            }
+          },
+          "registry": {
+            "type": "object", "additionalProperties": false, "required": ["status", "provenance"],
+            "properties": { "status": { "enum": ["ok", "sanctioned", "not_found", "inactive", "unknown"] }, "provenance": { "type": "object", "additionalProperties": false, "required": ["source", "fixtureRef"], "properties": { "source": { "type": "string", "minLength": 1 }, "fixtureRef": { "type": "string", "minLength": 1 } } } }
+          },
+          "qualification": {
+            "type": "object", "additionalProperties": false, "required": ["classification", "target", "nearTarget", "reason"],
+            "properties": { "classification": { "enum": ["target", "near_target", "not_target"] }, "target": { "type": "boolean" }, "nearTarget": { "type": "boolean" }, "reason": { "type": "string" } }
+          }
+        }
+      }
+    }
+  }
+}

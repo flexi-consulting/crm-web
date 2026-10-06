@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crm-web.example.invalid/schemas/deal-intent-request.schema.json",
+  "title": "Create a profile-scoped synthetic deal intent",
+  "type": "object",
+  "required": ["companyId", "exhibitionId", "summary"],
+  "properties": {
+    "companyId": { "type": "string", "pattern": "^demo-company-[0-9]{3}$" },
+    "exhibitionId": { "type": "string", "pattern": "^demo-expo-[0-9]{3}$" },
+    "summary": { "type": "string", "minLength": 1, "maxLength": 500 }
+  },
+  "additionalProperties": false
+}

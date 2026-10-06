@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crm-web.example.invalid/schemas/catalog-query.schema.json",
+  "title": "Exhibition catalog query",
+  "type": "object",
+  "properties": {
+    "q": { "type": "string", "maxLength": 120 }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crm-web.example.invalid/schemas/catalog-preview-response.schema.json",
+  "title": "Synthetic catalog preview descriptor",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["previewId", "buildId", "sourceRevision", "generatorRevision", "url", "report", "published", "replayed"],
+  "properties": {
+    "previewId": { "type": "string", "pattern": "^preview-[a-f0-9]{24}$" },
+    "buildId": { "type": "string", "pattern": "^build-[a-f0-9]{24}$" },
+    "sourceRevision": { "type": "string", "minLength": 1 },
+    "generatorRevision": { "const": "catalog-html-preview-1.0.0" },
+    "url": { "type": "string", "pattern": "^/api/v1/catalog-previews/preview-[a-f0-9]{24}$" },
+    "report": { "$ref": "https://crm-web.example.invalid/schemas/catalog-preview-report.schema.json" },
+    "published": { "const": false },
+    "replayed": { "type": "boolean" }
+  }
+}

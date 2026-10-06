@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crm-web.example.invalid/schemas/prelead-event-response.schema.json",
+  "title": "Prelead append event result",
+  "type": "object",
+  "required": ["domainApiVersion", "prelead", "event", "operationId", "eventCount", "replayed"],
+  "properties": {
+    "domainApiVersion": { "const": "1.0.0" },
+    "prelead": { "$ref": "#/$defs/prelead" },
+    "event": { "$ref": "https://crm-web.example.invalid/schemas/prelead-timeline-event.schema.json" },
+    "operationId": { "type": "string", "pattern": "^op-[0-9a-f-]{36}$" },
+    "eventCount": { "type": "integer", "minimum": 1 },
+    "replayed": { "type": "boolean" }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "prelead": {
+      "type": "object", "required": ["id", "companyId", "exhibitionId", "stage", "disposition"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^demo-prelead-[0-9]{3}$" },
+        "companyId": { "type": "string", "pattern": "^demo-company-[0-9]{3}$" },
+        "exhibitionId": { "type": "string", "pattern": "^demo-expo-[0-9]{3}$" },
+        "stage": { "enum": ["draft", "ready", "converted", "archived"] },
+        "disposition": { "enum": ["active", "rejected"] }
+      },
+      "additionalProperties": false
+    }
+  }
+}

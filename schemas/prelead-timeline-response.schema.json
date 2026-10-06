@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crm-web.example.invalid/schemas/prelead-timeline-response.schema.json",
+  "title": "Prelead event timeline",
+  "type": "object",
+  "required": ["domainApiVersion", "prelead", "events"],
+  "properties": {
+    "domainApiVersion": { "const": "1.0.0" },
+    "prelead": { "$ref": "https://crm-web.example.invalid/schemas/prelead-event-response.schema.json#/$defs/prelead" },
+    "events": {
+      "type": "array",
+      "items": { "$ref": "https://crm-web.example.invalid/schemas/prelead-timeline-event.schema.json" }
+    }
+  },
+  "additionalProperties": false
+}
