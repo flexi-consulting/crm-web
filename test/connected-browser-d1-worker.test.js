@@ -43,7 +43,7 @@ function migrate(root) {
   for (const file of ["0001_s04_domain.sql", "0002_built_catalog.sql", "0003_weeek_deal_identity.sql",
     "0004_legacy_catalog_refs.sql", "0005_connected_browser_sessions.sql",
     "0006_connected_browser_mode.sql", "0007_connected_browser_s04_commands.sql",
-    "0008_cp_approval_intents.sql"]) {
+    "0008_cp_approval_intents.sql", "0009_encrypt_connected_browser_secrets.sql"]) {
     const result = spawnSync(node, [wrangler, "d1", "execute", "CRM_DB", "--config", config,
       "--local", "--persist-to", root, "--file", `migrations/${file}`, "--yes", "--json"],
     { cwd, encoding: "utf8" });
@@ -76,6 +76,11 @@ test("Worker Fetch uses atomic D1 browser handoff and real profile-scoped catalo
     assert.equal(authorize.origin, "https://cp.example.invalid");
     assert.equal(authorize.searchParams.get("redirect_uri"), "https://crm.example.invalid/auth/connected/callback");
     const pending = cookie(startResponse, "__Host-crm-connected-pending");
+    const pendingStorage = await (await call(worker.base, "/__browser-storage")).json();
+    const pendingBytes = JSON.stringify(pendingStorage.pending);
+    assert.equal(pendingStorage.pending.length, 1);
+    assert.doesNotMatch(pendingBytes, new RegExp(authorize.searchParams.get("state")));
+    assert.match(pendingStorage.pending[0].sealed_payload, /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
     const callback = `/auth/connected/callback?code=${"c".repeat(64)}&state=${authorize.searchParams.get("state")}` +
       `&iss=${encodeURIComponent("https://cp.example.invalid")}`;
     await stop(worker.child);
@@ -85,6 +90,11 @@ test("Worker Fetch uses atomic D1 browser handoff and real profile-scoped catalo
     assert.deepEqual([accepted.status, replay.status].sort(), [303, 401]);
     const session = cookie(accepted.status === 303 ? accepted : replay, "__Host-crm-connected-session");
     assert.match(session, /^__Host-crm-connected-session=[a-f0-9]{64}$/);
+    const sessionStorage = await (await call(worker.base, "/__browser-storage")).json();
+    assert.equal(sessionStorage.sessions.length, 1);
+    assert.doesNotMatch(JSON.stringify(sessionStorage.sessions), /b{64}/,
+      "the opaque CP bearer token is not stored as plaintext in D1");
+    assert.match(sessionStorage.sessions[0].sealed_payload, /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
     assert.equal((accepted.status === 303 ? accepted : replay).headers.get("location"),
       `https://crm.example.invalid/catalogs/${buildId}`);
     assert.equal((await call(worker.base, "/auth/connected/start?returnTo=https%3A%2F%2Fevil.example.invalid" )).status, 400);
@@ -108,6 +118,8 @@ test("Worker Fetch uses atomic D1 browser handoff and real profile-scoped catalo
     const metadata = await call(worker.base, "/auth/connected/session", { headers: { cookie: session } });
     assert.equal(metadata.status, 200);
     const csrf = (await metadata.json()).csrfToken;
+    assert.doesNotMatch(JSON.stringify(sessionStorage.sessions), new RegExp(csrf),
+      "the CSRF secret is not stored as plaintext in D1");
     await call(worker.base, "/__cp-control?mode=revoked");
     assert.equal((await call(worker.base, `/catalogs/${buildId}`, { headers: { cookie: session } })).status, 401);
     await call(worker.base, "/__cp-control?mode=active");

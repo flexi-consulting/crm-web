@@ -33,7 +33,8 @@ export function createCrmConnectedWorkerHandler({ fetcher = fetch, now = () => D
           resolveTrustedReviewReceipt({ request: receivedRequest, identity, reviewId, revision, review, env })
         : createConnectedAppDealApproval({ db: env.CRM_DB, issuer,
           prepareApproval: client.prepareApproval, consumeApproval: client.consumeApproval, now });
-      const store = createCrmBrowserD1Store(env.CRM_DB, { now });
+      const store = createCrmBrowserD1Store(env.CRM_DB, {
+        encryptionKey: env.CRM_CONNECTED_BFF_ENCRYPTION_KEY, now });
       const transport = createWeeekHttpTransport({ fetchImpl: fetcher,
         resolveToken: async (profileId) => {
           if (typeof resolveWeeekToken !== "function") throw new Error("weeek_credential_binding_unavailable");
@@ -68,6 +69,7 @@ export default {
   fetch: createCrmConnectedWorkerHandler(),
   async scheduled(_event, env) {
     if (env?.CRM_CONNECTED_BROWSER_ENABLED === "true")
-      await createCrmBrowserD1Store(env.CRM_DB).pruneExpired();
+      await createCrmBrowserD1Store(env.CRM_DB, {
+        encryptionKey: env.CRM_CONNECTED_BFF_ENCRYPTION_KEY }).pruneExpired();
   }
 };

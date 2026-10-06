@@ -16,7 +16,7 @@ JSON clients use the same BFF session and CSRF boundary with `POST /api/v1/deal-
 
 The Worker Fetch test applies migrations to disposable D1, seeds one invented catalog participant, performs the code+PKCE handoff, prepares a review, checks origin/CSRF failures, confirms through the D1 handler and actual `WeeekHttpTransport`, then makes the controlled provider accept the POST and drop its response. It restarts the Worker, runs the browser reconciliation action, verifies one provider deal and a durable `created`/`linked` operation, and resubmits the confirmation. The provider fixture records exactly one POST; list/detail GETs resolve the marker. Tests make no external network call, read no private CRM capture and write no production Weeek data.
 
-Migration `0008_cp_approval_intents.sql` stores the revision/payload-bound Control Plane intent pointer per profile and review. `0007_connected_browser_s04_commands.sql` expands the app-owned pending handoff mode constraint. Existing and pending sessions remain unchanged; pending transactions with unknown modes still fail closed. Apply these migrations only to the separate CRM Web D1 database.
+Migrations `0007_connected_browser_s04_commands.sql` and `0008_cp_approval_intents.sql` add the S-04 handoff mode and revision/payload-bound Control Plane intent pointer. Migration `0009_encrypt_connected_browser_secrets.sql` replaces plaintext pending PKCE/session-secret fields with ciphertext and intentionally invalidates existing pending handoffs and browser sessions; apply migrations only to the separate CRM Web D1 database. The Worker requires `CRM_CONNECTED_BFF_ENCRYPTION_KEY` as a 64-character lowercase hex secret (32 random bytes); a missing or changed key fails closed.
 
 ## Live gates
 

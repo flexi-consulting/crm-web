@@ -143,6 +143,13 @@ export default {
       return Response.json({ cpCalls, foreignEgress, approvalPrepareCalls, approvalConsumeCalls,
         weeekCreatePosts: count?.n ?? 0 });
     }
+    if (url.pathname === "/__browser-storage") {
+      const pending = await env.CRM_DB.prepare(`SELECT handle_hash, sealed_payload, return_path, mode,
+        created_at_ms, expires_at_ms FROM connected_browser_pending`).all();
+      const sessions = await env.CRM_DB.prepare(`SELECT handle_hash, sealed_payload, created_at_ms,
+        expires_at_ms FROM connected_browser_sessions`).all();
+      return Response.json({ pending: pending.results ?? [], sessions: sessions.results ?? [] });
+    }
     if (url.pathname === "/__clock-offset") {
       clockOffset = Number(url.searchParams.get("milliseconds") ?? 0);
       return Response.json({ clockOffset });
