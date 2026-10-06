@@ -42,7 +42,8 @@ export default {
         id: 2, method: "tools/list", params: {} })));
       const name = args.name ?? (args.contract === "s01" ? "crm_built_catalog_participants_read" : null);
       return respond(200, JSON.parse(await mcp.receive({ jsonrpc: "2.0", id: 2, method: "tools/call",
-        params: { name, arguments: args.arguments, _meta: { capabilityVersion: args.capabilityVersion ?? "1.0.0" } } })));
+        params: { name, arguments: args.arguments, _meta: { capabilityVersion: args.capabilityVersion ??
+          (name?.startsWith("crm_built_prelead_") ? "1.1.0" : "1.0.0") } } })));
     }
     const handler = createBuiltCatalogD1HttpHandler({ db: env.CRM_DB,
       enabled: env.D1_CONNECTED_APP_ENABLED === "true" && request.headers.get("x-test-disable") !== "true",

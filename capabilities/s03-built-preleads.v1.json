@@ -1,6 +1,6 @@
 {
   "capabilityId": "crm.exhibitions.builtPreleads",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "publication": "offline_test_only",
   "protocolVersion": "2025-06-18",
   "handlerBinding": "src/built-catalog-d1-http.js#createBuiltCatalogD1Domain.preleads",
