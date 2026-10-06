@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -51,6 +51,64 @@ async function call(base, path, body, { profile = "demo-profile-a", approval = f
     ...(approval ? { "x-test-approval": "approved" } : {}) }, body: JSON.stringify(body) });
   return { status: response.status, body: await response.json() };
 }
+
+const sha256 = value => createHash("sha256").update(value).digest("hex");
+
+test("reviewed legacy projection persists through local D1 Worker with exact refs and replay", async () => {
+  const root = mkdtempSync(join(tmpdir(), "crm-reviewed-import-d1-"));
+  let worker;
+  const eventKey = "invented-reviewed-expo";
+  const entries = [
+    { id: "SYN001", n: "Invented Approved Company", s: "B-01", t: 1, nt: 0,
+      inn: "0000000001", ogrn: "0000000000001", ru: 1, rev: 100, href: "https://example.invalid/one" },
+    { id: "SYN002", n: "Invented Excluded Company", s: "B-02", t: 0, nt: 1,
+      ru: 1, rev: null, href: "https://example.invalid/two" },
+  ];
+  const manifestSha256 = "a".repeat(64), sourceSha256 = "b".repeat(64);
+  const sourcePath = "legacy-owner/catalog.html", legacyUserId = "legacy-owner";
+  const profileBinding = { status: "confirmed", issuer: "control-plane", legacyUserId,
+    principalId: "synthetic-principal", profileId: "demo-profile-a", evidenceSha256: "c".repeat(64) };
+  const packet = { version: 1, status: "private_review_required", approvedForImport: false, manifestSha256,
+    owners: [{ legacyUserId, proposedPrincipalId: null, proposedProfileId: null, reviewerDecision: "pending",
+      catalogs: [{ sourcePath, sourceSha256, eventKey }] }] };
+  const decisions = { version: 1, status: "reviewed", packetSha256: sha256(JSON.stringify(packet)),
+    manifestSha256, sourcePath, sourceSha256, eventKey, legacyUserId, profileId: profileBinding.profileId,
+    principalId: profileBinding.principalId, profileBindingEvidenceSha256: profileBinding.evidenceSha256,
+    reviewerEvidenceSha256: "d".repeat(64), rows: entries.map((row, index) => ({ index,
+      rowSha256: sha256(JSON.stringify(row)), outcome: index === 0 ? "include" : "exclude",
+      ...(index === 0 ? { replacement: row } : { reason: "synthetic duplicate excluded by reviewer" }),
+      evidenceSha256: "e".repeat(64) })) };
+  const request = { packet, manifestSha256, sourceSha256, sourcePath, eventKey, profileBinding, entries, decisions };
+  try {
+    for (const migration of ["migrations/0001_s04_domain.sql", "migrations/0002_built_catalog.sql",
+      "migrations/0003_weeek_deal_identity.sql", "migrations/0004_legacy_catalog_refs.sql"]) {
+      const applied = spawnSync(node, [wrangler, "d1", "execute", "CRM_DB", "--config", config,
+        "--local", "--persist-to", root, "--file", migration, "--yes", "--json"], { cwd, encoding: "utf8" });
+      assert.equal(applied.status, 0, applied.stderr || applied.stdout);
+    }
+    worker = await startWorker(root);
+    const rejected = await call(worker.base, "/catalog/import-reviewed-legacy", {
+      ...request, decisions: { ...decisions, sourceSha256: "f".repeat(64) } });
+    assert.equal(rejected.status, 422);
+    assert.equal(rejected.body.status, "review_decisions_unverified");
+    const imported = await call(worker.base, "/catalog/import-reviewed-legacy", request);
+    assert.equal(imported.status, 201, JSON.stringify(imported.body));
+    assert.equal(imported.body.imported, 1);
+    assert.equal(imported.body.excluded, 1);
+    const replay = await call(worker.base, "/catalog/import-reviewed-legacy", request);
+    assert.equal(replay.status, 200);
+    assert.equal(replay.body.buildId, imported.body.buildId);
+    const ref = await call(worker.base, "/catalog/resolve-legacy", { eventKey, legacyId: "SYN001" });
+    assert.equal(ref.status, 200);
+    assert.equal(ref.body.buildId, imported.body.buildId);
+    assert.equal((await call(worker.base, "/catalog/resolve-legacy", { eventKey, legacyId: "SYN002" })).status, 404);
+    assert.equal((await call(worker.base, "/catalog/resolve-legacy", { eventKey, legacyId: "SYN001" },
+      { profile: "demo-profile-b" })).status, 404);
+  } finally {
+    if (worker) await stopWorker(worker.child);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("D1 built catalog, stable prelead/note and reviewed deal survive three Worker instances", async () => {
   const root = mkdtempSync(join(tmpdir(), "crm-built-catalog-d1-"));

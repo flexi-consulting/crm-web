@@ -4,6 +4,7 @@ import { createS04D1Repository } from "../src/s04-d1-repository.js";
 import { createS04D1ConfirmedDeals } from "../src/s04-d1-confirmed-deals.js";
 import { createDealReviewService } from "../src/deal-reviews.js";
 import { importLegacyExSnapshot } from "../src/legacy-ex-snapshot.js";
+import { importReviewedLegacyExSnapshot } from "../src/legacy-import-approval.js";
 
 const now = "2026-10-06T09:00:00.000Z";
 let providerCalls = 0;
@@ -41,6 +42,10 @@ export default {
       if (path === "/catalog/import-legacy") {
         result = await importLegacyExSnapshot({ repository: built, profileRef: profileId,
           eventKey: args.eventKey, entries: args.entries });
+        return respond(result.status === "stored" ? 201 : result.status === "replay" ? 200 : 422, result);
+      }
+      if (path === "/catalog/import-reviewed-legacy") {
+        result = await importReviewedLegacyExSnapshot({ repository: built, ...args });
         return respond(result.status === "stored" ? 201 : result.status === "replay" ? 200 : 422, result);
       }
       if (path === "/catalog/resolve-legacy") result = await built.resolveLegacyParticipant({
