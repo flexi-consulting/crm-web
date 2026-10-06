@@ -2,13 +2,18 @@ import { createS04D1Repository } from "./s04-d1-repository.js";
 
 const HEX = /^[a-f0-9]{64}$/;
 const ID = /^[A-Za-z0-9_-]{1,128}$/;
+const OPERATION_FIELDS = new Set(["companyId", "exhibitionId", "buildId", "statusId", "title", "source",
+  "dealType", "companyInn", "contactName", "dealComment", "notesCount"]);
 function canonical(value) {
   if (value === null || typeof value === "string" || typeof value === "boolean") return value;
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (Array.isArray(value)) return value.map(canonical);
   if (!value || typeof value !== "object" || Object.getPrototypeOf(value) !== Object.prototype)
     throw new TypeError("invalid_approval_operation");
-  const entries = Object.keys(value).sort().map((key) => [key, canonical(value[key])]);
+  const keys = Object.keys(value);
+  if (keys.some((key) => ["__proto__", "prototype", "constructor"].includes(key)))
+    throw new TypeError("invalid_approval_operation");
+  const entries = keys.sort().map((key) => [key, canonical(value[key])]);
   return Object.fromEntries(entries);
 }
 const stable = (value) => JSON.stringify(canonical(value));
@@ -36,7 +41,12 @@ export function createConnectedAppDealApproval({ db, issuer, prepareApproval, co
     const token = tokenOf(request);
     if (!token || !identity || !ID.test(identity.profileId ?? "") || !ID.test(identity.principalId ?? "") ||
         !review || review.reviewId !== reviewId || review.revision !== revision ||
-        !ID.test(review.operationId ?? "") || !HEX.test(review.requestHash ?? "") || !review.details)
+        !ID.test(review.operationId ?? "") || !HEX.test(review.requestHash ?? "") ||
+        !review.details || Object.keys(review.details).some((key) => !OPERATION_FIELDS.has(key)) ||
+        [...OPERATION_FIELDS].filter((key) => key !== "buildId").some((key) => review.details[key] === undefined) ||
+        Object.entries(review.details).some(([key, value]) => key === "notesCount"
+          ? !Number.isSafeInteger(value) || value < 0
+          : typeof value !== "string" || !value.trim()))
       throw new Error("approval_context_invalid");
     const payloadHash = await requestHash(review.details, revision);
     let stored = await repository.getCpApprovalIntent({ profileRef: identity.profileId, reviewId });

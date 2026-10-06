@@ -236,6 +236,10 @@ test("browser S-04 confirms through D1 and Weeek HTTP, then reconciles an accept
     const approvalPage = await unapproved.text();
     assert.match(approvalPage, /Проверить и подтвердить действие в Control Plane/);
     assert.match(approvalPage, /cp\.example\.invalid\/v1\/connected-app-approvals\/review\?intent=/);
+    const approvalCounts = await (await call(worker.base, "/__cp-count")).json();
+    assert.equal(approvalCounts.approvalPrepareCalls, 1);
+    assert.equal(approvalCounts.approvalConsumeCalls, 1);
+    assert.equal(approvalCounts.weeekCreatePosts, 0);
     assert.equal((await (await call(worker.base, "/__cp-count")).json()).weeekCreatePosts, 0,
       "a create scope without a trusted approval receipt cannot reach Weeek");
 
