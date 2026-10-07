@@ -8,6 +8,8 @@ The offline [legacy notes recovery gate](docs/LEGACY-NOTES-RECOVERY.md) records 
 
 The [private note recovery dry run](docs/LEGACY-NOTES-DRY-RUN.md) validates source receipts and reviewed row/profile decisions without writing to D1 or Weeek.
 
+The [exact current catalog candidate list](docs/LEGACY-CURRENT-CANDIDATES.md) checks old HTML bytes and row provenance for 59 private notes while leaving the new trusted profile owner unresolved.
+
 ## Connected profile session read adapter
 
 An opt-in Fetch browser BFF for the same read routes is in
