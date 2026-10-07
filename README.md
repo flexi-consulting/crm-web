@@ -1,5 +1,9 @@
 # CRM Web
 
+An optional profile-free read-only exhibition facts projection is described in
+[`docs/PUBLIC-EXHIBITION-FACTS.md`](docs/PUBLIC-EXHIBITION-FACTS.md). It is disabled
+by default; no captured event has the separate publication-rights approval yet.
+
 The offline [legacy notes recovery gate](docs/LEGACY-NOTES-RECOVERY.md) records the private S-03/S-04 source correlation and invented golden cases. Its evidence classifier is not a published capability or a live data importer.
 
 The [private note recovery dry run](docs/LEGACY-NOTES-DRY-RUN.md) validates source receipts and reviewed row/profile decisions without writing to D1 or Weeek.
