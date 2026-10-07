@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFile, writeFile, mkdir, readdir, lstat, chmod, realpath } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
-import { projectLegacyExSnapshot } from "./legacy-ex-snapshot.js";
+import { projectLegacyExSnapshot, projectLegacyExSnapshotV11 } from "./legacy-ex-snapshot.js";
 
 const SOURCE_NAMES = new Set(["enriched.json", "targets.json", "requisites_enrichment.json",
   "exhibitors.json", "ex-array.json"]);
@@ -211,12 +211,21 @@ export async function prepareLegacyRestore({ backupDir, mappingFile }) {
     const bytes = await readFile(join(resolve(backupDir), "objects", record.objectSha256));
     const parsed = parseLegacyExHtml(bytes);
     const entries = applyIdentityResolution(parsed.entries, selected.resolutions);
-    const projected = projectLegacyExSnapshot({ profileRef: selected.profileRef,
-      eventKey: selected.eventKey, entries });
-    if (projected.status !== "projected") throw new Error(`legacy_import_preflight_${projected.status}`);
+    const artifactVersions = selected.artifactVersions ?? ["1.0.0"];
+    if (!Array.isArray(artifactVersions) || artifactVersions.length < 1 || artifactVersions.length > 2 ||
+        new Set(artifactVersions).size !== artifactVersions.length ||
+        artifactVersions.some(version => !["1.0.0", "1.1.0"].includes(version)))
+      throw new Error("legacy_mapping_invalid");
+    const artifacts = artifactVersions.map(version => {
+      const projected = version === "1.1.0"
+        ? projectLegacyExSnapshotV11({ profileRef: selected.profileRef, eventKey: selected.eventKey, entries })
+        : projectLegacyExSnapshot({ profileRef: selected.profileRef, eventKey: selected.eventKey, entries });
+      if (projected.status !== "projected") throw new Error(`legacy_import_preflight_${projected.status}`);
+      return { version, expectedBuildId: version === "1.0.0" ? projected.build.buildId : null,
+        expectedRevision: version === "1.0.0" ? projected.build.artifact.sourceRevision : projected.artifact.sourceRevision };
+    });
     ready.push({ profileRef: selected.profileRef, eventKey: selected.eventKey,
-      entries, sourceSha256: record.objectSha256, expectedBuildId: projected.build.buildId,
-      expectedRevision: projected.build.artifact.sourceRevision });
+      entries, sourceSha256: record.objectSha256, artifacts });
   }
   return ready;
 }
@@ -229,15 +238,20 @@ export async function restoreLegacyCatalogsLocal({ backupDir, mappingFile, endpo
       url.pathname !== "/" || url.search || url.hash) throw new Error("local_d1_endpoint_required");
   const results = [];
   for (const item of ready) {
-    const response = await fetchImpl(new URL("/catalog/import-legacy", url), { method: "POST",
-      headers: { "content-type": "application/json", "x-test-profile": item.profileRef },
-      body: JSON.stringify({ eventKey: item.eventKey, entries: item.entries }) });
-    if (![200, 201].includes(response.status)) throw new Error("legacy_local_d1_import_failed");
-    const body = await response.json();
-    if (!["stored", "replay"].includes(body.status) || body.buildId !== item.expectedBuildId ||
-        body.sourceRevision !== item.expectedRevision)
-      throw new Error("legacy_local_d1_receipt_invalid");
-    results.push({ sourceSha256: item.sourceSha256, buildId: body.buildId, status: body.status });
+    for (const artifact of item.artifacts) {
+      const path = artifact.version === "1.1.0" ? "/catalog/import-legacy-v11" : "/catalog/import-legacy";
+      const response = await fetchImpl(new URL(path, url), { method: "POST",
+        headers: { "content-type": "application/json", "x-test-profile": item.profileRef },
+        body: JSON.stringify({ eventKey: item.eventKey, entries: item.entries }) });
+      if (![200, 201].includes(response.status)) throw new Error("legacy_local_d1_import_failed");
+      const body = await response.json();
+      const validReceipt = ["stored", "replay"].includes(body.status) &&
+        body.sourceRevision === artifact.expectedRevision &&
+        (artifact.version === "1.0.0" ? body.buildId === artifact.expectedBuildId : body.exhibitionId === item.eventKey);
+      if (!validReceipt) throw new Error("legacy_local_d1_receipt_invalid");
+      results.push({ sourceSha256: item.sourceSha256, version: artifact.version,
+        ...(body.buildId ? { buildId: body.buildId } : { exhibitionId: body.exhibitionId }), status: body.status });
+    }
   }
   return results;
 }

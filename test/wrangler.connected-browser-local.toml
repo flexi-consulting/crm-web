@@ -1,0 +1,23 @@
+name = "crm-web-connected-browser-local"
+main = "../fixtures/connected-browser-worker.js"
+compatibility_date = "2025-04-01"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+CRM_CONNECTED_BROWSER_ENABLED = "true"
+CRM_CONNECTED_CP_ISSUER = "https://cp.example.invalid"
+CRM_CONNECTED_PUBLIC_ORIGIN = "https://crm.example.invalid"
+CRM_CONNECTED_REDIRECT_URI = "https://crm.example.invalid/auth/connected/callback"
+CRM_CONNECTED_DEFAULT_CATALOG_PATH = "/catalogs/build-aaaaaaaaaaaaaaaaaaaaaaaa"
+CRM_CONNECTED_CP_SERVICE_KEY = "local-test-service-key-12345678901234567890"
+CRM_CONNECTED_BFF_ENCRYPTION_KEY = "1111111111111111111111111111111111111111111111111111111111111111"
+
+[[d1_databases]]
+binding = "CRM_DB"
+database_name = "crm-web-connected-browser-local"
+database_id = "00000000-0000-4000-8000-000000000005"
+
+[[d1_databases]]
+binding = "WEEEK_FIXTURE_DB"
+database_name = "crm-web-weeek-http-fixture-local"
+database_id = "00000000-0000-4000-8000-000000000007"

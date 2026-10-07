@@ -85,16 +85,20 @@ export function createBuiltCatalogD1Repository(db, now = () => new Date().toISOS
     }
   }
 
-  async function resolveLegacyParticipant({ profileRef, eventKey, legacyId }) {
+  async function resolveLegacyParticipant({ profileRef, eventKey, legacyId, sourceRevision = null }) {
     if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(profileRef ?? "") ||
         !/^[a-z0-9][a-z0-9-]{0,79}$/.test(eventKey ?? "") ||
-        !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(legacyId ?? ""))
+        !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(legacyId ?? "") ||
+        sourceRevision !== null && !/^legacy-ex-sha256-[a-f0-9]{64}$/.test(sourceRevision))
       return { status: 400, body: { error: "invalid_legacy_link" } };
-    const latest = await db.prepare(`SELECT b.build_id FROM s02_catalog_builds b
+    const latest = await db.prepare(`SELECT b.build_id, b.source_revision FROM s02_catalog_builds b
       WHERE b.profile_ref = ? AND b.event_id = ? AND EXISTS
-      (SELECT 1 FROM s02_legacy_participant_refs r WHERE r.build_id = b.build_id)
+      (SELECT 1 FROM s02_legacy_participant_refs r WHERE r.build_id = b.build_id
+        AND r.profile_ref = b.profile_ref AND r.event_key = b.event_id)
       ORDER BY b.created_at DESC, b.rowid DESC LIMIT 1`).bind(profileRef, eventKey).first();
     if (!latest) return { status: 404, body: { error: "legacy_link_not_found" } };
+    if (sourceRevision !== null && latest.source_revision !== sourceRevision)
+      return { status: 409, body: { error: "legacy_link_revision_changed" } };
     const rows = await db.prepare(`SELECT r.company_id, r.build_id, b.source_revision
       FROM s02_legacy_participant_refs r JOIN s02_catalog_builds b ON b.build_id = r.build_id
       WHERE r.profile_ref = ? AND r.event_key = ? AND r.legacy_company_id = ?
@@ -108,6 +112,47 @@ export function createBuiltCatalogD1Repository(db, now = () => new Date().toISOS
     return { status: 200, body: { exhibitionId: eventKey, legacyId, companyId: selected.company_id,
       buildId: selected.build_id, sourceRevision: selected.source_revision,
       detailPath: `/api/v1/catalog-builds/${selected.build_id}/participants/${selected.company_id}` } };
+  }
+
+  async function resolveLegacyParticipantByCompanyId({ profileRef, eventKey, companyId }) {
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(profileRef ?? "") ||
+        !/^[a-z0-9][a-z0-9-]{0,79}$/.test(eventKey ?? "") ||
+        !/^co-[a-f0-9]{20}$/.test(companyId ?? ""))
+      return { status: 400, body: { error: "invalid_catalog_participant_link" } };
+    const latest = await db.prepare(`SELECT b.build_id, b.source_revision FROM s02_catalog_builds b
+      WHERE b.profile_ref = ? AND b.event_id = ? AND EXISTS
+      (SELECT 1 FROM s02_legacy_participant_refs r WHERE r.build_id = b.build_id
+        AND r.profile_ref = b.profile_ref AND r.event_key = b.event_id)
+      ORDER BY b.created_at DESC, b.rowid DESC LIMIT 1`).bind(profileRef, eventKey).first();
+    if (!latest) return { status: 404, body: { error: "catalog_participant_link_not_found" } };
+    const rows = await db.prepare(`SELECT r.company_id, r.build_id, b.source_revision
+      FROM s02_legacy_participant_refs r JOIN s02_catalog_builds b ON b.build_id = r.build_id
+      WHERE r.profile_ref = ? AND r.event_key = ? AND r.company_id = ?
+      ORDER BY b.created_at DESC, b.rowid DESC`).bind(profileRef, eventKey, companyId).all();
+    const refs = rows.results ?? [];
+    if (!refs.some(ref => ref.build_id === latest.build_id))
+      return { status: 404, body: { error: "catalog_participant_link_not_found" } };
+    return { status: 200, body: { exhibitionId: eventKey, companyId,
+      buildId: latest.build_id, sourceRevision: latest.source_revision,
+      detailPath: `/catalogs/${latest.build_id}/participants/${companyId}` } };
+  }
+
+  async function listLegacyParticipantCompanyIds({ profileRef, eventKey }) {
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(profileRef ?? "") ||
+        !/^[a-z0-9][a-z0-9-]{0,79}$/.test(eventKey ?? ""))
+      return { status: "invalid_query", companyIds: [] };
+    try {
+      const latest = await db.prepare(`SELECT b.build_id FROM s02_catalog_builds b
+        WHERE b.profile_ref = ? AND b.event_id = ? AND EXISTS
+        (SELECT 1 FROM s02_legacy_participant_refs r WHERE r.build_id = b.build_id
+          AND r.profile_ref = b.profile_ref AND r.event_key = b.event_id)
+        ORDER BY b.created_at DESC, b.rowid DESC LIMIT 1`).bind(profileRef, eventKey).first();
+      if (!latest) return { status: "ok", companyIds: [] };
+      const rows = await db.prepare(`SELECT DISTINCT company_id FROM s02_legacy_participant_refs
+        WHERE profile_ref = ? AND event_key = ? AND build_id = ? ORDER BY company_id`)
+        .bind(profileRef, eventKey, latest.build_id).all();
+      return { status: "ok", companyIds: (rows.results ?? []).map(row => row.company_id) };
+    } catch { return { status: "unavailable", companyIds: [] }; }
   }
 
   async function readParticipants({ profileRef, buildId, companyId = null, query = "", classification = null }) {
@@ -302,6 +347,8 @@ export function createBuiltCatalogD1Repository(db, now = () => new Date().toISOS
     return bound && exhibition ? { company: selected.body.items[0], exhibition, buildId, preleadId: id } : null;
   }
 
-  return { saveBuild, getBuild, getBuildByKey, resolveLegacyParticipant, readParticipants, ensurePrelead,
+  return { saveBuild, getBuild, getBuildByKey, resolveLegacyParticipant, resolveLegacyParticipantByCompanyId,
+    listLegacyParticipantCompanyIds,
+    readParticipants, ensurePrelead,
     appendNote, appendDisposition, getTimeline, resolve };
 }

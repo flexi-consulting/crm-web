@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, writeFile, readFile, stat, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { projectLegacyExSnapshot } from "../src/legacy-ex-snapshot.js";
+import { projectLegacyExSnapshot, projectLegacyExSnapshotV11 } from "../src/legacy-ex-snapshot.js";
 import { captureLegacyCatalogs, verifyLegacyCatalogBackup, prepareLegacyRestore,
   restoreLegacyCatalogsLocal } from "../src/private-legacy-handoff.js";
 
@@ -46,9 +46,15 @@ test("private capture copies exact HTML and source JSON bytes and quarantines al
       eventKey: "invented-expo-2026", resolutions: {} }] };
     await writeFile(mappingFile, JSON.stringify(base));
     let calls = 0;
-    const fakeFetch = async (_url, options) => {
+    const fakeFetch = async (target, options) => {
       calls++;
       const input = JSON.parse(options.body);
+      if (new URL(target).pathname === "/catalog/import-legacy-v11") {
+        const projected = projectLegacyExSnapshotV11({ profileRef: options.headers["x-test-profile"],
+          eventKey: input.eventKey, entries: input.entries });
+        return new Response(JSON.stringify({ status: "stored", exhibitionId: input.eventKey,
+          sourceRevision: projected.artifact.sourceRevision }), { status: 201 });
+      }
       const projected = projectLegacyExSnapshot({ profileRef: options.headers["x-test-profile"],
         eventKey: input.eventKey, entries: input.entries });
       return new Response(JSON.stringify({ status: "stored", buildId: projected.build.buildId,
@@ -59,17 +65,19 @@ test("private capture copies exact HTML and source JSON bytes and quarantines al
     /legacy_identity_resolution_required/);
     assert.equal(calls, 0);
     base.catalogs[0].resolutions = { "0": "LNG001", "1": "LNG002", "2": "CYR011" };
+    base.catalogs[0].artifactVersions = ["1.0.0", "1.1.0"];
     await writeFile(mappingFile, JSON.stringify(base));
     const ready = await prepareLegacyRestore({ backupDir: backup, mappingFile });
     assert.deepEqual(ready[0].entries.map((item) => item.id), ["LNG001", "LNG002", "CYR011"]);
+    assert.deepEqual(ready[0].artifacts.map((item) => item.version), ["1.0.0", "1.1.0"]);
     const receipts = await restoreLegacyCatalogsLocal({ backupDir: backup,
       mappingFile, endpoint: "http://127.0.0.1:8787/", fetchImpl: fakeFetch });
-    assert.equal(receipts.length, 1);
-    assert.equal(calls, 1);
+    assert.deepEqual(receipts.map(item => item.version), ["1.0.0", "1.1.0"]);
+    assert.equal(calls, 2);
     await assert.rejects(restoreLegacyCatalogsLocal({ backupDir: backup,
       mappingFile, endpoint: "https://public.example.invalid/", fetchImpl: fakeFetch }),
     /local_d1_endpoint_required/);
-    assert.equal(calls, 1);
+    assert.equal(calls, 2);
     const object = join(backup, "objects", catalog.objectSha256);
     const reportFile = join(backup, "identity-quarantine.json");
     const originalReport = await readFile(reportFile);

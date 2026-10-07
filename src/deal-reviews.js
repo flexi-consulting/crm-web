@@ -19,6 +19,7 @@ export function normalizeDealReviewRequest(value) {
 }
 
 export function createDealReviewService({ confirmedDeals, preleadTimeline, participantResolver, storagePort,
+  resolveLeadStatusId = async (profileId) => syntheticLeadStageIds[profileId],
   now = () => new Date().toISOString() } = {}) {
   const reviews = new Map();
   function participant(profileId, request) {
@@ -49,10 +50,10 @@ export function createDealReviewService({ confirmedDeals, preleadTimeline, parti
     const revision = createHash("sha256").update(JSON.stringify([profileId, details, timeline.body.events.length])).digest("hex");
     return { details, revision };
   }
-  const detailsFor = (profileId, draft, selected, notes) => ({
+  const detailsFor = (profileId, draft, selected, notes, statusId = syntheticLeadStageIds[profileId]) => ({
     companyId: draft.companyId, exhibitionId: draft.exhibitionId,
     ...(draft.buildId ? { buildId: draft.buildId } : {}),
-    statusId: syntheticLeadStageIds[profileId], title: draft.title,
+    statusId, title: draft.title,
     source: selected.exhibition.name, dealType: "direct", companyInn: draft.companyInn,
     contactName: draft.contactName,
     dealComment: [draft.dealComment, ...notes.map((note) => `Note: ${note}`)].join("\n"),
@@ -61,11 +62,13 @@ export function createDealReviewService({ confirmedDeals, preleadTimeline, parti
   const hash = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
   async function persistentState(profileId, draft) {
     const selected = await participant(profileId, draft);
-    if (!selected || !syntheticLeadStageIds[profileId]) return null;
+    let statusId;
+    try { statusId = await resolveLeadStatusId(profileId); } catch { return null; }
+    if (!selected || typeof statusId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(statusId)) return null;
     const context = await storagePort.getPreleadContext({ profileRef: profileId,
       eventId: draft.exhibitionId, companyId: draft.companyId });
     if (!context) return null;
-    const details = detailsFor(profileId, draft, selected, context.notes);
+    const details = detailsFor(profileId, draft, selected, context.notes, statusId);
     return { details, preleadId: context.preleadId, preleadRevision: context.revision,
       revision: hash([profileId, details, context.revision]), requestHash: hash(details) };
   }
@@ -90,6 +93,7 @@ export function createDealReviewService({ confirmedDeals, preleadTimeline, parti
     const operation = await confirmedDeals.get({ profileId, operationId: review.operationId });
     return { status: 200, body: { domainApiVersion: "1.0.0", reviewId: id,
       revision: review.revision, operationId: review.operationId,
+      requestHash: review.requestHash,
       details: review.snapshot.details,
       status: operation.status === 200 ? operation.body.status : "prepared",
       ...(operation.status === 200 && operation.body.dealId ? { dealId: operation.body.dealId } : {}),
@@ -99,13 +103,27 @@ export function createDealReviewService({ confirmedDeals, preleadTimeline, parti
     const review = await storagePort.getReview({ profileRef: profileId, reviewId: id });
     if (!review) return { status: 404, body: { error: "review_not_found" } };
     if (revision !== review.revision) return { status: 409, body: { error: "review_stale" } };
+    const previous = await confirmedDeals.get({ profileId, operationId: review.operationId });
+    if (previous.status === 200) {
+      // A repeat browser submit after a lost response is a read-only reconcile.
+      // The durable reservation is authoritative; never make a second provider POST.
+      if (previous.body.status === "unknown") {
+        const reconciled = await confirmedDeals.reconcile({ profileId, operationId: review.operationId });
+        return reconciled.status < 400 ? { ...reconciled,
+          body: { ...reconciled.body, replayed: true } } : reconciled;
+      }
+      return { ...previous, body: { ...previous.body, replayed: true } };
+    }
+    if (trustedReceipt?.approvalPending === true &&
+        typeof trustedReceipt.approvalUrl === "string" && trustedReceipt.approvalUrl.startsWith("https://"))
+      return { status: 409, body: { error: "human_approval_required", approvalUrl: trustedReceipt.approvalUrl,
+        reviewId: id, revision } };
     if (!trustedReceipt || trustedReceipt.profileId !== profileId || trustedReceipt.reviewId !== id ||
         trustedReceipt.revision !== revision || !requiredText(trustedReceipt.actorId, 160) ||
         !requiredText(trustedReceipt.receiptId, 160) || !requiredText(trustedReceipt.issuerId, 160) ||
         !trustedReceipt.issuedAt || !trustedReceipt.expiresAt || trustedReceipt.approved !== true) {
       return { status: 403, body: { error: "trusted_review_confirmation_required" } };
     }
-    const previous = await confirmedDeals.get({ profileId, operationId: review.operationId });
     if (previous.status !== 200) {
       const current = await persistentState(profileId, review.snapshot.draft);
       if (current?.revision !== revision || current.preleadId !== review.preleadId)

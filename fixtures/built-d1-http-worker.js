@@ -1,5 +1,6 @@
 import { createBuiltCatalogD1Domain, createBuiltCatalogD1HttpHandler } from "../src/built-catalog-d1-http.js";
 import { createBuiltD1OfflineMcp } from "../src/built-d1-offline-mcp.js";
+import { importLegacyExSnapshot } from "../src/legacy-ex-snapshot.js";
 
 let providerCalls = 0;
 const now = "2026-10-06T09:00:00.000Z";
@@ -26,6 +27,15 @@ export default {
     const path = new URL(request.url).pathname;
     if (path === "/health") return respond(200, { ok: true });
     if (path === "/__provider-count") return respond(200, { calls: providerCalls });
+    if (path === "/__import-legacy-fixture") {
+      if (request.method !== "POST") return respond(405, { error: "method_not_allowed" });
+      let args;
+      try { args = await request.json(); } catch { return respond(400, { error: "invalid_json" }); }
+      const domain = createBuiltCatalogD1Domain({ db: env.CRM_DB, provider, now: () => now });
+      const result = await importLegacyExSnapshot({ repository: domain.catalogBuilds,
+        profileRef: context(request).profileId, eventKey: args.eventKey, entries: args.entries });
+      return respond(result.status === "stored" ? 201 : result.status === "replay" ? 200 : 422, result);
+    }
     if (path === "/__offline-mcp") {
       let args;
       try { args = await request.json(); } catch { return respond(400, { error: "invalid_json" }); }

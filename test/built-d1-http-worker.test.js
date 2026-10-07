@@ -96,6 +96,85 @@ test("opt-in public-shaped D1 HTTP routes and offline MCP share one durable S01/
     validate("built-participants-output", list.body);
     const company = list.body.items[0];
     assert.deepEqual((await request(worker.base, "GET", company.detailPath)).body.items, [company]);
+    const browserPath = `/catalogs/${buildId}`;
+    const browser = await fetch(`${worker.base}${browserPath}?classification=target`,
+      { headers: { "x-test-profile": "demo-profile-a" } });
+    const browserHtml = await browser.text();
+    assert.equal(browser.status, 200);
+    assert.match(browser.headers.get("content-type"), /text\/html/);
+    assert.equal(browser.headers.get("cache-control"), "private, no-store");
+    assert.match(browserHtml, new RegExp(`/catalogs/${buildId}/participants/${company.id}`));
+    assert.match(browserHtml, new RegExp(company.name));
+    assert.match(browserHtml, /Ревизия источника/);
+    const cardBrowser = await fetch(`${worker.base}${browserPath}/participants/${company.id}`);
+    const cardHtml = await cardBrowser.text();
+    assert.equal(cardBrowser.status, 200);
+    assert.match(cardHtml, new RegExp(company.name));
+    assert.match(cardHtml, /ИНН/);
+    assert.equal((await fetch(`${worker.base}${browserPath}/participants/${company.id}`,
+      { headers: { "x-test-profile": "demo-profile-b" } })).status, 404);
+    assert.equal((await fetch(`${worker.base}${browserPath}`,
+      { headers: { "x-test-scopes": "" } })).status, 403);
+    assert.equal((await fetch(`${worker.base}${browserPath}`, { headers: { "x-test-disable": "true" } })).status, 404);
+    assert.equal((await fetch(`${worker.base}${browserPath}?q=a&q=b`)).status, 400);
+    assert.equal((await fetch(`${worker.base}${browserPath}?classification=unknown`)).status, 400);
+    assert.equal((await fetch(`${worker.base}${browserPath}/participants/${company.id}?q=a`)).status, 400);
+    assert.equal((await fetch(`${worker.base}${browserPath}?q=${"x".repeat(121)}`)).status, 400);
+    const legacyEvent = "invented-expo-2026";
+    const legacyEntries = [
+      { id: "OLD001", n: "Invented Link Company", s: "A-01", t: 1, nt: 0,
+        inn: "0000000001", ogrn: "0000000000001", ru: 1, rev: 250 },
+      { id: "OLD002", n: "Invented Removed Company", s: "B-02", t: 0, nt: 1, ru: 1, rev: null }
+    ];
+    const firstLegacy = await request(worker.base, "POST", "/__import-legacy-fixture",
+      { eventKey: legacyEvent, entries: legacyEntries });
+    assert.equal(firstLegacy.status, 201, JSON.stringify(firstLegacy.body));
+    const oldLink = `/api/v1/legacy-catalog-links/${legacyEvent}/OLD001`;
+    const revisionQuery = `?sourceRevision=${firstLegacy.body.sourceRevision}`;
+    const resolved = await request(worker.base, "GET", `${oldLink}${revisionQuery}`);
+    assert.equal(resolved.status, 200);
+    assert.equal(resolved.body.buildId, firstLegacy.body.buildId);
+    assert.equal(resolved.body.sourceRevision, firstLegacy.body.sourceRevision);
+    assert.equal(resolved.body.detailPath,
+      `/api/v1/catalog-builds/${resolved.body.buildId}/participants/${resolved.body.companyId}`);
+    assert.equal(resolved.body.browserPath,
+      `/catalogs/${resolved.body.buildId}/participants/${resolved.body.companyId}`);
+    const linkedCard = await fetch(`${worker.base}${resolved.body.browserPath}`);
+    assert.equal(linkedCard.status, 200);
+    assert.match(await linkedCard.text(), /Invented Link Company/);
+    assert.equal((await request(worker.base, "GET", `${oldLink}${revisionQuery}`,
+      undefined, { profile: "demo-profile-b" })).status, 404);
+    assert.equal((await request(worker.base, "GET", `${oldLink}${revisionQuery}`,
+      undefined, { scopes: [] })).status, 403);
+    assert.equal((await request(worker.base, "GET", `${oldLink}${revisionQuery}`,
+      undefined, { disabled: true })).status, 404);
+    assert.equal((await request(worker.base, "GET", oldLink)).status, 400);
+    assert.equal((await request(worker.base, "GET", `${oldLink}${revisionQuery}&sourceRevision=${firstLegacy.body.sourceRevision}`)).status, 400);
+    assert.equal((await request(worker.base, "GET", `${oldLink}?sourceRevision=legacy-ex-sha256-${"0".repeat(64)}`)).status, 409);
+    assert.equal((await request(worker.base, "GET", `/api/v1/legacy-catalog-links/${legacyEvent}/OLD%2F001${revisionQuery}`)).status, 400);
+    assert.equal((await request(worker.base, "GET", `/api/v1/legacy-catalog-links/other-event/OLD001${revisionQuery}`)).status, 404);
+    const duplicate = await request(worker.base, "POST", "/__import-legacy-fixture",
+      { eventKey: legacyEvent, entries: [legacyEntries[0], { ...legacyEntries[1], id: "OLD001" }] });
+    assert.equal(duplicate.status, 422);
+    assert.equal(duplicate.body.status, "legacy_identity_conflict");
+    const unsafe = await request(worker.base, "POST", "/__import-legacy-fixture",
+      { eventKey: legacyEvent, entries: [{ ...legacyEntries[0], id: "OLD/001" }] });
+    assert.equal(unsafe.status, 422);
+    assert.equal(unsafe.body.status, "legacy_identity_conflict");
+    const revised = await request(worker.base, "POST", "/__import-legacy-fixture",
+      { eventKey: legacyEvent, entries: [{ ...legacyEntries[0], n: "Revised Link Company" }] });
+    assert.equal(revised.status, 201);
+    assert.notEqual(revised.body.sourceRevision, firstLegacy.body.sourceRevision);
+    assert.equal((await request(worker.base, "GET", `${oldLink}${revisionQuery}`)).body.error,
+      "legacy_link_revision_changed");
+    const currentRevision = `?sourceRevision=${revised.body.sourceRevision}`;
+    const current = await request(worker.base, "GET", `${oldLink}${currentRevision}`);
+    assert.equal(current.status, 200);
+    assert.equal(current.body.companyId, resolved.body.companyId);
+    assert.equal(current.body.buildId, revised.body.buildId);
+    assert.equal((await request(worker.base, "GET",
+      `/api/v1/legacy-catalog-links/${legacyEvent}/OLD002${currentRevision}`)).status, 404);
+    assert.match(await (await fetch(`${worker.base}${current.body.browserPath}`)).text(), /Revised Link Company/);
     const mcpList = await request(worker.base, "POST", "/__offline-mcp", { contract: "s01",
       arguments: { buildId, classification: "target" } });
     assert.deepEqual(mcpList.body.result.structuredContent, list.body);
@@ -206,8 +285,10 @@ test("opt-in public-shaped D1 HTTP routes and offline MCP share one durable S01/
     const mcpReview = await request(worker.base, "POST", "/__offline-mcp", { contract: "s04",
       name: "crm_deal_prepare_from_participant", arguments: draft });
     assert.deepEqual(mcpReview.body.result.structuredContent.details, httpReview.body.details);
-    assert.equal((await request(worker.base, "POST", `/api/v1/deal-reviews/${httpReview.body.reviewId}/confirm`,
-      { revision: httpReview.body.revision })).status, 403);
+    const unapproved = await request(worker.base, "POST", `/api/v1/deal-reviews/${httpReview.body.reviewId}/confirm`,
+      { revision: httpReview.body.revision });
+    assert.equal(unapproved.status, 503);
+    assert.equal(unapproved.body.error, "approval_authority_unavailable");
     await stop(worker.child);
 
     worker = await start(root);

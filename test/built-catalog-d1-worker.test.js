@@ -161,7 +161,9 @@ test("private byte receipt and explicit mapping restore one invented EX catalog 
       "deploy", "demo-expo-001");
     mkdirSync(data, { recursive: true }); mkdirSync(deployed, { recursive: true });
     const entries = [{ id: "EX001", n: "Invented Local D1 Participant", s: "B-01",
-      t: 1, nt: 0, inn: "0000000001", ogrn: "0000000000001", ru: 1, rev: 200 }];
+      t: 1, nt: 0, inn: "0000000001", ogrn: "0000000000001", ru: 1, rev: 200, ry: 2025,
+      prof: -1.5, py: 2024, cat: "Invented synthetic category", b: "<em>Invented description</em>",
+      seg: "Synthetic segment", phone: "synthetic-contact-do-not-import" }];
     writeFileSync(join(deployed, "index.html"),
       `<script>const EX = ${JSON.stringify(entries)};const EVENT_KEY = 'demo-expo-001';</script>`);
     writeFileSync(join(data, "enriched.json"), JSON.stringify([{ n: "Invented input" }]));
@@ -172,11 +174,13 @@ test("private byte receipt and explicit mapping restore one invented EX catalog 
     const mappingFile = join(root, "private-mapping.json");
     writeFileSync(mappingFile, JSON.stringify({ version: 1, catalogs: [{
       sourcePath: catalog.sourcePath, sourceSha256: catalog.objectSha256,
-      profileRef: "demo-profile-a", eventKey: "demo-expo-001", resolutions: {}
+      profileRef: "demo-profile-a", eventKey: "demo-expo-001", resolutions: {},
+      artifactVersions: ["1.0.0", "1.1.0"]
     }] }));
     const db = join(root, "d1");
     for (const migration of ["migrations/0001_s04_domain.sql", "migrations/0002_built_catalog.sql",
-      "migrations/0003_weeek_deal_identity.sql", "migrations/0004_legacy_catalog_refs.sql"]) {
+      "migrations/0003_weeek_deal_identity.sql", "migrations/0004_legacy_catalog_refs.sql",
+      "migrations/0010_catalog_v11_artifacts.sql"]) {
       const applied = spawnSync(node, [wrangler, "d1", "execute", "CRM_DB", "--config", config,
         "--local", "--persist-to", db, "--file", migration, "--yes", "--json"], { cwd, encoding: "utf8" });
       assert.equal(applied.status, 0, applied.stderr || applied.stdout);
@@ -184,15 +188,29 @@ test("private byte receipt and explicit mapping restore one invented EX catalog 
     worker = await startWorker(db);
     const receipts = await restoreLegacyCatalogsLocal({ backupDir: backup,
       mappingFile, endpoint: `${worker.base}/` });
-    assert.equal(receipts.length, 1);
-    assert.equal(receipts[0].status, "stored");
+    assert.equal(receipts.length, 2);
+    assert.equal(receipts.find(receipt => receipt.version === "1.0.0").status, "stored");
+    assert.equal(receipts.find(receipt => receipt.version === "1.1.0").status, "stored");
     const replay = await restoreLegacyCatalogsLocal({ backupDir: backup,
       mappingFile, endpoint: `${worker.base}/` });
-    assert.equal(replay[0].status, "replay");
+    assert.ok(replay.every(receipt => receipt.status === "replay"));
     const linked = await call(worker.base, "/catalog/resolve-legacy",
       { eventKey: "demo-expo-001", legacyId: "EX001" });
     assert.equal(linked.status, 200);
-    assert.equal(linked.body.buildId, receipts[0].buildId);
+    assert.equal(linked.body.buildId, receipts.find(receipt => receipt.version === "1.0.0").buildId);
+    const listResponse = await fetch(`${worker.base}/api/v1/catalogs/demo-expo-001/entries?query=synthetic%20category`);
+    assert.equal(listResponse.status, 200);
+    const list = await listResponse.json();
+    assert.equal(list.items.length, 1);
+    assert.equal(list.items[0].category, "Invented synthetic category");
+    assert.equal(list.items[0].revenueRub, 200_000_000);
+    assert.equal(list.items[0].revenueYear, 2025);
+    assert.equal(list.items[0].profitRub, -1_500_000);
+    assert.equal(list.items[0].profitYear, 2024);
+    assert.equal(JSON.stringify(list).includes("synthetic-contact-do-not-import"), false);
+    const page = await fetch(`${worker.base}/catalogs/demo-expo-001?profitBand=loss`);
+    assert.equal(page.status, 200);
+    assert.match(await page.text(), /&lt;em&gt;Invented description&lt;\/em&gt;/);
   } finally {
     if (worker) await stopWorker(worker.child);
     rmSync(root, { recursive: true, force: true });

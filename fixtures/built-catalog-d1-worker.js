@@ -3,7 +3,9 @@ import { createBuiltCatalogD1Repository } from "../src/built-catalog-d1.js";
 import { createS04D1Repository } from "../src/s04-d1-repository.js";
 import { createS04D1ConfirmedDeals } from "../src/s04-d1-confirmed-deals.js";
 import { createDealReviewService } from "../src/deal-reviews.js";
-import { importLegacyExSnapshot } from "../src/legacy-ex-snapshot.js";
+import { importLegacyExSnapshot, importLegacyExSnapshotV11 } from "../src/legacy-ex-snapshot.js";
+import { createCatalogV11D1Repository, createCatalogV11ReadHandler,
+  createCatalogV11SearchHandler } from "../src/catalog-query-v11.js";
 
 const now = "2026-10-06T09:00:00.000Z";
 let providerCalls = 0;
@@ -14,10 +16,22 @@ export default {
   async fetch(request, env) {
     const path = new URL(request.url).pathname;
     if (path === "/health") return respond(200, { ok: true });
+    if (/^\/catalogs\/[a-z0-9][a-z0-9-]{0,79}$/.test(path) ||
+        /^\/api\/v1\/catalogs\/[a-z0-9][a-z0-9-]{0,79}\/entries$/.test(path)) {
+      const repository = createCatalogV11D1Repository(env.CRM_DB, () => now);
+      const resolveTrustedProfile = async request => ({
+        profileId: request.headers.get("x-test-profile") ?? "demo-profile-a",
+        scopes: (request.headers.get("x-test-scopes") ?? "crm.catalog.read").split(" ").filter(Boolean)
+      });
+      const read = createCatalogV11ReadHandler({ repository, resolveTrustedProfile });
+      const search = createCatalogV11SearchHandler({ repository, resolveTrustedProfile });
+      return path.startsWith("/api/") ? search(request) : read(request);
+    }
     let args;
     try { args = await request.json(); } catch { return respond(400, { error: "invalid_json" }); }
     const profileId = request.headers.get("x-test-profile") ?? "demo-profile-a";
     const built = createBuiltCatalogD1Repository(env.CRM_DB, () => now);
+    const catalogV11 = createCatalogV11D1Repository(env.CRM_DB, () => now);
     const s04 = createS04D1Repository(env.CRM_DB);
     const provider = { async create({ operationId, request: deal }) {
       providerCalls++;
@@ -40,6 +54,11 @@ export default {
       }
       if (path === "/catalog/import-legacy") {
         result = await importLegacyExSnapshot({ repository: built, profileRef: profileId,
+          eventKey: args.eventKey, entries: args.entries });
+        return respond(result.status === "stored" ? 201 : result.status === "replay" ? 200 : 422, result);
+      }
+      if (path === "/catalog/import-legacy-v11") {
+        result = await importLegacyExSnapshotV11({ repository: catalogV11, profileRef: profileId,
           eventKey: args.eventKey, entries: args.entries });
         return respond(result.status === "stored" ? 201 : result.status === "replay" ? 200 : 422, result);
       }

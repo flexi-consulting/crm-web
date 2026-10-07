@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crm-web.example.invalid/schemas/s01-catalog-search-errors.schema.json",
+  "title": "Exhibition catalog search error",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["code", "message"],
+  "properties": {
+    "code": { "enum": ["AUTH_CONTEXT_UNAVAILABLE", "SCOPE_DENIED", "INVALID_ARGUMENTS", "NOT_FOUND", "DOMAIN_UNAVAILABLE"] },
+    "message": { "type": "string", "minLength": 1, "maxLength": 120 }
+  }
+}

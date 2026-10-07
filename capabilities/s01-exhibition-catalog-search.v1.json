@@ -1,0 +1,14 @@
+{
+  "capabilityId": "crm.exhibitions.catalog.search",
+  "version": "1.0.0",
+  "description": "Search a profile-owned exhibition catalog and return client-safe structured company facts.",
+  "inputSchemaRef": "schemas/s01-catalog-search-input.schema.json",
+  "outputSchemaRef": "schemas/s01-catalog-search-output.schema.json",
+  "errorsSchemaRef": "schemas/s01-catalog-search-errors.schema.json",
+  "effect": "read",
+  "requiredScopes": ["crm.catalog.read"],
+  "handlerBinding": "src/catalog-query-v11.js#createCatalogV11SearchHandler",
+  "httpBinding": "GET /api/v1/catalogs/{exhibitionId}/entries",
+  "mcpTool": { "name": "crm_exhibitions_catalog_search", "protocolVersion": "2025-06-18" },
+  "errors": ["AUTH_CONTEXT_UNAVAILABLE", "SCOPE_DENIED", "INVALID_ARGUMENTS", "NOT_FOUND", "DOMAIN_UNAVAILABLE", "UNKNOWN_TOOL", "CAPABILITY_VERSION_MISMATCH"]
+}
