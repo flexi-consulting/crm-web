@@ -29,6 +29,24 @@ const legacyYear = value => value == null || value === "" ? null :
 const validOptionalText = (value, max) => value == null || value === "" ||
   typeof value === "string" && !!value.trim() && [...value.trim()].length <= max;
 
+// The private preflight uses these same checks to point reviewers to exact
+// source rows without importing, normalizing, or publishing their values.
+export function inspectLegacyExRow(row) {
+  if (!row || typeof row !== "object" || Array.isArray(row)) return ["row_invalid"];
+  const issues = [];
+  if (!text(row.n, 240)) issues.push("name_invalid");
+  if (optionalText(row.s, 80) === null && row.s != null && row.s !== "") issues.push("booth_invalid");
+  if (![0, 1].includes(row.t) || ![0, 1].includes(row.nt) || row.t + row.nt > 1 ||
+      ![0, 1].includes(row.ru) || row.t === 1 && (row.ru !== 1 || !row.inn))
+    issues.push("classification_invalid");
+  if (!innOk(row.inn)) issues.push("inn_invalid");
+  if (!ogrnOk(row.ogrn)) issues.push("ogrn_invalid");
+  if (money(row.rev) === undefined) issues.push("revenue_invalid");
+  if (url(row.href) === undefined) issues.push("href_invalid");
+  if (url(row.w) === undefined) issues.push("website_invalid");
+  return issues;
+}
+
 // Input is the parsed EX array emitted by the legacy catalog generator, not
 // arbitrary HTML. Phone/email/contact fields are deliberately not imported.
 export function projectLegacyExSnapshot({ profileRef, eventKey, entries }) {
@@ -40,11 +58,7 @@ export function projectLegacyExSnapshot({ profileRef, eventKey, entries }) {
     if (!row || typeof row !== "object" || Array.isArray(row) || !legacyIdOk(row.id) || seen.has(row.id))
       return { status: "legacy_identity_conflict" };
     seen.add(row.id);
-    if (!text(row.n, 240) || optionalText(row.s, 80) === null && row.s != null && row.s !== "" ||
-        ![0, 1].includes(row.t) || ![0, 1].includes(row.nt) || row.t + row.nt > 1 ||
-        ![0, 1].includes(row.ru) || row.t === 1 && (row.ru !== 1 || !row.inn) ||
-        !innOk(row.inn) || !ogrnOk(row.ogrn) ||
-        money(row.rev) === undefined || url(row.href) === undefined || url(row.w) === undefined)
+    if (inspectLegacyExRow(row).length)
       return { status: "legacy_record_invalid" };
   }
   const included = entries.map(({ id, n, s, t, nt, inn, ogrn, ru, rev, href, w, country }) =>

@@ -1,5 +1,16 @@
 # CRM Web
 
+
+## Private legacy import review (draft)
+
+After the frozen backup and untouched owner review packet are verified, an operator can prepare an owner-only decision queue outside Git:
+
+```sh
+node scripts/legacy-import-decision-packet.mjs PRIVATE_BACKUP_DIR PRIVATE_PROFILE_REVIEW_JSON NEW_PRIVATE_OUTPUT_JSON
+```
+
+The command verifies every backed-up object and the exact profile-review packet. It records source row indexes and hashes for duplicate/unsafe IDs and schema-invalid fields, plus blank reviewer decisions. The output is mode `0600`; stdout contains counts only. A structural projection uses a clearly synthetic profile and never writes D1, contacts Weeek, assigns a real profile, or grants import approval. Reviewers must independently prove the old account owner and the current Control Plane profile before completing a separate approved mapping. Relative or otherwise invalid old URLs and inconsistent classification flags require source-specific decisions; the queue does not silently rewrite them.
+
 An optional profile-free read-only exhibition facts projection is described in
 [`docs/PUBLIC-EXHIBITION-FACTS.md`](docs/PUBLIC-EXHIBITION-FACTS.md). It is disabled
 by default; no captured event has the separate publication-rights approval yet.
