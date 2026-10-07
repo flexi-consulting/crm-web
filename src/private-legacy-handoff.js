@@ -1,7 +1,11 @@
 import { createHash } from "node:crypto";
 import { readFile, writeFile, mkdir, readdir, lstat, chmod, realpath } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
-import { projectLegacyExSnapshot, projectLegacyExSnapshotV11 } from "./legacy-ex-snapshot.js";
+import { projectLegacyExSnapshot } from "./legacy-ex-snapshot.js";
+import { prepareApprovedLegacyImport } from "./legacy-import-approval.js";
+import { parseLegacyExHtml } from "./legacy-ex-html.js";
+
+export { parseLegacyExHtml } from "./legacy-ex-html.js";
 
 const SOURCE_NAMES = new Set(["enriched.json", "targets.json", "requisites_enrichment.json",
   "exhibitors.json", "ex-array.json"]);
@@ -45,32 +49,6 @@ async function discover(sourceRoot) {
     }
   }
   return found.sort((a, b) => a.path.localeCompare(b.path));
-}
-
-export function parseLegacyExHtml(bytes) {
-  const html = bytes.toString("utf8");
-  const eventMatch = html.match(/\bconst EVENT_KEY\s*=\s*['"]([a-z0-9][a-z0-9-]{0,79})['"]\s*;/);
-  const marker = /\bconst EX\s*=\s*/g.exec(html);
-  if (!eventMatch || !marker) throw new Error("legacy_html_header_invalid");
-  const start = html.indexOf("[", marker.index + marker[0].length);
-  if (start < 0 || html.slice(marker.index + marker[0].length, start).trim())
-    throw new Error("legacy_ex_array_missing");
-  let depth = 0, inString = false, escaped = false, end = -1;
-  for (let index = start; index < html.length; index++) {
-    const ch = html[index];
-    if (inString) {
-      if (escaped) escaped = false;
-      else if (ch === "\\") escaped = true;
-      else if (ch === '"') inString = false;
-    } else if (ch === '"') inString = true;
-    else if (ch === "[") depth++;
-    else if (ch === "]" && --depth === 0) { end = index + 1; break; }
-  }
-  if (end < 0 || html.slice(end).trimStart()[0] !== ";") throw new Error("legacy_ex_array_invalid");
-  let entries;
-  try { entries = JSON.parse(html.slice(start, end)); } catch { throw new Error("legacy_ex_array_invalid"); }
-  if (!Array.isArray(entries)) throw new Error("legacy_ex_array_invalid");
-  return { eventKey: eventMatch[1], entries };
 }
 
 export function identityQuarantine(entries) {
@@ -211,47 +189,64 @@ export async function prepareLegacyRestore({ backupDir, mappingFile }) {
     const bytes = await readFile(join(resolve(backupDir), "objects", record.objectSha256));
     const parsed = parseLegacyExHtml(bytes);
     const entries = applyIdentityResolution(parsed.entries, selected.resolutions);
-    const artifactVersions = selected.artifactVersions ?? ["1.0.0"];
-    if (!Array.isArray(artifactVersions) || artifactVersions.length < 1 || artifactVersions.length > 2 ||
-        new Set(artifactVersions).size !== artifactVersions.length ||
-        artifactVersions.some(version => !["1.0.0", "1.1.0"].includes(version)))
-      throw new Error("legacy_mapping_invalid");
-    const artifacts = artifactVersions.map(version => {
-      const projected = version === "1.1.0"
-        ? projectLegacyExSnapshotV11({ profileRef: selected.profileRef, eventKey: selected.eventKey, entries })
-        : projectLegacyExSnapshot({ profileRef: selected.profileRef, eventKey: selected.eventKey, entries });
-      if (projected.status !== "projected") throw new Error(`legacy_import_preflight_${projected.status}`);
-      return { version, expectedBuildId: version === "1.0.0" ? projected.build.buildId : null,
-        expectedRevision: version === "1.0.0" ? projected.build.artifact.sourceRevision : projected.artifact.sourceRevision };
-    });
+    const projected = projectLegacyExSnapshot({ profileRef: selected.profileRef,
+      eventKey: selected.eventKey, entries });
+    if (projected.status !== "projected") throw new Error(`legacy_import_preflight_${projected.status}`);
     ready.push({ profileRef: selected.profileRef, eventKey: selected.eventKey,
-      entries, sourceSha256: record.objectSha256, artifacts });
+      entries, sourceSha256: record.objectSha256, expectedBuildId: projected.build.buildId,
+      expectedRevision: projected.build.artifact.sourceRevision });
   }
   return ready;
 }
 
-export async function restoreLegacyCatalogsLocal({ backupDir, mappingFile, endpoint,
+export async function restoreLegacyCatalogsLocal({ backupDir, reviewBundleFile, endpoint,
   fetchImpl = globalThis.fetch }) {
-  const ready = await prepareLegacyRestore({ backupDir, mappingFile });
+  await outsideGitWorkspace(resolve(reviewBundleFile));
+  const manifest = await verifyLegacyCatalogBackup(backupDir);
+  const bundle = JSON.parse(await readFile(resolve(reviewBundleFile), "utf8"));
+  if (bundle.version !== 1 || bundle.manifestSha256 !== manifest.manifestSha256 ||
+      !bundle.packet || bundle.packet.manifestSha256 !== manifest.manifestSha256 ||
+      bundle.packet.approvedForImport !== false || bundle.packet.status !== "private_review_required" ||
+      !Array.isArray(bundle.catalogs)) throw new Error("legacy_review_bundle_invalid");
+  const html = manifest.records.filter((record) => record.kind === "deployed_html");
+  const byPath = new Map(bundle.catalogs.map((item) => [item.sourcePath, item]));
+  if (byPath.size !== html.length || bundle.catalogs.length !== html.length)
+    throw new Error("legacy_review_bundle_incomplete");
   const url = new URL(endpoint);
   if (url.protocol !== "http:" || !["127.0.0.1", "localhost", "[::1]"].includes(url.hostname) ||
       url.pathname !== "/" || url.search || url.hash) throw new Error("local_d1_endpoint_required");
+  const preflight = [];
+  for (const record of html) {
+    const review = byPath.get(record.sourcePath);
+    if (!review || review.sourceSha256 !== record.objectSha256 || !review.profileBinding || !review.decisions)
+      throw new Error("legacy_review_bundle_invalid");
+    const sourceBytes = await readFile(join(resolve(backupDir), "objects", record.objectSha256));
+    const prepared = prepareApprovedLegacyImport({ packet: bundle.packet,
+      manifestSha256: manifest.manifestSha256, sourceSha256: record.objectSha256,
+      sourcePath: record.sourcePath, eventKey: record.eventKey,
+      profileBinding: review.profileBinding, decisions: review.decisions, sourceBytes });
+    if (prepared.status !== "reviewed_projection_ready")
+      throw new Error(`legacy_review_${prepared.status}`);
+    preflight.push({ record, review, sourceBytes });
+  }
   const results = [];
-  for (const item of ready) {
-    for (const artifact of item.artifacts) {
-      const path = artifact.version === "1.1.0" ? "/catalog/import-legacy-v11" : "/catalog/import-legacy";
-      const response = await fetchImpl(new URL(path, url), { method: "POST",
-        headers: { "content-type": "application/json", "x-test-profile": item.profileRef },
-        body: JSON.stringify({ eventKey: item.eventKey, entries: item.entries }) });
-      if (![200, 201].includes(response.status)) throw new Error("legacy_local_d1_import_failed");
-      const body = await response.json();
-      const validReceipt = ["stored", "replay"].includes(body.status) &&
-        body.sourceRevision === artifact.expectedRevision &&
-        (artifact.version === "1.0.0" ? body.buildId === artifact.expectedBuildId : body.exhibitionId === item.eventKey);
-      if (!validReceipt) throw new Error("legacy_local_d1_receipt_invalid");
-      results.push({ sourceSha256: item.sourceSha256, version: artifact.version,
-        ...(body.buildId ? { buildId: body.buildId } : { exhibitionId: body.exhibitionId }), status: body.status });
-    }
+  for (const { record, review, sourceBytes } of preflight) {
+    const response = await fetchImpl(new URL("/catalog/import-reviewed-legacy", url), { method: "POST",
+      headers: { "content-type": "application/json", "x-test-profile": review.profileBinding.profileId },
+      body: JSON.stringify({ packet: bundle.packet, manifestSha256: manifest.manifestSha256,
+        sourceSha256: record.objectSha256, sourcePath: record.sourcePath,
+        eventKey: record.eventKey, profileBinding: review.profileBinding,
+        decisions: review.decisions, sourceBytesBase64: sourceBytes.toString("base64") }) });
+    if (![200, 201].includes(response.status)) throw new Error("legacy_local_d1_import_failed");
+    const body = await response.json();
+    if (!["stored", "replay"].includes(body.status) ||
+        typeof body.buildId !== "string" || typeof body.sourceRevision !== "string" ||
+        body.sourceRevision.length < 1 || body.sourceRevision.length > 200 ||
+        !Number.isSafeInteger(body.imported) || body.imported < 1 ||
+        !Number.isSafeInteger(body.excluded) || body.excluded < 0)
+      throw new Error("legacy_local_d1_receipt_invalid");
+    results.push({ sourceSha256: record.objectSha256, buildId: body.buildId,
+      sourceRevision: body.sourceRevision, status: body.status });
   }
   return results;
 }

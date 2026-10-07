@@ -9,7 +9,7 @@
     "previewId": { "type": "string", "pattern": "^preview-[a-f0-9]{24}$" },
     "buildId": { "type": "string", "pattern": "^build-[a-f0-9]{24}$" },
     "sourceRevision": { "type": "string", "minLength": 1 },
-    "generatorRevision": { "const": "catalog-html-preview-1.0.0" },
+    "generatorRevision": { "const": "catalog-html-preview-1.1.0" },
     "url": { "type": "string", "pattern": "^/api/v1/catalog-previews/preview-[a-f0-9]{24}$" },
     "report": { "$ref": "https://crm-web.example.invalid/schemas/catalog-preview-report.schema.json" },
     "published": { "const": false },

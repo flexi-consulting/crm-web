@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "eventKey": "synthetic-current-source-shape",
+  "rows": [
+    { "id": "SYN001", "n": "Synthetic Target Works", "s": "A-01", "ru": 1, "t": 1, "nt": 0, "inn": "0000000001", "ogrn": "0000000000001", "rev": 250, "ry": 2025, "prof": 15, "py": 2025, "cat": "Synthetic apparel", "seg": "middle", "href": "https://exhibitor-001.example.invalid/catalog", "w": "https://exhibitor-001.example.invalid" },
+    { "id": "SYN002", "n": "Synthetic Near Target", "s": "A-02", "ru": 1, "t": 0, "nt": 1, "rev": 99.99, "ry": 2024, "prof": -1, "py": 2024, "cat": "Synthetic lingerie", "seg": "middle", "href": "https://exhibitor-002.example.invalid/catalog" },
+    { "id": "SYN003", "n": "Synthetic Not Target", "s": "A-03", "ru": 1, "t": 0, "nt": 0, "rev": 100, "ry": 2025, "prof": 0, "py": 2025, "cat": "Synthetic accessories" },
+    { "id": "SYN004", "n": "Synthetic Unknown Class", "s": "A-04", "ru": 1, "t": 0, "rev": 1500, "ry": 2025, "prof": 30, "py": 2025, "cat": "Synthetic unknown" },
+    { "id": "SYN005", "n": "Synthetic Unclassified", "s": null, "ru": 1, "t": null, "nt": null, "rev": 1500.01, "ry": 2025, "prof": 200, "py": 2025, "cat": "Synthetic luxury" },
+    { "id": "SYN006", "n": "Synthetic Missing Financials", "s": "A-06", "ru": 0, "country": "Fictionland", "t": 0, "nt": 0, "cat": "Synthetic swimwear" }
+  ],
+  "expected": {
+    "counts": { "all": 6, "target": 1, "near_target": 1, "not_target": 1, "unknown": 3 },
+    "namesByClassification": {
+      "target": ["Synthetic Target Works"],
+      "near_target": ["Synthetic Near Target"],
+      "not_target": ["Synthetic Missing Financials", "Synthetic Not Target"],
+      "unknown": ["Synthetic Unknown Class", "Synthetic Unclassified"]
+    },
+    "legacyIds": ["SYN001", "SYN002", "SYN003", "SYN004", "SYN005", "SYN006"],
+    "privateFields": ["contact001@example.invalid", "+7 000 000-00-01", "Synthetic Director 001", "Synthetic product summary"],
+    "revenueBands": {
+      "0-100": ["Synthetic Near Target"],
+      "100-1500": ["Synthetic Not Target", "Synthetic Target Works", "Synthetic Unknown Class"],
+      "1500+": ["Synthetic Unclassified"],
+      "all": ["Synthetic Missing Financials"]
+    },
+    "profitBands": {
+      "loss": ["Synthetic Near Target"],
+      "0-30": ["Synthetic Target Works", "Synthetic Not Target"],
+      "30-200": ["Synthetic Unknown Class"],
+      "200+": ["Synthetic Unclassified"],
+      "all": ["Synthetic Missing Financials"]
+    },
+    "search": {
+      "apparel": ["Synthetic Target Works"],
+      "fictionland": ["Synthetic Missing Financials"],
+      "synthetic unknown": ["Synthetic Unknown Class"]
+    }
+  }
+}

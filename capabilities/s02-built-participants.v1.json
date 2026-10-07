@@ -1,7 +1,7 @@
 {
   "capabilityId": "crm.exhibitions.builtParticipants.read",
-  "version": "1.0.0",
-  "description": "Read participants from one validated synthetic catalog build owned by the trusted profile.",
+  "version": "1.1.0",
+  "description": "Read participants from a validated catalog build, including explicitly unknown legacy qualification, owned by the trusted profile.",
   "inputSchemaRef": "schemas/built-participants-input.schema.json",
   "outputSchemaRef": "schemas/built-participants-output.schema.json",
   "effect": "read",

@@ -56,7 +56,4 @@ test("legacy EX rejects duplicate or ambiguous link IDs and unsafe URLs before p
   assert.equal(projectLegacyExSnapshot({ profileRef: "demo-profile-a",
     eventKey: "invented-expo-2026",
     entries: [{ ...entries[0], t: 1, nt: 1 }] }).status, "legacy_record_invalid");
-  assert.equal(projectLegacyExSnapshot({ profileRef: "demo-profile-a",
-    eventKey: "invented-expo-2026",
-    entries: [{ ...entries[0], inn: null }] }).status, "legacy_record_invalid");
 });

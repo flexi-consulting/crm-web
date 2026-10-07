@@ -1,12 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:net";
-import { captureLegacyCatalogs, restoreLegacyCatalogsLocal } from "../src/private-legacy-handoff.js";
+import { captureLegacyCatalogs, restoreLegacyCatalogsLocal, verifyLegacyCatalogBackup,
+  parseLegacyExHtml } from "../src/private-legacy-handoff.js";
+import { projectLegacyExSnapshot } from "../src/legacy-ex-snapshot.js";
+import { renderBuiltCatalogBrowser } from "../src/built-catalog-browser.js";
 
 const wrangler = new URL("../node_modules/wrangler/bin/wrangler.js", import.meta.url).pathname;
 const node = process.env.CRM_S04_WRANGLER_NODE || process.execPath;
@@ -51,6 +54,176 @@ async function call(base, path, body, { profile = "demo-profile-a", approval = f
     ...(approval ? { "x-test-approval": "approved" } : {}) }, body: JSON.stringify(body) });
   return { status: response.status, body: await response.json() };
 }
+
+const sha256 = value => createHash("sha256").update(value).digest("hex");
+
+test("synthetic current legacy catalog preserves classification, identity, filters and privacy through D1 and browser", async () => {
+  const root = mkdtempSync(join(tmpdir(), "crm-legacy-semantic-golden-"));
+  let worker;
+  const golden = JSON.parse(readFileSync(new URL("./fixtures/legacy-ex-semantic-golden.synthetic.json", import.meta.url)));
+  const html = Buffer.from(`<!doctype html><script>const EVENT_KEY = '${golden.eventKey}';\nconst EX = ${JSON.stringify(golden.rows.map((row, index) => ({
+    ...row, c: "Synthetic City", b: "Synthetic product summary", p: `+7 000 000-00-0${index + 1}`,
+    e: `contact00${index + 1}@example.invalid`, dir: "Synthetic Director 001" }))) };\n</script>`);
+  const parsed = parseLegacyExHtml(html);
+  assert.equal(parsed.eventKey, golden.eventKey);
+  const projected = projectLegacyExSnapshot({ profileRef: "demo-profile-a", ...parsed });
+  assert.equal(projected.status, "projected");
+  const expectedNames = Object.fromEntries(Object.entries(golden.expected.namesByClassification)
+    .map(([classification, names]) => [classification, [...names].sort()]));
+  const actualNames = Object.fromEntries(Object.keys(expectedNames).map(classification => [classification,
+    projected.build.artifact.companies.filter(company => company.qualification.classification === classification)
+      .map(company => company.name).sort()]));
+  assert.deepEqual(actualNames, expectedNames, "old EX flags map to the reviewed domain classifications");
+  assert.equal(projected.build.artifact.companies.length, golden.expected.counts.all);
+  const legacyMatches = (row, { revenue = "all", profit = "all", query = "" } = {}) => {
+      const inBand = (value, band) => {
+        if (band === "all") return true;
+        if (value == null) return false;
+        return band === "0-100" ? value < 100 : band === "100-1500" ? value >= 100 && value <= 1500 :
+          band === "1500+" ? value > 1500 : band === "loss" ? value < 0 : band === "0-30" ? value >= 0 && value < 30 :
+          band === "30-200" ? value >= 30 && value < 200 : value >= 200;
+      };
+      const search = query.toLowerCase();
+      return inBand(row.rev, revenue) && inBand(row.prof, profit) &&
+        (!search || `${row.n} ${row.cat ?? ""} ${row.country ?? ""}`.toLowerCase().includes(search));
+  };
+    for (const [band, names] of Object.entries(golden.expected.revenueBands)) {
+      if (band === "all") continue;
+      const actual = golden.rows.filter(row => legacyMatches(row, { revenue: band })).map(row => row.n).sort();
+      assert.deepEqual(actual, [...names].sort(), `legacy revenue band ${band}`);
+    }
+    for (const [band, names] of Object.entries(golden.expected.profitBands)) {
+      if (band === "all") continue;
+      const actual = golden.rows.filter(row => legacyMatches(row, { profit: band })).map(row => row.n).sort();
+      assert.deepEqual(actual, [...names].sort(), `legacy profit band ${band}`);
+    }
+    for (const [query, names] of Object.entries(golden.expected.search)) {
+      const actual = golden.rows.filter(row => legacyMatches(row, { query })).map(row => row.n).sort();
+      assert.deepEqual(actual, [...names].sort(), `legacy search ${query}`);
+    }
+
+  try {
+    for (const migration of ["migrations/0001_s04_domain.sql", "migrations/0002_built_catalog.sql",
+      "migrations/0003_weeek_deal_identity.sql", "migrations/0004_legacy_catalog_refs.sql"]) {
+      const applied = spawnSync(node, [wrangler, "d1", "execute", "CRM_DB", "--config", config,
+        "--local", "--persist-to", root, "--file", migration, "--yes", "--json"], { cwd, encoding: "utf8" });
+      assert.equal(applied.status, 0, applied.stderr || applied.stdout);
+    }
+    worker = await startWorker(root);
+    const imported = await call(worker.base, "/catalog/import-legacy", { eventKey: parsed.eventKey, entries: parsed.entries });
+    assert.equal(imported.status, 201, JSON.stringify(imported.body));
+    assert.equal(imported.body.sourceRevision, projected.build.artifact.sourceRevision);
+    const all = await call(worker.base, "/catalog/read", { buildId: imported.body.buildId });
+    assert.equal(all.status, 200);
+    assert.equal(all.body.items.length, golden.expected.counts.all);
+    const identities = new Map(projected.legacyRefs.map(ref => [ref.legacyId, ref.companyId]));
+    assert.deepEqual(all.body.items.map(item => item.id).sort(), [...identities.values()].sort());
+    for (const classification of ["target", "near_target", "not_target", "unknown"]) {
+      const expectedCount = golden.expected.namesByClassification[classification].length;
+      const filtered = await call(worker.base, "/catalog/read", { buildId: imported.body.buildId, classification });
+      assert.equal(filtered.status, 200);
+      assert.equal(filtered.body.items.length, expectedCount, `filter ${classification}`);
+      assert.deepEqual(filtered.body.items.map(item => item.qualification.classification),
+        Array(expectedCount).fill(classification));
+    }
+    for (const legacyId of golden.expected.legacyIds) {
+      const link = await call(worker.base, "/catalog/resolve-legacy", { eventKey: parsed.eventKey, legacyId });
+      assert.equal(link.status, 200, legacyId);
+      assert.equal(link.body.companyId, identities.get(legacyId), legacyId);
+    }
+    const browser = renderBuiltCatalogBrowser(all.body);
+    assert.match(browser, /Synthetic Target Works/);
+    assert.match(browser, /<form method="get" action="\/catalogs\//);
+    assert.match(browser, /<select name="classification">[\s\S]*<option value="target">/);
+    const targetBrowser = renderBuiltCatalogBrowser((await call(worker.base, "/catalog/read", {
+      buildId: imported.body.buildId, classification: "target" })).body, { classification: "target" });
+    assert.match(targetBrowser, /<option value="target" selected>/);
+    assert.match(targetBrowser, /Найдено: 1/);
+    const missingMigrationFields = ["profitRub", "revenueYear", "profitYear", "category", "description"]
+      .filter(key => !(key in all.body.items[0].enrichment) && !(key in all.body.items[0].source));
+    assert.deepEqual(missingMigrationFields, ["profitRub", "revenueYear", "profitYear", "category", "description"],
+      "current API omits fields needed for legacy filter/display parity; tracked in CRM issue #3");
+    assert.equal(golden.expected.revenueBands["0-100"].length, 1);
+    assert.equal(golden.expected.profitBands.loss.length, 1);
+    assert.equal(golden.expected.search.apparel.length, 1);
+    const detail = await call(worker.base, "/catalog/read", { buildId: imported.body.buildId,
+      companyId: identities.get("SYN001") });
+    const card = renderBuiltCatalogBrowser(detail.body, { companyId: identities.get("SYN001") });
+    assert.match(card, /https:\/\/exhibitor-001\.example\.invalid\/catalog/);
+    for (const privateValue of golden.expected.privateFields) {
+      assert.equal(JSON.stringify(projected.build).includes(privateValue), false, `projector leaked ${privateValue}`);
+      assert.equal(JSON.stringify(all.body).includes(privateValue), false, `D1/API leaked ${privateValue}`);
+      assert.equal(browser.includes(privateValue), false, `browser leaked ${privateValue}`);
+      assert.equal(card.includes(privateValue), false, `detail leaked ${privateValue}`);
+    }
+  } finally {
+    if (worker) await stopWorker(worker.child);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("reviewed legacy projection persists through local D1 Worker with exact refs and replay", async () => {
+  const root = mkdtempSync(join(tmpdir(), "crm-reviewed-import-d1-"));
+  let worker;
+  const eventKey = "invented-reviewed-expo";
+  const entries = [
+    { id: "SYN001", n: "Invented Approved Company", s: "B-01", t: 1, nt: 0,
+      inn: "0000000001", ogrn: "0000000000001", ru: 1, rev: 100, href: "https://example.invalid/one" },
+    { id: "SYN002", n: "Invented Excluded Company", s: "B-02", t: 0, nt: 1,
+      ru: 1, rev: null, href: "https://example.invalid/two" },
+  ];
+  const manifestSha256 = "a".repeat(64);
+  const sourceBytes = Buffer.from(`const EVENT_KEY = '${eventKey}';\nconst EX = ${JSON.stringify(entries)};\n`);
+  const sourceSha256 = sha256(sourceBytes);
+  const sourcePath = "legacy-owner/catalog.html", legacyUserId = "legacy-owner";
+  const profileBinding = { status: "confirmed", issuer: "control-plane", legacyUserId,
+    principalId: "synthetic-principal", profileId: "demo-profile-a", evidenceSha256: "c".repeat(64) };
+  const packet = { version: 1, status: "private_review_required", approvedForImport: false, manifestSha256,
+    owners: [{ legacyUserId, proposedPrincipalId: null, proposedProfileId: null, reviewerDecision: "pending",
+      catalogs: [{ sourcePath, sourceSha256, eventKey }] }] };
+  const decisions = { version: 1, status: "reviewed", packetSha256: sha256(JSON.stringify(packet)),
+    manifestSha256, sourcePath, sourceSha256, eventKey, legacyUserId, profileId: profileBinding.profileId,
+    principalId: profileBinding.principalId, profileBindingEvidenceSha256: profileBinding.evidenceSha256,
+    reviewerEvidenceSha256: "d".repeat(64), rows: entries.map((row, index) => ({ index,
+      rowSha256: sha256(JSON.stringify(row)), outcome: index === 0 ? "include" : "exclude",
+      ...(index === 0 ? { replacement: row } : { reason: "synthetic duplicate excluded by reviewer" }),
+      evidenceSha256: "e".repeat(64) })) };
+  const request = { packet, manifestSha256, sourceSha256, sourcePath, eventKey, profileBinding,
+    sourceBytesBase64: sourceBytes.toString("base64"), decisions };
+  try {
+    for (const migration of ["migrations/0001_s04_domain.sql", "migrations/0002_built_catalog.sql",
+      "migrations/0003_weeek_deal_identity.sql", "migrations/0004_legacy_catalog_refs.sql"]) {
+      const applied = spawnSync(node, [wrangler, "d1", "execute", "CRM_DB", "--config", config,
+        "--local", "--persist-to", root, "--file", migration, "--yes", "--json"], { cwd, encoding: "utf8" });
+      assert.equal(applied.status, 0, applied.stderr || applied.stdout);
+    }
+    worker = await startWorker(root);
+    const rejected = await call(worker.base, "/catalog/import-reviewed-legacy", {
+      ...request, decisions: { ...decisions, sourceSha256: "f".repeat(64) } });
+    assert.equal(rejected.status, 422);
+    assert.equal(rejected.body.status, "review_decisions_unverified");
+    const tamperedBytes = await call(worker.base, "/catalog/import-reviewed-legacy", {
+      ...request, sourceBytesBase64: Buffer.from("changed source").toString("base64") });
+    assert.equal(tamperedBytes.status, 422);
+    assert.equal(tamperedBytes.body.status, "source_bytes_mismatch");
+    const imported = await call(worker.base, "/catalog/import-reviewed-legacy", request);
+    assert.equal(imported.status, 201, JSON.stringify(imported.body));
+    assert.equal(imported.body.imported, 1);
+    assert.equal(imported.body.excluded, 1);
+    const replay = await call(worker.base, "/catalog/import-reviewed-legacy", request);
+    assert.equal(replay.status, 200);
+    assert.equal(replay.body.buildId, imported.body.buildId);
+    const ref = await call(worker.base, "/catalog/resolve-legacy", { eventKey, legacyId: "SYN001" });
+    assert.equal(ref.status, 200);
+    assert.equal(ref.body.buildId, imported.body.buildId);
+    assert.equal((await call(worker.base, "/catalog/resolve-legacy", { eventKey, legacyId: "SYN002" })).status, 404);
+    assert.equal((await call(worker.base, "/catalog/resolve-legacy", { eventKey, legacyId: "SYN001" },
+      { profile: "demo-profile-b" })).status, 404);
+  } finally {
+    if (worker) await stopWorker(worker.child);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("D1 built catalog, stable prelead/note and reviewed deal survive three Worker instances", async () => {
   const root = mkdtempSync(join(tmpdir(), "crm-built-catalog-d1-"));
@@ -151,7 +324,7 @@ test("D1 built catalog, stable prelead/note and reviewed deal survive three Work
   }
 });
 
-test("private byte receipt and explicit mapping restore one invented EX catalog to local D1", async () => {
+test("private byte receipt and reviewed row decisions restore one invented EX catalog to local D1", async () => {
   const root = mkdtempSync(join(tmpdir(), "crm-private-d1-"));
   let worker;
   try {
@@ -161,56 +334,139 @@ test("private byte receipt and explicit mapping restore one invented EX catalog 
       "deploy", "demo-expo-001");
     mkdirSync(data, { recursive: true }); mkdirSync(deployed, { recursive: true });
     const entries = [{ id: "EX001", n: "Invented Local D1 Participant", s: "B-01",
-      t: 1, nt: 0, inn: "0000000001", ogrn: "0000000000001", ru: 1, rev: 200, ry: 2025,
-      prof: -1.5, py: 2024, cat: "Invented synthetic category", b: "<em>Invented description</em>",
-      seg: "Synthetic segment", phone: "synthetic-contact-do-not-import" }];
+      t: 1, nt: 0, inn: "0000000001", ogrn: "0000000000001", ru: 1, rev: 200 }];
     writeFileSync(join(deployed, "index.html"),
       `<script>const EX = ${JSON.stringify(entries)};const EVENT_KEY = 'demo-expo-001';</script>`);
     writeFileSync(join(data, "enriched.json"), JSON.stringify([{ n: "Invented input" }]));
     const backup = join(root, "private-backup");
     assert.equal((await captureLegacyCatalogs({ sourceRoot, outputDir: backup })).files, 2);
-    const manifest = JSON.parse(readFileSync(join(backup, "manifest.json"), "utf8"));
+    const manifest = await verifyLegacyCatalogBackup(backup);
     const catalog = manifest.records.find((item) => item.kind === "deployed_html");
-    const mappingFile = join(root, "private-mapping.json");
-    writeFileSync(mappingFile, JSON.stringify({ version: 1, catalogs: [{
-      sourcePath: catalog.sourcePath, sourceSha256: catalog.objectSha256,
-      profileRef: "demo-profile-a", eventKey: "demo-expo-001", resolutions: {},
-      artifactVersions: ["1.0.0", "1.1.0"]
-    }] }));
+    const raw = readFileSync(join(backup, "objects", catalog.objectSha256));
+    const parsed = parseLegacyExHtml(raw);
+    const hash = (value) => createHash("sha256").update(value).digest("hex");
+    const profileBinding = { status: "confirmed", issuer: "control-plane", legacyUserId: "invented-source-profile",
+      principalId: "synthetic-principal", profileId: "demo-profile-a", evidenceSha256: "c".repeat(64) };
+    const packet = { version: 1, status: "private_review_required", approvedForImport: false,
+      manifestSha256: manifest.manifestSha256, owners: [{ legacyUserId: profileBinding.legacyUserId,
+        catalogs: [{ sourcePath: catalog.sourcePath, sourceSha256: catalog.objectSha256,
+          eventKey: parsed.eventKey }] }] };
+    const decisions = { version: 1, status: "reviewed", packetSha256: hash(JSON.stringify(packet)),
+      manifestSha256: manifest.manifestSha256, sourcePath: catalog.sourcePath,
+      sourceSha256: catalog.objectSha256, eventKey: parsed.eventKey,
+      legacyUserId: profileBinding.legacyUserId, profileId: profileBinding.profileId,
+      principalId: profileBinding.principalId, profileBindingEvidenceSha256: profileBinding.evidenceSha256,
+      reviewerEvidenceSha256: "d".repeat(64), rows: parsed.entries.map((row, index) => ({ index,
+        rowSha256: hash(JSON.stringify(row)), outcome: "include", replacement: row,
+        evidenceSha256: "e".repeat(64) })) };
+    const reviewBundleFile = join(root, "private-review-bundle.json");
+    writeFileSync(reviewBundleFile, JSON.stringify({ version: 1, manifestSha256: manifest.manifestSha256,
+      packet, catalogs: [{ sourcePath: catalog.sourcePath, sourceSha256: catalog.objectSha256,
+        profileBinding, decisions }] }));
     const db = join(root, "d1");
     for (const migration of ["migrations/0001_s04_domain.sql", "migrations/0002_built_catalog.sql",
-      "migrations/0003_weeek_deal_identity.sql", "migrations/0004_legacy_catalog_refs.sql",
-      "migrations/0010_catalog_v11_artifacts.sql"]) {
+      "migrations/0003_weeek_deal_identity.sql", "migrations/0004_legacy_catalog_refs.sql"]) {
       const applied = spawnSync(node, [wrangler, "d1", "execute", "CRM_DB", "--config", config,
         "--local", "--persist-to", db, "--file", migration, "--yes", "--json"], { cwd, encoding: "utf8" });
       assert.equal(applied.status, 0, applied.stderr || applied.stdout);
     }
     worker = await startWorker(db);
     const receipts = await restoreLegacyCatalogsLocal({ backupDir: backup,
-      mappingFile, endpoint: `${worker.base}/` });
-    assert.equal(receipts.length, 2);
-    assert.equal(receipts.find(receipt => receipt.version === "1.0.0").status, "stored");
-    assert.equal(receipts.find(receipt => receipt.version === "1.1.0").status, "stored");
+      reviewBundleFile, endpoint: `${worker.base}/` });
+    assert.equal(receipts.length, 1);
+    assert.equal(receipts[0].status, "stored");
     const replay = await restoreLegacyCatalogsLocal({ backupDir: backup,
-      mappingFile, endpoint: `${worker.base}/` });
-    assert.ok(replay.every(receipt => receipt.status === "replay"));
+      reviewBundleFile, endpoint: `${worker.base}/` });
+    assert.equal(replay[0].status, "replay");
     const linked = await call(worker.base, "/catalog/resolve-legacy",
       { eventKey: "demo-expo-001", legacyId: "EX001" });
     assert.equal(linked.status, 200);
-    assert.equal(linked.body.buildId, receipts.find(receipt => receipt.version === "1.0.0").buildId);
-    const listResponse = await fetch(`${worker.base}/api/v1/catalogs/demo-expo-001/entries?query=synthetic%20category`);
-    assert.equal(listResponse.status, 200);
-    const list = await listResponse.json();
-    assert.equal(list.items.length, 1);
-    assert.equal(list.items[0].category, "Invented synthetic category");
-    assert.equal(list.items[0].revenueRub, 200_000_000);
-    assert.equal(list.items[0].revenueYear, 2025);
-    assert.equal(list.items[0].profitRub, -1_500_000);
-    assert.equal(list.items[0].profitYear, 2024);
-    assert.equal(JSON.stringify(list).includes("synthetic-contact-do-not-import"), false);
-    const page = await fetch(`${worker.base}/catalogs/demo-expo-001?profitBand=loss`);
-    assert.equal(page.status, 200);
-    assert.match(await page.text(), /&lt;em&gt;Invented description&lt;\/em&gt;/);
+    assert.equal(linked.body.buildId, receipts[0].buildId);
+  } finally {
+    if (worker) await stopWorker(worker.child);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("multi-catalog reviewed restore resumes after a lost receipt without duplicate builds", async () => {
+  const root = mkdtempSync(join(tmpdir(), "crm-private-d1-resume-"));
+  let worker;
+  try {
+    const sourceRoot = join(root, "source-users"), backup = join(root, "private-backup");
+    const entries = [
+      { eventKey: "resume-expo-a", row: { id: "EX001", n: "Invented Resume A", s: "A-01", t: 0, nt: 0, ru: 1 } },
+      { eventKey: "resume-expo-b", row: { id: "EX002", n: "Invented Resume B", s: "B-01", t: 1, nt: 0,
+        inn: "0000000001", ru: 1 } }
+    ];
+    for (const item of entries) {
+      const deployed = join(sourceRoot, "invented-owner", "projects", "invented-project",
+        "deploy", item.eventKey);
+      mkdirSync(deployed, { recursive: true });
+      writeFileSync(join(deployed, "index.html"),
+        `<script>const EX = ${JSON.stringify([item.row])};const EVENT_KEY = '${item.eventKey}';</script>`);
+    }
+    const data = join(sourceRoot, "invented-owner", "projects", "invented-project", "data");
+    mkdirSync(data, { recursive: true });
+    writeFileSync(join(data, "enriched.json"), JSON.stringify([{ n: "Invented resume source" }]));
+    await captureLegacyCatalogs({ sourceRoot, outputDir: backup });
+    const manifest = await verifyLegacyCatalogBackup(backup);
+    const records = manifest.records.filter((record) => record.kind === "deployed_html");
+    const hash = (value) => createHash("sha256").update(value).digest("hex");
+    const profileBinding = { status: "confirmed", issuer: "control-plane", legacyUserId: "invented-owner",
+      principalId: "synthetic-principal", profileId: "demo-profile-a", evidenceSha256: "c".repeat(64) };
+    const packet = { version: 1, status: "private_review_required", approvedForImport: false,
+      manifestSha256: manifest.manifestSha256, owners: [{ legacyUserId: "invented-owner",
+        catalogs: records.map(record => ({ sourcePath: record.sourcePath,
+          sourceSha256: record.objectSha256, eventKey: record.eventKey })) }] };
+    const catalogs = [];
+    for (const record of records) {
+      const raw = readFileSync(join(backup, "objects", record.objectSha256));
+      const sourceRows = parseLegacyExHtml(raw).entries;
+      const decisions = { version: 1, status: "reviewed", packetSha256: hash(JSON.stringify(packet)),
+        manifestSha256: manifest.manifestSha256, sourcePath: record.sourcePath,
+        sourceSha256: record.objectSha256, eventKey: record.eventKey,
+        legacyUserId: "invented-owner", profileId: profileBinding.profileId,
+        principalId: profileBinding.principalId, profileBindingEvidenceSha256: profileBinding.evidenceSha256,
+        reviewerEvidenceSha256: "d".repeat(64), rows: sourceRows.map((row, index) => ({ index,
+          rowSha256: hash(JSON.stringify(row)), outcome: "include", replacement: row,
+          evidenceSha256: "e".repeat(64) })) };
+      catalogs.push({ sourcePath: record.sourcePath, sourceSha256: record.objectSha256,
+        profileBinding, decisions });
+    }
+    const reviewBundleFile = join(root, "private-review-bundle.json");
+    writeFileSync(reviewBundleFile, JSON.stringify({ version: 1, manifestSha256: manifest.manifestSha256,
+      packet, catalogs }));
+    const db = join(root, "d1");
+    for (const migration of ["migrations/0001_s04_domain.sql", "migrations/0002_built_catalog.sql",
+      "migrations/0003_weeek_deal_identity.sql", "migrations/0004_legacy_catalog_refs.sql"]) {
+      const applied = spawnSync(node, [wrangler, "d1", "execute", "CRM_DB", "--config", config,
+        "--local", "--persist-to", db, "--file", migration, "--yes", "--json"], { cwd, encoding: "utf8" });
+      assert.equal(applied.status, 0, applied.stderr || applied.stdout);
+    }
+    worker = await startWorker(db);
+    let loseOneReceipt = true;
+    const fetchWithLostReceipt = async (url, options) => {
+      const response = await fetch(url, options);
+      const body = JSON.parse(options.body);
+      if (loseOneReceipt && body.eventKey === "resume-expo-b") {
+        loseOneReceipt = false;
+        return new Response(JSON.stringify({ error: "synthetic_lost_receipt" }), { status: 503 });
+      }
+      return response;
+    };
+    await assert.rejects(restoreLegacyCatalogsLocal({ backupDir: backup, reviewBundleFile,
+      endpoint: `${worker.base}/`, fetchImpl: fetchWithLostReceipt }), /legacy_local_d1_import_failed/);
+    const resumed = await restoreLegacyCatalogsLocal({ backupDir: backup, reviewBundleFile,
+      endpoint: `${worker.base}/` });
+    assert.equal(resumed.length, 2);
+    assert.ok(resumed.every(receipt => receipt.status === "replay"));
+    for (const item of entries) {
+      const linked = await call(worker.base, "/catalog/resolve-legacy",
+        { eventKey: item.eventKey, legacyId: item.row.id });
+      assert.equal(linked.status, 200);
+      assert.equal(linked.body.buildId, resumed.find(receipt => receipt.sourceSha256 ===
+        records.find(record => record.eventKey === item.eventKey).objectSha256).buildId);
+    }
   } finally {
     if (worker) await stopWorker(worker.child);
     rmSync(root, { recursive: true, force: true });
@@ -225,7 +481,8 @@ test("invented legacy EX snapshot keeps event/id links through D1 rebuild, note 
       inn: "0000000001", ogrn: "0000000000001", ru: 1, rev: 250,
       href: "https://example.invalid/catalog/loom", w: "https://example.invalid/loom" },
     { id: "21_dot_12", n: "Invented Supplier", s: "A-02", t: 0, nt: 1, ru: 1,
-      rev: null, href: "https://example.invalid/catalog/supplier" }
+      rev: null, href: "https://example.invalid/catalog/supplier" },
+    { id: "21_dot_13", n: "Invented Unclassified Participant", s: "A-03", t: 0, ru: 1 }
   ];
   const eventKey = "demo-expo-001";
   const link = { eventKey, legacyId: "LNG001" };
@@ -239,9 +496,17 @@ test("invented legacy EX snapshot keeps event/id links through D1 rebuild, note 
     worker = await startWorker(root);
     const imported = await call(worker.base, "/catalog/import-legacy", { eventKey, entries });
     assert.equal(imported.status, 201, JSON.stringify(imported.body));
-    assert.equal(imported.body.imported, 2);
+    assert.equal(imported.body.imported, 3);
     assert.match(imported.body.sourceRevision, /^legacy-ex-sha256-[0-9a-f]{64}$/);
     assert.equal((await call(worker.base, "/catalog/import-legacy", { eventKey, entries })).status, 200);
+    const unknownClass = await call(worker.base, "/catalog/read", {
+      buildId: imported.body.buildId, classification: "unknown" });
+    assert.equal(unknownClass.status, 200);
+    assert.equal(unknownClass.body.items.length, 1);
+    assert.equal(unknownClass.body.items[0].qualification.classification, "unknown");
+    assert.equal(unknownClass.body.items[0].qualification.target, false);
+    assert.equal((await call(worker.base, "/catalog/read", {
+      buildId: imported.body.buildId, classification: "not_target" })).body.items.length, 0);
     const blocked = await call(worker.base, "/catalog/import-legacy", { eventKey,
       entries: [{ ...entries[0], id: "LNG001" }, { ...entries[1], id: "LNG001" }] });
     assert.equal(blocked.status, 422);
@@ -271,7 +536,7 @@ test("invented legacy EX snapshot keeps event/id links through D1 rebuild, note 
     worker = await startWorker(root);
     assert.equal((await call(worker.base, "/catalog/resolve-legacy", link)).body.companyId,
       resolved.body.companyId);
-    const revisedEntries = [{ ...entries[0], n: "Invented Loom Works Updated" }, entries[1]];
+    const revisedEntries = [{ ...entries[0], n: "Invented Loom Works Updated" }, entries[1], entries[2]];
     const rebuilt = await call(worker.base, "/catalog/import-legacy", { eventKey, entries: revisedEntries });
     assert.equal(rebuilt.status, 201);
     assert.notEqual(rebuilt.body.buildId, imported.body.buildId);
@@ -298,6 +563,8 @@ test("invented legacy EX snapshot keeps event/id links through D1 rebuild, note 
     assert.equal(reduced.status, 201);
     assert.equal((await call(worker.base, "/catalog/resolve-legacy",
       { eventKey, legacyId: "21_dot_12" })).status, 404);
+    assert.equal((await call(worker.base, "/catalog/resolve-legacy",
+      { eventKey, legacyId: "21_dot_13" })).status, 404);
     assert.equal((await call(worker.base, "/catalog/resolve-legacy", link)).body.companyId,
       resolved.body.companyId);
   } finally {

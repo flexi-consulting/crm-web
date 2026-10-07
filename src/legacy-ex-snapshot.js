@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { validateReport } from "./catalog-build.js";
+import { CATALOG_BUILD_SCHEMA_VERSION } from "./catalog-version.js";
 
 const sha = (value) => createHash("sha256").update(value).digest("hex");
 const eventKeyOk = (value) => typeof value === "string" && /^[a-z0-9][a-z0-9-]{0,79}$/.test(value);
@@ -36,8 +37,9 @@ export function inspectLegacyExRow(row) {
   const issues = [];
   if (!text(row.n, 240)) issues.push("name_invalid");
   if (optionalText(row.s, 80) === null && row.s != null && row.s !== "") issues.push("booth_invalid");
-  if (![0, 1].includes(row.t) || ![0, 1].includes(row.nt) || row.t + row.nt > 1 ||
-      ![0, 1].includes(row.ru) || row.t === 1 && (row.ru !== 1 || !row.inn))
+  const validFlag = (value) => value == null || value === 0 || value === 1;
+  if (!validFlag(row.t) || !validFlag(row.nt) || row.t === 1 && row.nt === 1 ||
+      ![0, 1].includes(row.ru))
     issues.push("classification_invalid");
   if (!innOk(row.inn)) issues.push("inn_invalid");
   if (!ogrnOk(row.ogrn)) issues.push("ogrn_invalid");
@@ -71,7 +73,8 @@ export function projectLegacyExSnapshot({ profileRef, eventKey, entries }) {
     const country = row.ru === 1 ? "RU" : text(row.country, 80) ?? "unknown";
     const revenueRub = money(row.rev);
     const inn = row.inn || null, ogrn = row.ogrn || null;
-    const classification = row.t === 1 ? "target" : row.nt === 1 ? "near_target" : "not_target";
+    const classification = row.t === 1 ? "target" : row.nt === 1 ? "near_target" :
+      row.t === 0 && row.nt === 0 ? "not_target" : "unknown";
     return { id, name: row.n.trim().replace(/\s+/g, " "),
       source: { sourceRecordId, country, booth: optionalText(row.s, 80), href: url(row.href),
         duplicateSourceRecordIds: [] },
@@ -79,11 +82,11 @@ export function projectLegacyExSnapshot({ profileRef, eventKey, entries }) {
         inn, ogrn, revenueRub, activity: "unknown", website: url(row.w),
         provenance: { provider: "legacy-ex-snapshot", fixtureRef } },
       registry: { status: "unknown", provenance: { source: "legacy-ex-snapshot", fixtureRef } },
-      qualification: { classification, target: row.t === 1, nearTarget: row.nt === 1,
+      qualification: { classification, target: classification === "target", nearTarget: classification === "near_target",
         reason: "legacy_classification_unverified" } };
   }).sort((a, b) => a.id.localeCompare(b.id));
-  const artifact = { schemaVersion: "1.0.0", exhibitionId: eventKey, sourceRevision, companies };
-  const report = { schemaVersion: "1.0.0", exhibitionId: eventKey, sourceRevision,
+  const artifact = { schemaVersion: CATALOG_BUILD_SCHEMA_VERSION, exhibitionId: eventKey, sourceRevision, companies };
+  const report = { schemaVersion: CATALOG_BUILD_SCHEMA_VERSION, exhibitionId: eventKey, sourceRevision,
     stages: { source: { status: "complete", imported: entries.length },
       dedup: { status: "complete", removed: 0 },
       enrichment: { status: "partial" }, registry: { status: "partial" },

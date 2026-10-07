@@ -100,7 +100,7 @@ export function createBuiltCatalogD1HttpHandler({ db, enabled = false, provider,
         const query = url.searchParams.getAll("q"), statuses = url.searchParams.getAll("classification");
         if ([...url.searchParams.keys()].some((key) => !["q", "classification"].includes(key)) ||
             query.length > 1 || statuses.length > 1 || browserMatch[2] && url.searchParams.size > 0 ||
-            (statuses[0] && !["target", "near_target", "not_target"].includes(statuses[0])))
+            (statuses[0] && !["target", "near_target", "not_target", "unknown"].includes(statuses[0])))
           return reply(400, { error: "invalid_query" });
         const result = await built.catalogBuilds.readParticipants({ profileRef: context.profileId,
           buildId: browserMatch[1], companyId: browserMatch[2] ?? null,

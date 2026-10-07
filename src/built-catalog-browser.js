@@ -9,7 +9,7 @@ const safeUrl = (value) => {
       !parsed.username && !parsed.password ? parsed.href : null;
   } catch { return null; }
 };
-const labels = { target: "Целевая", near_target: "Почти целевая", not_target: "Не отнесена к целевым" };
+const labels = { target: "Целевая", near_target: "Почти целевая", not_target: "Не отнесена к целевым", unknown: "Статус не подтверждён" };
 const link = (url, label) => {
   const safe = safeUrl(url);
   return safe ? `<a href="${escape(safe)}" target="_blank" rel="noopener noreferrer">${label}</a>` : "";

@@ -27,3 +27,12 @@ test("list and card show the same stable identity, escape source text and reject
   assert.match(browserHeaders["content-security-policy"], /default-src 'none'/);
   assert.match(browserHeaders["cache-control"], /no-store/);
 });
+
+test("unknown qualification remains visibly unknown rather than becoming not-target", () => {
+  const unknown = { ...participant, qualification: { classification: "unknown", target: false,
+    nearTarget: false, reason: "legacy_classification_unverified" } };
+  const html = renderBuiltCatalogBrowser({ ...data, items: [unknown] }, { classification: "unknown" });
+  assert.match(html, /value="unknown" selected/);
+  assert.match(html, /Статус не подтверждён/);
+  assert.doesNotMatch(html, /<p>Не отнесена к целевым<\/p>/);
+});

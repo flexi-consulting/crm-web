@@ -6,7 +6,7 @@
   "additionalProperties": false,
   "required": ["schemaVersion", "exhibitionId", "sourceRevision", "stages", "providerErrors", "validation"],
   "properties": {
-    "schemaVersion": { "const": "1.0.0" }, "exhibitionId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,79}$" }, "sourceRevision": { "type": "string" },
+    "schemaVersion": { "const": "1.1.0" }, "exhibitionId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,79}$" }, "sourceRevision": { "type": "string" },
     "stages": {
       "type": "object", "additionalProperties": false,
       "required": ["source", "dedup", "enrichment", "registry", "qualification", "artifact"],
@@ -24,7 +24,7 @@
       "type": "object", "additionalProperties": false, "required": ["valid", "issues", "counts"],
       "properties": {
         "valid": { "type": "boolean" }, "issues": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["code"], "properties": { "code": { "enum": ["unsafe_or_duplicate_company_id", "qualification_counts_mismatch", "source_counts_mismatch", "enrichment_counts_mismatch", "registry_counts_mismatch"] } } } },
-        "counts": { "type": "object", "additionalProperties": false, "required": ["sourceRecords", "uniqueCompanies", "duplicateRecords", "enrichmentFound", "enrichmentNotFound", "enrichmentUnavailable", "registryOk", "registryUnknown", "registrySanctioned", "registryNotFound", "registryInactive", "targets", "nearTargets", "notTargets"], "properties": { "sourceRecords": { "type": "integer" }, "uniqueCompanies": { "type": "integer" }, "duplicateRecords": { "type": "integer" }, "enrichmentFound": { "type": "integer" }, "enrichmentNotFound": { "type": "integer" }, "enrichmentUnavailable": { "type": "integer" }, "registryOk": { "type": "integer" }, "registryUnknown": { "type": "integer" }, "registrySanctioned": { "type": "integer" }, "registryNotFound": { "type": "integer" }, "registryInactive": { "type": "integer" }, "targets": { "type": "integer" }, "nearTargets": { "type": "integer" }, "notTargets": { "type": "integer" } } }
+        "counts": { "type": "object", "additionalProperties": false, "required": ["sourceRecords", "uniqueCompanies", "duplicateRecords", "enrichmentFound", "enrichmentNotFound", "enrichmentUnavailable", "registryOk", "registryUnknown", "registrySanctioned", "registryNotFound", "registryInactive", "targets", "nearTargets", "notTargets", "unknowns"], "properties": { "sourceRecords": { "type": "integer" }, "uniqueCompanies": { "type": "integer" }, "duplicateRecords": { "type": "integer" }, "enrichmentFound": { "type": "integer" }, "enrichmentNotFound": { "type": "integer" }, "enrichmentUnavailable": { "type": "integer" }, "registryOk": { "type": "integer" }, "registryUnknown": { "type": "integer" }, "registrySanctioned": { "type": "integer" }, "registryNotFound": { "type": "integer" }, "registryInactive": { "type": "integer" }, "targets": { "type": "integer" }, "nearTargets": { "type": "integer" }, "notTargets": { "type": "integer" }, "unknowns": { "type": "integer" } } }
       }
     }
   }
