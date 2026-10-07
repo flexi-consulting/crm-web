@@ -1,0 +1,12 @@
+{
+  "repository": "trained-assist/trained-assist-control-plane",
+  "revision": "3c0b3ad00c50570a262dc5dab51ca1fd5bc76424",
+  "contractPath": "contracts/connected-app-approval-receipt-v1/contract.json",
+  "artifacts": {
+    "contract.json": "8054a135a0c63e876ceef20d131f6aff548998d64619b68c03b25c824bca9487",
+    "prepare-request.schema.json": "4d60f4e62546052ae6ce97a0a3039eb38269792fd2c7692a925ee98e7cce7bee",
+    "prepare-response.schema.json": "5b16e0da4b77b31253fbf86fe9b7b041c22991a16853691d3e252844332debec",
+    "consume-request.schema.json": "e9cfbd43987cd93613f5bb5f534d9ac555c4e6fd126254e05955c7b8bc3f7a34",
+    "consume-response.schema.json": "39e21a68b6c46f1b7e9a7fe4e664d3418af94371cfdfe2b33c9e825d13af0b0c"
+  }
+}

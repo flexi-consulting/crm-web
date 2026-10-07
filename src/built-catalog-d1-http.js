@@ -5,6 +5,7 @@ import { createS04D1ConfirmedDeals } from "./s04-d1-confirmed-deals.js";
 import { createDealReviewService } from "./deal-reviews.js";
 import { normalizePreleadEventRequest } from "./prelead-timeline.js";
 import { renderBuiltCatalogBrowser, browserHeaders } from "./built-catalog-browser.js";
+import { renderS04DealPreparation } from "./s04-deal-browser.js";
 
 const reply = (status, body) => new Response(JSON.stringify(body), { status, headers: {
   "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff"
@@ -22,12 +23,12 @@ async function input(request) {
 }
 
 // These services are constructed per request in the local Worker. D1 owns state across instances.
-export function createBuiltCatalogD1Domain({ db, provider, now }) {
+export function createBuiltCatalogD1Domain({ db, provider, now, resolveLeadStatusId }) {
   const catalogBuilds = createBuiltCatalogD1Repository(db, now);
   const repository = createS04D1Repository(db);
   const dealService = createS04D1ConfirmedDeals({ repository, provider, now });
   const reviewService = createDealReviewService({ confirmedDeals: dealService,
-    storagePort: repository, participantResolver: catalogBuilds, now });
+    storagePort: repository, participantResolver: catalogBuilds, resolveLeadStatusId, now });
   const preleads = {
     getTimeline: ({ profileId, preleadId }) => catalogBuilds.getTimeline({ profileRef: profileId, preleadId }),
     async addEvent({ profileId, preleadId, request }) {
@@ -52,7 +53,7 @@ export function createBuiltCatalogD1Domain({ db, provider, now }) {
 
 // Opt-in Fetch adapter. No production entry point imports or enables it.
 export function createBuiltCatalogD1HttpHandler({ db, enabled = false, provider, now = () => new Date().toISOString(),
-  resolveTrustedProfile, resolveTrustedReviewReceipt } = {}) {
+  resolveTrustedProfile, resolveTrustedReviewReceipt, resolveLeadStatusId } = {}) {
   return async function handle(request) {
     if (!enabled) return reply(404, { error: "not_found" });
     if (!db?.prepare || !db?.batch || !provider?.create) return reply(503, { error: "d1_binding_unavailable" });
@@ -61,7 +62,7 @@ export function createBuiltCatalogD1HttpHandler({ db, enabled = false, provider,
     if (!validContext(context)) return reply(503, { error: "trusted_profile_unavailable" });
     const url = new URL(request.url);
     const path = url.pathname;
-    const built = createBuiltCatalogD1Domain({ db, provider, now });
+    const built = createBuiltCatalogD1Domain({ db, provider, now, resolveLeadStatusId });
     const authorize = (scope) => context.scopes.includes(scope) ? null : reply(403, { error: "required_scope_missing" });
     const malformedQuery = () => url.searchParams.size > 0 ? reply(400, { error: "invalid_query" }) : null;
     try {
@@ -82,6 +83,16 @@ export function createBuiltCatalogD1HttpHandler({ db, enabled = false, provider,
         return result.status === 200 ? reply(200, { ...result.body,
           browserPath: `/catalogs/${result.body.buildId}/participants/${result.body.companyId}` })
           : reply(result.status, result.body);
+      }
+      const dealPageMatch = path.match(/^\/catalogs\/(build-[a-f0-9]{24})\/participants\/(co-[a-f0-9]{20})\/deal$/);
+      if (dealPageMatch && request.method === "GET") {
+        const denied = authorize("crm.deals.create.synthetic"); if (denied) return denied;
+        const invalidQuery = malformedQuery(); if (invalidQuery) return invalidQuery;
+        const result = await built.catalogBuilds.readParticipants({ profileRef: context.profileId,
+          buildId: dealPageMatch[1], companyId: dealPageMatch[2] });
+        if (result.status !== 200) return reply(result.status, result.body);
+        return renderS04DealPreparation({ item: result.body.items[0], buildId: dealPageMatch[1],
+          exhibitionId: result.body.exhibitionId, csrfToken: request.headers.get("x-crm-csrf-token") });
       }
       const browserMatch = path.match(/^\/catalogs\/(build-[a-f0-9]{24})(?:\/participants\/(co-[a-f0-9]{20}))?$/);
       if (browserMatch && request.method === "GET") {
@@ -191,9 +202,22 @@ export function createBuiltCatalogD1HttpHandler({ db, enabled = false, provider,
         const parsed = await input(request); if (parsed.error) return reply(parsed.status, { error: parsed.error });
         if (!parsed.value || Object.keys(parsed.value).length !== 1 || typeof parsed.value.revision !== "string")
           return reply(400, { error: "invalid_review_confirmation" });
+        const review = await built.reviewService.get({ profileId: context.profileId, reviewId: confirmMatch[1] });
+        if (review.status !== 200) return reply(review.status, review.body);
+        if (review.body.revision !== parsed.value.revision)
+          return reply(409, { error: "review_stale" });
+        // Once CRM has durably reserved a provider operation, reconciliation
+        // must work even if CP is unavailable or the approval intent expired.
+        if (["unknown", "created"].includes(review.body.status)) {
+          const replay = await built.reviewService.confirm({ profileId: context.profileId,
+            reviewId: confirmMatch[1], revision: parsed.value.revision });
+          return reply(replay.status, replay.body);
+        }
         let trustedReceipt;
         try { trustedReceipt = await resolveTrustedReviewReceipt?.(request, context,
-          confirmMatch[1], parsed.value.revision); } catch {}
+          confirmMatch[1], parsed.value.revision, review.body); } catch {}
+        if (typeof resolveTrustedReviewReceipt === "function" && !trustedReceipt)
+          return reply(503, { error: "approval_authority_unavailable" });
         const result = await built.reviewService.confirm({ profileId: context.profileId,
           reviewId: confirmMatch[1], revision: parsed.value.revision, trustedReceipt });
         return reply(result.status, result.body);

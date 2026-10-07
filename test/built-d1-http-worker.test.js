@@ -285,8 +285,10 @@ test("opt-in public-shaped D1 HTTP routes and offline MCP share one durable S01/
     const mcpReview = await request(worker.base, "POST", "/__offline-mcp", { contract: "s04",
       name: "crm_deal_prepare_from_participant", arguments: draft });
     assert.deepEqual(mcpReview.body.result.structuredContent.details, httpReview.body.details);
-    assert.equal((await request(worker.base, "POST", `/api/v1/deal-reviews/${httpReview.body.reviewId}/confirm`,
-      { revision: httpReview.body.revision })).status, 403);
+    const unapproved = await request(worker.base, "POST", `/api/v1/deal-reviews/${httpReview.body.reviewId}/confirm`,
+      { revision: httpReview.body.revision });
+    assert.equal(unapproved.status, 503);
+    assert.equal(unapproved.body.error, "approval_authority_unavailable");
     await stop(worker.child);
 
     worker = await start(root);
