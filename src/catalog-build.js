@@ -63,7 +63,9 @@ export function normalizeEnrichment(value) {
   const allowed = ["found", "not_found", "unavailable"];
   if (!value || !allowed.includes(value.status) || !value.provenance || typeof value.provenance.provider !== "string" || !value.provenance.provider.trim() || typeof value.provenance.fixtureRef !== "string" || !value.provenance.fixtureRef.trim()) return null;
   if (value.status !== "found") {
-    return { status: value.status, inn: null, ogrn: null, revenueRub: null, activity: "unknown", website: null, provenance: { provider: value.provenance.provider.trim(), fixtureRef: value.provenance.fixtureRef.trim() } };
+    return { status: value.status, inn: null, ogrn: null, revenueRub: null, revenueYear: null,
+      profitRub: null, profitYear: null, activity: "unknown", website: null,
+      provenance: { provider: value.provenance.provider.trim(), fixtureRef: value.provenance.fixtureRef.trim() } };
   }
   if ((value.inn != null && (typeof value.inn !== "string" || !/^\d{10,12}$/.test(value.inn))) ||
       (value.ogrn != null && (typeof value.ogrn !== "string" || !/^\d{13,15}$/.test(value.ogrn))) ||
@@ -75,7 +77,8 @@ export function normalizeEnrichment(value) {
   const revenueRub = Number.isSafeInteger(value.revenueRub) && value.revenueRub >= 0 ? value.revenueRub : null;
   const activity = ["manufacturer", "distributor", "service", "unknown"].includes(value.activity) ? value.activity : "unknown";
   const website = value.website == null ? null : safeHttpUrl(value.website);
-  return { status: value.status, inn, ogrn, revenueRub, activity, website, provenance: { provider: value.provenance.provider.trim(), fixtureRef: value.provenance.fixtureRef.trim() } };
+  return { status: value.status, inn, ogrn, revenueRub, revenueYear: null, profitRub: null, profitYear: null,
+    activity, website, provenance: { provider: value.provenance.provider.trim(), fixtureRef: value.provenance.fixtureRef.trim() } };
 }
 
 export function normalizeRegistry(value) {
@@ -173,7 +176,9 @@ export function createCatalogBuildService({ sourceAdapter = createSyntheticSourc
         try { enrichment = normalizeEnrichment(await enrichmentAdapter.enrich(record)); }
         catch { enrichment = null; }
         if (!enrichment) {
-          enrichment = { status: "unavailable", inn: null, ogrn: null, revenueRub: null, activity: "unknown", website: null, provenance: { provider: "synthetic-adapter", fixtureRef: "provider-unavailable" } };
+          enrichment = { status: "unavailable", inn: null, ogrn: null, revenueRub: null, revenueYear: null,
+            profitRub: null, profitYear: null, activity: "unknown", website: null,
+            provenance: { provider: "synthetic-adapter", fixtureRef: "provider-unavailable" } };
           providerErrors.push({ stage: "enrichment", sourceRecordId: record.sourceRecordId, code: "ENRICHMENT_UNAVAILABLE" });
         }
         let registry;
@@ -188,7 +193,7 @@ export function createCatalogBuildService({ sourceAdapter = createSyntheticSourc
           providerErrors.push({ stage: "registry", sourceRecordId: record.sourceRecordId, code: "REGISTRY_UNAVAILABLE" });
         }
         const company = {
-          id: stableCompanyId(record.normalizedName), name: record.name.trim().replace(/\s+/g, " "), source: { sourceRecordId: record.sourceRecordId, country: record.country, booth: record.booth ?? null, href: record.href == null ? null : safeHttpUrl(record.href), duplicateSourceRecordIds: record.duplicateSourceRecordIds },
+          id: stableCompanyId(record.normalizedName), name: record.name.trim().replace(/\s+/g, " "), source: { sourceRecordId: record.sourceRecordId, country: record.country, booth: record.booth ?? null, href: record.href == null ? null : safeHttpUrl(record.href), category: null, description: null, segment: null, duplicateSourceRecordIds: record.duplicateSourceRecordIds },
           enrichment, registry
         };
         company.qualification = qualify(company);

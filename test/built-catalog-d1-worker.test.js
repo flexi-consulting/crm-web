@@ -62,7 +62,9 @@ test("synthetic current legacy catalog preserves classification, identity, filte
   let worker;
   const golden = JSON.parse(readFileSync(new URL("./fixtures/legacy-ex-semantic-golden.synthetic.json", import.meta.url)));
   const html = Buffer.from(`<!doctype html><script>const EVENT_KEY = '${golden.eventKey}';\nconst EX = ${JSON.stringify(golden.rows.map((row, index) => ({
-    ...row, c: "Synthetic City", b: "Synthetic product summary", p: `+7 000 000-00-0${index + 1}`,
+    ...row, c: "Synthetic City", b: "Synthetic product summary",
+    cat: row.n === "Synthetic Target Works" ? "Synthetic apparel" : "Synthetic fabric",
+    seg: "Synthetic segment", prof: 42, py: 2024, ry: 2025, p: `+7 000 000-00-0${index + 1}`,
     e: `contact00${index + 1}@example.invalid`, dir: "Synthetic Director 001" }))) };\n</script>`);
   const parsed = parseLegacyExHtml(html);
   assert.equal(parsed.eventKey, golden.eventKey);
@@ -131,6 +133,16 @@ test("synthetic current legacy catalog preserves classification, identity, filte
       assert.equal(link.status, 200, legacyId);
       assert.equal(link.body.companyId, identities.get(legacyId), legacyId);
     }
+    const rich = all.body.items.find(item => item.id === identities.get("SYN001"));
+    assert.equal(rich.source.category, "Synthetic apparel");
+    assert.equal(rich.source.description, "Synthetic product summary");
+    assert.equal(rich.source.segment, "Synthetic segment");
+    assert.equal(rich.enrichment.revenueYear, 2025);
+    assert.equal(rich.enrichment.profitRub, 42_000_000);
+    assert.equal(rich.enrichment.profitYear, 2024);
+    const categoryFiltered = await call(worker.base, "/catalog/read", { buildId: imported.body.buildId, q: "apparel" });
+    assert.equal(categoryFiltered.status, 200);
+    assert.equal(categoryFiltered.body.items.length, 1);
     const browser = renderBuiltCatalogBrowser(all.body);
     assert.match(browser, /Synthetic Target Works/);
     assert.match(browser, /<form method="get" action="\/catalogs\//);
@@ -141,20 +153,23 @@ test("synthetic current legacy catalog preserves classification, identity, filte
     assert.match(targetBrowser, /Найдено: 1/);
     const missingMigrationFields = ["profitRub", "revenueYear", "profitYear", "category", "description"]
       .filter(key => !(key in all.body.items[0].enrichment) && !(key in all.body.items[0].source));
-    assert.deepEqual(missingMigrationFields, ["profitRub", "revenueYear", "profitYear", "category", "description"],
-      "current API omits fields needed for legacy filter/display parity; tracked in CRM issue #3");
+    assert.deepEqual(missingMigrationFields, [], "S-04 keeps the same safe catalog facts available to S-01");
     assert.equal(golden.expected.revenueBands["0-100"].length, 1);
     assert.equal(golden.expected.profitBands.loss.length, 1);
     assert.equal(golden.expected.search.apparel.length, 1);
     const detail = await call(worker.base, "/catalog/read", { buildId: imported.body.buildId,
       companyId: identities.get("SYN001") });
     const card = renderBuiltCatalogBrowser(detail.body, { companyId: identities.get("SYN001") });
+    assert.match(card, /Synthetic apparel/);
+    assert.match(card, /Synthetic product summary/);
+    assert.match(card, /Прибыль, ₽/);
     assert.match(card, /https:\/\/exhibitor-001\.example\.invalid\/catalog/);
     for (const privateValue of golden.expected.privateFields) {
-      assert.equal(JSON.stringify(projected.build).includes(privateValue), false, `projector leaked ${privateValue}`);
-      assert.equal(JSON.stringify(all.body).includes(privateValue), false, `D1/API leaked ${privateValue}`);
-      assert.equal(browser.includes(privateValue), false, `browser leaked ${privateValue}`);
-      assert.equal(card.includes(privateValue), false, `detail leaked ${privateValue}`);
+      const approvedCatalogText = ["Synthetic product summary", "Synthetic director 001"].includes(privateValue);
+      assert.equal(JSON.stringify(projected.build).includes(privateValue), approvedCatalogText, `projector privacy mismatch for ${privateValue}`);
+      assert.equal(JSON.stringify(all.body).includes(privateValue), approvedCatalogText, `D1/API privacy mismatch for ${privateValue}`);
+      assert.equal(browser.includes(privateValue), approvedCatalogText, `browser privacy mismatch for ${privateValue}`);
+      assert.equal(card.includes(privateValue), approvedCatalogText, `detail privacy mismatch for ${privateValue}`);
     }
   } finally {
     if (worker) await stopWorker(worker.child);

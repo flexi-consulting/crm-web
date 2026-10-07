@@ -44,7 +44,10 @@ export function renderBuiltCatalogBrowser(data, { query = "", classification = n
     const details = [field("Статус", classificationLabel), field("Причина", item.qualification.reason),
       field("Страна", item.source.country), field("Стенд", item.source.booth),
       field("ИНН", item.enrichment.inn), field("ОГРН", item.enrichment.ogrn),
-      field("Выручка, ₽", item.enrichment.revenueRub),
+      field("Категория", item.source.category), field("Описание", item.source.description),
+      field("Сегмент", item.source.segment),
+      field("Выручка, ₽", item.enrichment.revenueRub), field("Год выручки", item.enrichment.revenueYear),
+      field("Прибыль, ₽", item.enrichment.profitRub), field("Год прибыли", item.enrichment.profitYear),
       field("Данные", item.enrichment.status === "found" ? "Найдены" : "Неизвестны"),
       field("Реестр", item.registry.status), field("Источник обогащения", item.enrichment.provenance?.provider)]
       .filter(Boolean).join("");
@@ -55,7 +58,10 @@ export function renderBuiltCatalogBrowser(data, { query = "", classification = n
   }
   const cards = items.map((item) => `<article class="card"><h2><a href="${pathFor(buildId, item.id)}">${escape(item.name)}</a></h2>
     <p>${escape(labels[item.qualification.classification] ?? "Статус не подтверждён")}</p>
-    <small>${escape(item.source.country)}${item.source.booth ? ` · стенд ${escape(item.source.booth)}` : ""}</small></article>`).join("");
+    <small>${escape(item.source.country)}${item.source.booth ? ` · стенд ${escape(item.source.booth)}` : ""}${item.source.category ? ` · ${escape(item.source.category)}` : ""}</small>
+    ${item.source.description ? `<p>${escape(item.source.description)}</p>` : ""}
+    <p>Выручка: ${escape(item.enrichment.revenueRub ?? "Неизвестно")}${item.enrichment.revenueYear ? ` (${item.enrichment.revenueYear})` : ""}</p>
+    <p>Прибыль: ${escape(item.enrichment.profitRub ?? "Неизвестно")}${item.enrichment.profitYear ? ` (${item.enrichment.profitYear})` : ""}</p></article>`).join("");
   return shell(`Каталог ${exhibitionId}`, `<h1>Каталог выставки ${escape(exhibitionId)}</h1>${meta}
     <form method="get" action="${base}"><label>Поиск <input name="q" maxlength="120" value="${escape(query)}"></label>
     <label>Статус <select name="classification"><option value="">Все</option>${Object.entries(labels).map(([key, label]) =>

@@ -29,6 +29,13 @@ const legacyYear = value => value == null || value === "" ? null :
   Number.isInteger(value) && value >= 1900 && value <= 2200 ? value : undefined;
 const validOptionalText = (value, max) => value == null || value === "" ||
   typeof value === "string" && !!value.trim() && [...value.trim()].length <= max;
+const legacyCategory = (row) => {
+  if (row.cat != null && row.cat !== "") return optionalText(row.cat, 240);
+  if (row.cats == null) return null;
+  if (!Array.isArray(row.cats)) return undefined;
+  const categories = row.cats.map(value => text(value, 240));
+  return categories.some(value => !value) ? undefined : optionalText(categories.join(", "), 240);
+};
 
 // The private preflight uses these same checks to point reviewers to exact
 // source rows without importing, normalizing, or publishing their values.
@@ -44,6 +51,11 @@ export function inspectLegacyExRow(row) {
   if (!innOk(row.inn)) issues.push("inn_invalid");
   if (!ogrnOk(row.ogrn)) issues.push("ogrn_invalid");
   if (money(row.rev) === undefined) issues.push("revenue_invalid");
+  if (legacyMoneyRub(row.prof, { allowNegative: true }) === undefined) issues.push("profit_invalid");
+  if (legacyYear(row.ry) === undefined || legacyYear(row.py) === undefined) issues.push("financial_year_invalid");
+  if (legacyCategory(row) === undefined) issues.push("category_invalid");
+  if (!validOptionalText(row.b, 2000)) issues.push("description_invalid");
+  if (!validOptionalText(row.seg, 120)) issues.push("segment_invalid");
   if (url(row.href) === undefined) issues.push("href_invalid");
   if (url(row.w) === undefined) issues.push("website_invalid");
   return issues;
@@ -63,8 +75,10 @@ export function projectLegacyExSnapshot({ profileRef, eventKey, entries }) {
     if (inspectLegacyExRow(row).length)
       return { status: "legacy_record_invalid" };
   }
-  const included = entries.map(({ id, n, s, t, nt, inn, ogrn, ru, rev, href, w, country }) =>
-    ({ id, n, s, t, nt, inn, ogrn, ru, rev, href, w, country }));
+  const included = entries.map(row => ({ id: row.id, n: row.n, s: row.s, t: row.t, nt: row.nt,
+    inn: row.inn, ogrn: row.ogrn, ru: row.ru, rev: row.rev, href: row.href, w: row.w,
+    country: row.country, cat: legacyCategory(row), b: optionalText(row.b, 2000),
+    seg: optionalText(row.seg, 120), prof: row.prof, ry: row.ry, py: row.py }));
   const sourceRevision = `legacy-ex-sha256-${sha(JSON.stringify([eventKey, included]))}`;
   const fixtureRef = sourceRevision;
   const companies = entries.map((row) => {
@@ -72,14 +86,18 @@ export function projectLegacyExSnapshot({ profileRef, eventKey, entries }) {
     const sourceRecordId = `src-${sha(JSON.stringify([eventKey, row.id])).slice(0, 24)}`;
     const country = row.ru === 1 ? "RU" : text(row.country, 80) ?? "unknown";
     const revenueRub = money(row.rev);
+    const profitRub = legacyMoneyRub(row.prof, { allowNegative: true });
     const inn = row.inn || null, ogrn = row.ogrn || null;
     const classification = row.t === 1 ? "target" : row.nt === 1 ? "near_target" :
       row.t === 0 && row.nt === 0 ? "not_target" : "unknown";
     return { id, name: row.n.trim().replace(/\s+/g, " "),
       source: { sourceRecordId, country, booth: optionalText(row.s, 80), href: url(row.href),
+        category: legacyCategory(row), description: optionalText(row.b, 2000),
+        segment: optionalText(row.seg, 120),
         duplicateSourceRecordIds: [] },
-      enrichment: { status: inn || ogrn || revenueRub !== null || url(row.w) ? "found" : "not_found",
-        inn, ogrn, revenueRub, activity: "unknown", website: url(row.w),
+      enrichment: { status: inn || ogrn || revenueRub !== null || profitRub !== null || url(row.w) ? "found" : "not_found",
+        inn, ogrn, revenueRub, revenueYear: legacyYear(row.ry), profitRub, profitYear: legacyYear(row.py),
+        activity: "unknown", website: url(row.w),
         provenance: { provider: "legacy-ex-snapshot", fixtureRef } },
       registry: { status: "unknown", provenance: { source: "legacy-ex-snapshot", fixtureRef } },
       qualification: { classification, target: classification === "target", nearTarget: classification === "near_target",
@@ -128,15 +146,17 @@ export function projectLegacyExSnapshotV11({ profileRef, eventKey, entries }) {
         ![0, 1].includes(row.t) || ![0, 1].includes(row.nt) || row.t + row.nt > 1 ||
         ![0, 1].includes(row.ru) || row.t === 1 && (row.ru !== 1 || !row.inn) ||
         !innOk(row.inn) || !ogrnOk(row.ogrn) ||
-        !validOptionalText(row.country, 80) || !validOptionalText(row.cat, 240) ||
+        !validOptionalText(row.country, 80) || legacyCategory(row) === undefined ||
         !validOptionalText(row.b, 2000) || !validOptionalText(row.seg, 120) ||
         legacyMoneyRub(row.rev) === undefined || legacyMoneyRub(row.prof, { allowNegative: true }) === undefined ||
         legacyYear(row.ry) === undefined || legacyYear(row.py) === undefined ||
         url(row.href) === undefined || url(row.w) === undefined)
       return { status: "legacy_record_invalid" };
   }
-  const included = entries.map(({ id, n, s, t, nt, inn, ogrn, ru, rev, ry, prof, py, href, w, country, cat, b, seg }) =>
-    ({ id, n, s, t, nt, inn, ogrn, ru, rev, ry, prof, py, href, w, country, cat, b, seg }));
+  const included = entries.map(row => ({ id: row.id, n: row.n, s: row.s, t: row.t, nt: row.nt,
+    inn: row.inn, ogrn: row.ogrn, ru: row.ru, rev: row.rev, ry: row.ry, prof: row.prof, py: row.py,
+    href: row.href, w: row.w, country: row.country, cat: legacyCategory(row), b: optionalText(row.b, 2000),
+    seg: optionalText(row.seg, 120) }));
   const sourceRevision = `legacy-ex-sha256-${sha(JSON.stringify([eventKey, included]))}`;
   const fixtureRef = sourceRevision;
   const companies = entries.map(row => {
@@ -149,7 +169,7 @@ export function projectLegacyExSnapshotV11({ profileRef, eventKey, entries }) {
     const classification = row.t === 1 ? "target" : row.nt === 1 ? "near_target" : "not_target";
     return { id, name: row.n.trim().replace(/\s+/g, " "),
       source: { sourceRecordId, country, booth: optionalText(row.s, 80), href: url(row.href),
-        category: optionalText(row.cat, 240), description: optionalText(row.b, 2000),
+        category: legacyCategory(row), description: optionalText(row.b, 2000),
         segment: optionalText(row.seg, 120), duplicateSourceRecordIds: [] },
       enrichment: { status: inn || ogrn || revenueRub !== null || profitRub !== null || url(row.w) ? "found" : "not_found",
         inn, ogrn, revenueRub, revenueYear: legacyYear(row.ry), profitRub, profitYear: legacyYear(row.py),

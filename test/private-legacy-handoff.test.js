@@ -105,11 +105,14 @@ test("current legacy source shape imports only supported facts and preserves mis
   assert.equal(projected.status, "projected");
   const byName = Object.fromEntries(projected.build.artifact.companies.map((company) => [company.name, company]));
   assert.equal(byName["Synthetic Exhibitor 001"].qualification.classification, "target");
+  assert.equal(byName["Synthetic Exhibitor 001"].source.category, "Synthetic category");
+  assert.equal(byName["Synthetic Exhibitor 001"].source.description, "Synthetic product summary");
+  assert.equal(byName["Synthetic Exhibitor 001"].enrichment.profitRub, 10_000_000);
   assert.equal(byName["Synthetic Exhibitor 002"].qualification.classification, "unknown");
   assert.equal(projected.build.report.validation.counts.unknowns, 1);
   const serialized = JSON.stringify(projected.build.artifact);
   for (const sourceOnly of ["+7 000 000-00-01", "contact001@example.invalid", "Synthetic Director 001",
-    "Synthetic role", "Synthetic product summary", "Synthetic category", "Sample City"])
+    "Synthetic role", "Sample City"])
     assert.equal(serialized.includes(sourceOnly), false, `source-only field leaked: ${sourceOnly}`);
 });
 

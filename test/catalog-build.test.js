@@ -48,7 +48,7 @@ test("synthetic build imports, deduplicates, enriches, qualifies, and reconciles
     const { "catalog-build-request": requestSchema, "catalog-build-response": responseSchema } = await validators("catalog-build-request", "catalog-build-response", "catalog-build-artifact", "catalog-build-report", "catalog-build-error");
     assert.equal(requestSchema({ exhibitionId: "demo-expo-001" }), true);
     assert.equal(requestSchema({ exhibitionId: "demo-expo-001", profileId: "demo-profile-a" }), false);
-    assert.equal(responseSchema(body), true);
+    assert.equal(responseSchema(body), true, JSON.stringify(responseSchema.errors));
     assert.equal(body.report.validation.valid, true);
     assert.deepEqual(body.report.validation.counts, {
       sourceRecords: 5, uniqueCompanies: 4, duplicateRecords: 1,

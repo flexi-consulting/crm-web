@@ -19,19 +19,21 @@
           "name": { "type": "string", "minLength": 1 },
           "source": {
             "type": "object", "additionalProperties": false,
-            "required": ["sourceRecordId", "country", "booth", "href", "duplicateSourceRecordIds"],
+            "required": ["sourceRecordId", "country", "booth", "href", "category", "description", "segment", "duplicateSourceRecordIds"],
             "properties": {
               "sourceRecordId": { "type": "string", "pattern": "^src-[a-z0-9-]{1,48}$" },
               "country": { "type": "string" }, "booth": { "type": ["string", "null"] }, "href": { "type": ["string", "null"], "pattern": "^https?:\\/\\/[^\\s]+$" },
+              "category": { "type": ["string", "null"], "maxLength": 240 }, "description": { "type": ["string", "null"], "maxLength": 2000 }, "segment": { "type": ["string", "null"], "maxLength": 120 },
               "duplicateSourceRecordIds": { "type": "array", "items": { "type": "string", "pattern": "^src-[a-z0-9-]{1,48}$" } }
             }
           },
           "enrichment": {
             "type": "object", "additionalProperties": false,
-            "required": ["status", "inn", "ogrn", "revenueRub", "activity", "website", "provenance"],
+            "required": ["status", "inn", "ogrn", "revenueRub", "revenueYear", "profitRub", "profitYear", "activity", "website", "provenance"],
             "properties": {
               "status": { "enum": ["found", "not_found", "unavailable"] }, "inn": { "type": ["string", "null"] }, "ogrn": { "type": ["string", "null"] },
-              "revenueRub": { "type": ["integer", "null"], "minimum": 0 }, "activity": { "enum": ["manufacturer", "distributor", "service", "unknown"] },
+              "revenueRub": { "type": ["integer", "null"], "minimum": 0 }, "revenueYear": { "$ref": "#/$defs/yearOrNull" },
+              "profitRub": { "type": ["integer", "null"] }, "profitYear": { "$ref": "#/$defs/yearOrNull" }, "activity": { "enum": ["manufacturer", "distributor", "service", "unknown"] },
               "website": { "type": ["string", "null"], "pattern": "^https?:\\/\\/[^\\s]+$" }, "provenance": { "type": "object", "additionalProperties": false, "required": ["provider", "fixtureRef"], "properties": { "provider": { "type": "string", "minLength": 1 }, "fixtureRef": { "type": "string", "minLength": 1 } } }
             }
           },
@@ -46,5 +48,6 @@
         }
       }
     }
-  }
+  },
+  "$defs": { "yearOrNull": { "type": ["integer", "null"], "minimum": 1900, "maximum": 2200 } }
 }
