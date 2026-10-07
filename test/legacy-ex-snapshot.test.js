@@ -8,6 +8,7 @@ const entries = [
   { id: "LNG001", n: "Invented Loom Works", s: "A-01", t: 1, nt: 0,
     inn: "0000000001", ogrn: "0000000000001", ru: 1, rev: 250,
     href: "https://example.invalid/catalog/loom", w: "https://example.invalid/loom",
+    ry: 2024, prof: -2.5, py: 2023, cat: "Synthetic textile", b: "Synthetic description", seg: "Synthetic retail",
     e: "contact@example.invalid", p: "+7 000 000 00 00" },
   { id: "21_dot_12", n: "Invented Supplier", s: "A-02", t: 0, nt: 1, ru: 1, rev: null }
 ];
@@ -18,6 +19,14 @@ test("legacy EX projection is revisioned, schema-valid and excludes contact fiel
   assert.equal(first.status, "projected");
   assert.equal(first.build.artifact.companies.length, 2);
   assert.equal(first.build.report.validation.valid, true);
+  const target = first.build.artifact.companies.find(item => item.name === "Invented Loom Works");
+  assert.equal(target.source.category, "Synthetic textile");
+  assert.equal(target.source.description, "Synthetic description");
+  assert.equal(target.source.segment, "Synthetic retail");
+  assert.equal(target.enrichment.revenueRub, 250_000_000);
+  assert.equal(target.enrichment.revenueYear, 2024);
+  assert.equal(target.enrichment.profitRub, -2_500_000);
+  assert.equal(target.enrichment.profitYear, 2023);
   const ajv = new Ajv();
   for (const name of ["catalog-build-artifact", "catalog-build-report"]) {
     const schema = JSON.parse(await readFile(new URL(`../schemas/${name}.schema.json`, import.meta.url)));
@@ -56,4 +65,8 @@ test("legacy EX rejects duplicate or ambiguous link IDs and unsafe URLs before p
   assert.equal(projectLegacyExSnapshot({ profileRef: "demo-profile-a",
     eventKey: "invented-expo-2026",
     entries: [{ ...entries[0], t: 1, nt: 1 }] }).status, "legacy_record_invalid");
+  for (const invalid of [{ prof: "unknown" }, { ry: 1800 }, { cat: null, cats: ["x".repeat(241)] },
+    { cat: null, cats: "not-an-array" }])
+    assert.equal(projectLegacyExSnapshot({ profileRef: "demo-profile-a", eventKey: "invented-expo-2026",
+      entries: [{ ...entries[0], ...invalid }] }).status, "legacy_record_invalid");
 });

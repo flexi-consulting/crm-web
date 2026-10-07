@@ -176,7 +176,7 @@ export function createBuiltCatalogD1Repository(db, now = () => new Date().toISOS
     const q = query.trim().toLocaleLowerCase("en");
     items = items.filter((item) => (companyId === null || item.id === companyId) &&
       (classification === null || item.qualification.classification === classification) &&
-      (!q || `${item.name} ${item.source.country} ${item.source.booth ?? ""}`.toLocaleLowerCase("en").includes(q)))
+      (!q || `${item.name} ${item.source.country} ${item.source.booth ?? ""} ${item.source.category ?? ""}`.toLocaleLowerCase("en").includes(q)))
       .map((item) => ({ ...item, detailPath: `/api/v1/catalog-builds/${buildId}/participants/${item.id}` }));
     if (companyId !== null && items.length === 0) return { status: 404, body: { error: "participant_not_found" } };
     return { status: 200, body: { domainApiVersion: "1.0.0", buildId,
