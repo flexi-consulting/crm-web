@@ -1,7 +1,7 @@
 import { createCrmConnectedBrowserHandler, createCrmControlPlaneClient } from "./connected-browser-bff.js";
 import { createCrmBrowserD1Store } from "./connected-browser-d1-store.js";
 import { createBuiltCatalogD1HttpHandler } from "./built-catalog-d1-http.js";
-import { createCatalogV11ReadHandler, createCatalogV11ParticipantLinkHandler,
+import { createCatalogV11ReadHandler, createCatalogV11SearchHandler, createCatalogV11ParticipantLinkHandler,
   createCatalogV11D1Repository } from "./catalog-query-v11.js";
 import { createBuiltCatalogD1Repository } from "./built-catalog-d1.js";
 import { createWeeekHttpTransport } from "./weeek-http-transport.js";
@@ -61,8 +61,9 @@ export function createCrmConnectedWorkerHandler({ fetcher = fetch, now = () => D
       const connectedRead = async (received, identity) => {
         const path = new URL(received.url).pathname;
         const eventParticipant = path.match(/^\/catalogs\/(?!build-)([a-z0-9][a-z0-9-]{0,79})\/participants\/(co-[a-f0-9]{20})$/);
+        const catalogSearch = /^\/api\/v1\/catalogs\/[a-z0-9][a-z0-9-]{0,79}\/entries$/.test(path);
         const exhibition = /^\/catalogs\/(?!build-)[a-z0-9][a-z0-9-]{0,79}$/.test(path);
-        if (!eventParticipant && !exhibition) return read(received, identity);
+        if (!eventParticipant && !exhibition && !catalogSearch) return read(received, identity);
         if (!identity?.profileId || !Array.isArray(identity?.scopes)) return new Response(
           JSON.stringify({ error: "trusted_profile_unavailable" }), { status: 503 });
         const resolveTrustedProfile = () => ({ profileId: identity.profileId,
@@ -76,6 +77,8 @@ export function createCrmConnectedWorkerHandler({ fetcher = fetch, now = () => D
             builtCatalog.resolveLegacyParticipantByCompanyId({
               profileRef: profileId, eventKey, companyId })
         })(received);
+        if (catalogSearch) return createCatalogV11SearchHandler({ repository: catalogV11,
+          resolveTrustedProfile })(received);
         return createCatalogV11ReadHandler({ repository: catalogV11, resolveTrustedProfile,
           resolveParticipantCompanyIds: ({ profileId, eventKey }) => builtCatalog.listLegacyParticipantCompanyIds({
             profileRef: profileId, eventKey }) })(received);
