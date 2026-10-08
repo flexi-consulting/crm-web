@@ -326,8 +326,8 @@ export default {
     }
     if (url.pathname === "/__missing-encryption-key") {
       const withoutEncryptionKey = { ...env, CRM_CONNECTED_BFF_ENCRYPTION_KEY: undefined };
-      return connected(new Request("https://crm.example.invalid/catalogs/build-aaaaaaaaaaaaaaaaaaaaaaaa", request),
-        withoutEncryptionKey);
+      const internalUrl = new URL("/catalogs/build-aaaaaaaaaaaaaaaaaaaaaaaa", env.CRM_CONNECTED_PUBLIC_ORIGIN);
+      return connected(new Request(internalUrl, request), withoutEncryptionKey);
     }
     if (url.pathname === "/__clock-offset") {
       clockOffset = Number(url.searchParams.get("milliseconds") ?? 0);
@@ -342,6 +342,10 @@ export default {
         .bind(Math.floor(Date.now() / 1000) - 1, "profile_A").run();
       return Response.json({ expired: true });
     }
-    return connected(new Request(`https://crm.example.invalid${url.pathname}${url.search}`, request), env);
+    // Preserve the configured public origin for the real BFF origin check.
+    // Rewriting every request to a fixture hostname made deployed browser routes
+    // fail with `invalid_origin` after the synthetic login succeeded.
+    const internalUrl = new URL(`${url.pathname}${url.search}`, env.CRM_CONNECTED_PUBLIC_ORIGIN);
+    return connected(new Request(internalUrl, request), env);
   }
 };
