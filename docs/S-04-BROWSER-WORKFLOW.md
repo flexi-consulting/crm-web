@@ -26,3 +26,9 @@ Migrations `0007_connected_browser_s04_commands.sql` and `0008_cp_approval_inten
 - Apply the ordered migrations to a dedicated app-owned D1 binding, verify its identity and recovery/rollback, and complete a private synthetic canary before route activation. Legacy catalog import and old deal/notes ownership remain separately gated by CRM migration issue #3.
 
 The fixture exercises the same prepare/consume HTTP protocol against a local Control Plane stub, the real CRM route handlers and durable D1 intent storage; it does not mint approval from a browser header. This does not prove Control Plane deployment, production membership resolution, Weeek's live read consistency, a complete workspace scan or authorization to switch the public route.
+
+## Disposable public browser sandbox
+
+For manual acceptance through a Cloudflare Quick Tunnel, run the local Worker from `test/wrangler.connected-browser-local.toml` with migrations `0001`–`0011` and `test/fixtures/weeek-http-provider.sql` applied to a fresh local persist directory. Run `scripts/sandbox-public-browser-proxy.mjs` with `CRM_SANDBOX_PUBLIC_ORIGIN=https://<quick-tunnel-host>` and point `cloudflared tunnel --url` at the proxy port. Open `/__sandbox-login` for an auto-seeded, synthetic profile and catalog. The proxy restricts fixture control routes, rewrites the fixed local origin, and replaces the CP review link with an explicit synthetic approval page that resumes the same review.
+
+This public tunnel is development-only. The login and approval routes use invented identities and local D1/Weeek fixtures; they must never be enabled against a production Worker, database, Control Plane or Weeek workspace. Quick Tunnel URLs and local processes are temporary and have no uptime guarantee.
