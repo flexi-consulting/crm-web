@@ -401,3 +401,43 @@ test("browser S-04 confirms through D1 and Weeek HTTP, then reconciles an accept
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("public sandbox catalog entry uses read-only profile and displays seeded company facts", async () => {
+  const root = mkdtempSync(join(tmpdir(), "crm-public-catalog-sandbox-"));
+  let worker;
+  try {
+    migrate(root);
+    worker = await start(root);
+    const login = await call(worker.base, "/__sandbox-login?view=catalog");
+    assert.equal(login.status, 303, await login.clone().text());
+    assert.equal(login.headers.get("location"), "/catalogs/synthetic-current-source-shape");
+    const session = cookie(login, "__Host-crm-connected-session");
+    assert.ok(session);
+    const catalog = await call(worker.base, "/catalogs/synthetic-current-source-shape", {
+      headers: { cookie: session }
+    });
+    assert.equal(catalog.status, 200, await catalog.clone().text());
+    const html = await catalog.text();
+    assert.match(html, /Уплаченные налоги: 1,25 млн ₽ \(2024\)/);
+    assert.match(html, /Сотрудники: 42 \(2025\)/);
+    assert.match(html, /Директор: Synthetic Director 001 · Synthetic director role/);
+    const cardPath = html.match(/href="(\/catalogs\/synthetic-current-source-shape\/participants\/co-[a-f0-9]{20})"/)?.[1];
+    assert.ok(cardPath);
+    const card = await call(worker.base, cardPath, { headers: { cookie: session } });
+    assert.equal(card.status, 200, await card.clone().text());
+    const cardHtml = await card.text();
+    assert.match(cardHtml, /Synthetic Director 001/);
+    const canonicalCardPath = cardHtml.match(/href="(\/catalogs\/build-[a-f0-9]{24}\/participants\/co-[a-f0-9]{20})"/)?.[1];
+    assert.ok(canonicalCardPath);
+    const dealHandoff = await call(worker.base, `${canonicalCardPath}/deal`, { headers: { cookie: session } });
+    assert.equal(dealHandoff.status, 303);
+    const dealScopeUrl = new URL(dealHandoff.headers.get("location"));
+    assert.equal(dealScopeUrl.searchParams.get("from"), "dealCreate",
+      "catalog-only profile must request a separate create scope before preparing a deal");
+    const invalidView = await call(worker.base, "/__sandbox-login?view=unrecognized");
+    assert.equal(invalidView.status, 400);
+  } finally {
+    if (worker) await stop(worker.child);
+    rmSync(root, { recursive: true, force: true });
+  }
+});

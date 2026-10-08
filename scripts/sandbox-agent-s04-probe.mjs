@@ -3,7 +3,7 @@
 // connected-app Worker/BFF/D1 handlers with synthetic CP and Weeek ports.
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -36,6 +36,11 @@ const port = async () => {
   return value;
 };
 const request = (base, path, options = {}) => fetch(`${base}${path}`, { redirect: "manual", ...options });
+const readMcpEvidence = (runRoot) => readFileSync(join(runRoot, "events.jsonl"), "utf8")
+  .trim().split("\n").map(JSON.parse)
+  .filter(event => event.type === "log" && event.payload?.stream === "stdout" &&
+    event.payload.message.startsWith("mcp-evidence: "))
+  .map(event => JSON.parse(event.payload.message.slice("mcp-evidence: ".length)));
 const cookie = (response, name) => response.headers.getSetCookie().map(part => part.split(";")[0])
   .find(part => part.startsWith(`${name}=`));
 let worker, runner;
@@ -156,17 +161,19 @@ try {
     assert.equal(validated.ok, true, validated.errors?.join("; "));
     const receipt = runner.start(validated.value);
     const outcome = await runner.waitFor(receipt.runId, 30_000);
-    const events = readFileSync(join(workDir, "runs", receipt.runId, "events.jsonl"), "utf8");
+    const runRoot = join(workDir, "runs", receipt.runId);
+    const events = readFileSync(join(runRoot, "events.jsonl"), "utf8");
     assert.equal(outcome.outcome, "succeeded", `${JSON.stringify(outcome)}\n${events}`);
-    const evidenceText = readFileSync(join(cwd, "mcp-evidence.jsonl"), "utf8");
-    const evidence = evidenceText.trim().split("\n").map(JSON.parse);
+    assert.equal(existsSync(cwd), false, "Runner should sweep the temporary MCP workspace");
+    const evidence = readMcpEvidence(runRoot);
+    const evidenceText = JSON.stringify(evidence);
     const listed = evidence.find(item => item.step === "tools_list");
     const callResults = evidence.filter(item => item.step === "tool_call");
     const deniedResults = evidence.filter(item => item.step === "tool_call_denied_probe");
     assert.ok(toolNames.every(name => listed?.tools.some(tool => tool.name === name)));
     assert.ok(callResults.every(item => item.ok), JSON.stringify(callResults));
     assert.ok(deniedResults.every(item => item.ok), JSON.stringify(deniedResults));
-    agentRuns.push({ receipt, cwd, evidenceText });
+    agentRuns.push({ receipt, evidenceText });
     return { calls: callResults.map(item => item.result), denied: deniedResults };
   };
 
@@ -220,10 +227,10 @@ try {
   assert.equal((await (await request(site, "/__cp-count")).json()).weeekCreatePosts, 1,
     "reconciliation and replay must not send a second Weeek create request");
 
-  const persisted = agentRuns.flatMap(({ receipt, cwd, evidenceText }) => [
+  const persisted = agentRuns.flatMap(({ receipt, evidenceText }) => [
     ...["events.jsonl", "state.json", "result.json"].map(name =>
       readFileSync(join(workDir, "runs", receipt.runId, name), "utf8")),
-    evidenceText, readFileSync(join(cwd, ".runner/mcp.json"), "utf8")
+    evidenceText
   ]);
   assert.equal(persisted.some(value => value.includes(session)), false,
     "connected-session cookie must not be persisted in Agent Run evidence/config");
