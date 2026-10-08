@@ -10,15 +10,20 @@ import { pathToFileURL } from "node:url";
 const root = resolve(new URL("..", import.meta.url).pathname);
 const runnerRoot = resolve(process.env.AI_AGENT_RUNNER_ROOT ?? "");
 const publicOrigin = (process.env.CRM_SANDBOX_PUBLIC_ORIGIN ?? "").replace(/\/$/, "");
+const appOrigin = (process.env.CRM_SANDBOX_APP_ORIGIN ?? "").replace(/\/$/, "");
 const diagnosticsOrigin = (process.env.CRM_SANDBOX_DIAGNOSTICS_ORIGIN ?? "").replace(/\/$/, "");
 const debugKey = process.env.CRM_CONNECTED_SANDBOX_TEST_KEY;
 if (!process.env.AI_AGENT_RUNNER_ROOT) throw new Error("AI_AGENT_RUNNER_ROOT must point to an isolated Agent Runner checkout");
 if (!publicOrigin) throw new Error("CRM_SANDBOX_PUBLIC_ORIGIN must point to the stable synthetic sandbox ingress");
+if (!appOrigin) throw new Error("CRM_SANDBOX_APP_ORIGIN must point to the synthetic CRM Worker origin configured for same-origin checks");
 if (!diagnosticsOrigin) throw new Error("CRM_SANDBOX_DIAGNOSTICS_ORIGIN must point to the local synthetic Worker loopback only");
 if (!debugKey || debugKey.length < 32) throw new Error("CRM_CONNECTED_SANDBOX_TEST_KEY must be supplied from the sandbox secret store");
 const origin = new URL(publicOrigin);
 assert.equal(origin.protocol, "https:");
 assert.match(origin.hostname, /^[a-z0-9-]+\.skillset-apply\.workers\.dev$/);
+const app = new URL(appOrigin);
+assert.equal(app.protocol, "https:");
+assert.match(app.hostname, /^[a-z0-9-]+\.skillset-apply\.workers\.dev$/);
 const diagnosticsUrl = new URL(diagnosticsOrigin);
 assert.equal(diagnosticsUrl.protocol, "http:");
 assert.ok(["127.0.0.1", "localhost"].includes(diagnosticsUrl.hostname),
@@ -103,7 +108,7 @@ try {
       const body = tool.operation === "prepare" ? args
         : tool.operation === "confirm" ? { revision: args.revision } : {};
       const response = await request(path, { method,
-        headers: { cookie: context.bindingValue, origin: "https://crm.example.invalid",
+        headers: { cookie: context.bindingValue, origin: appOrigin,
           "x-csrf-token": csrf, "content-type": "application/json" },
         ...(method === "GET" ? {} : { body: JSON.stringify(body) }) });
       let result;
@@ -182,16 +187,17 @@ try {
     "neither a prepared review nor an unapproved command may create a deal");
 
   const approvalPrompt = await request("/deal-workflow/confirm", { method: "POST",
-    headers: { cookie: session, origin: publicOrigin, "content-type": "application/x-www-form-urlencoded" },
+    headers: { cookie: session, origin: appOrigin, "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({ _csrf: csrf, reviewId: prepared.reviewId, revision: prepared.revision }) });
   assert.equal(approvalPrompt.status, 409);
-  assert.match(await approvalPrompt.text(), /__sandbox-approve/);
+  assert.match(await approvalPrompt.text(), /https:\/\/cp\.example\.invalid\/v1\/connected-app-approvals\/review\?intent=/,
+    "CRM must direct the user to the configured Control Plane approval page");
   const afterRejectedConfirmation = await diagnostics("/__cp-count");
   assert.equal((await afterRejectedConfirmation.json()).weeekCreatePosts, initialCreatePosts,
     "a rejected or unapproved confirmation must not reach the provider");
   const approvalPage = await request("/__sandbox-approve", { headers: { cookie: session } });
   assert.equal(approvalPage.status, 200);
-  assert.match(await approvalPage.text(), /Синтетическое подтверждение/);
+  assert.match(await approvalPage.text(), /Synthetic approval granted/);
 
   const operationId = prepared.operationId;
   assert.ok(operationId);
