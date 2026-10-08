@@ -29,12 +29,13 @@ const listed = await send({ jsonrpc: "2.0", id: 2, method: "tools/list", params:
 const tool = listed.result?.tools?.find(item => item.name === "crm_exhibitions_catalog_search");
 if (tool?._meta?.capabilityVersion !== "1.1.0") throw new Error("pinned CRM catalog tool missing");
 const invoked = await send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: {
-  name: tool.name, arguments: { exhibitionId: seed.v11ExhibitionId, limit: 5 },
+  name: tool.name, arguments: { exhibitionId: seed.v11ExhibitionId, limit: 5, classification: "target",
+    country: "Sample Federation", revenueBand: "100-1500", profitBand: "0-30" },
   _meta: { capabilityVersion: tool._meta.capabilityVersion }
 } });
 const item = invoked.result?.structuredContent?.items?.[0];
 if (invoked.result?.isError || item?.taxesPaidRub !== 1250000 || item?.employeeCount !== 42 ||
-    item?.directorName !== "Synthetic Director 001") throw new Error("synthetic catalog tool output mismatch");
+    item?.directorName !== "Synthetic Director 001") throw new Error(`synthetic catalog tool output mismatch: ${JSON.stringify(invoked)}`);
 
 await json("/__cp-control?mode=deals_only");
 let denied;

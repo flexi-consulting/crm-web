@@ -26,7 +26,7 @@ function validArgs(value) {
   if (inputSchema.required.some(key => !hasOwn(value, key))) return false;
   for (const [key, item] of Object.entries(value)) {
     const schema = inputSchema.properties[key];
-    if (schema.type === "string") {
+    if (schema.type === "string" || schema.enum) {
       if (typeof item !== "string" || schema.maxLength !== undefined && [...item].length > schema.maxLength ||
           schema.pattern && !(new RegExp(schema.pattern)).test(item) || schema.enum && !schema.enum.includes(item)) return false;
     } else if (schema.type === "integer") {
@@ -69,13 +69,12 @@ function acceptedJson(request) {
   });
 }
 
-function errorForDomain(status, body) {
-  const error = body?.error;
-  if (status === 401 || status === 503) return { code: -32001, message: "AUTH_CONTEXT_UNAVAILABLE", data: { error } };
-  if (status === 403) return { code: -32003, message: "SCOPE_DENIED", data: { error } };
-  if (status === 400) return { code: -32602, message: "INVALID_ARGUMENTS", data: { error } };
-  if (status === 404) return { code: -32004, message: "NOT_FOUND", data: { error } };
-  return { code: -32005, message: "DOMAIN_UNAVAILABLE", data: { error: typeof error === "string" ? error : undefined } };
+function errorForDomain(status) {
+  if (status === 401 || status === 503) return { code: -32001, message: "AUTH_CONTEXT_UNAVAILABLE" };
+  if (status === 403) return { code: -32003, message: "SCOPE_DENIED" };
+  if (status === 400) return { code: -32602, message: "INVALID_ARGUMENTS" };
+  if (status === 404) return { code: -32004, message: "NOT_FOUND" };
+  return { code: -32005, message: "DOMAIN_UNAVAILABLE" };
 }
 
 async function callCatalog(request, args, handleRead) {
@@ -88,7 +87,7 @@ async function callCatalog(request, args, handleRead) {
   if (authorization) headers.set("authorization", authorization);
   const result = await handleRead(new Request(url, { method: "GET", headers }));
   const body = await result.json().catch(() => null);
-  if (!result.ok) return { error: errorForDomain(result.status, body) };
+  if (!result.ok) return { error: errorForDomain(result.status) };
   return { body };
 }
 

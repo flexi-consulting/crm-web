@@ -42,7 +42,8 @@ test("MCP tool call forwards only declared arguments and the Agent bearer to the
     observed = received;
     return Response.json(expected);
   } });
-  const response = await handler(request(call(3, { exhibitionId: "demo-show", query: "Acme & Sons", limit: 5 }), {
+  const response = await handler(request(call(3, { exhibitionId: "demo-show", query: "Acme & Sons", limit: 5,
+    classification: "target", country: "RU", revenueBand: "100-1500", profitBand: "0-30", offset: 2 }), {
     headers: { authorization: `Bearer ${"a".repeat(64)}`, cookie: "must-not-forward" }
   }));
   const message = await response.json();
@@ -52,6 +53,11 @@ test("MCP tool call forwards only declared arguments and the Agent bearer to the
   assert.equal(new URL(observed.url).pathname, "/api/v1/catalogs/demo-show/entries");
   assert.equal(new URL(observed.url).searchParams.get("query"), "Acme & Sons");
   assert.equal(new URL(observed.url).searchParams.get("limit"), "5");
+  assert.equal(new URL(observed.url).searchParams.get("classification"), "target");
+  assert.equal(new URL(observed.url).searchParams.get("country"), "RU");
+  assert.equal(new URL(observed.url).searchParams.get("revenueBand"), "100-1500");
+  assert.equal(new URL(observed.url).searchParams.get("profitBand"), "0-30");
+  assert.equal(new URL(observed.url).searchParams.get("offset"), "2");
   assert.equal(observed.headers.get("authorization"), `Bearer ${"a".repeat(64)}`);
   assert.equal(observed.headers.has("cookie"), false);
   assert.equal(new URL(observed.url).searchParams.has("profileId"), false);
@@ -69,7 +75,9 @@ test("MCP denies unknown, unpinned and invalid calls before invoking the app", a
   assert.equal((await unpinned.json()).error.message, "CAPABILITY_VERSION_MISMATCH");
   const malformed = await handler(request(call(3, { exhibitionId: "demo-show", profileId: "profile-forged" })));
   assert.equal((await malformed.json()).error.message, "INVALID_ARGUMENTS");
-  const wrongVersion = await handler(request(call(4, { exhibitionId: "demo-show" }, { capabilityVersion: "99.0.0" })));
+  const invalidEnum = await handler(request(call(4, { exhibitionId: "demo-show", classification: "maybe" })));
+  assert.equal((await invalidEnum.json()).error.message, "INVALID_ARGUMENTS");
+  const wrongVersion = await handler(request(call(5, { exhibitionId: "demo-show" }, { capabilityVersion: "99.0.0" })));
   assert.equal((await wrongVersion.json()).error.message, "CAPABILITY_VERSION_MISMATCH");
   assert.equal(calls, 0);
 });
@@ -82,6 +90,7 @@ test("MCP maps canonical authorization and domain errors without false success",
     const response = await handler(request(call(1, { exhibitionId: "demo-show" })));
     const result = await response.json();
     assert.equal(result.error.message, code);
+    assert.equal(result.error.data, undefined, "internal canonical error details are not forwarded");
     assert.equal(result.jsonrpc, "2.0");
   }
 });

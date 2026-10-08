@@ -476,7 +476,8 @@ test("connected MCP Worker serves the pinned catalog tool through CP introspecti
     assert.equal(tools[0]._meta.capabilityVersion, "1.1.0");
     const result = await send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: {
       name: "crm_exhibitions_catalog_search",
-      arguments: { exhibitionId: seeded.v11ExhibitionId, limit: 5 },
+      arguments: { exhibitionId: seeded.v11ExhibitionId, limit: 5, classification: "target",
+        country: "Sample Federation", revenueBand: "100-1500", profitBand: "0-30" },
       _meta: { capabilityVersion: "1.1.0" }
     } });
     const content = await result.json();
