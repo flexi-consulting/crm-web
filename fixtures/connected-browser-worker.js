@@ -189,6 +189,9 @@ export default {
       const view = url.searchParams.get("view") ?? "deal";
       if (!["deal", "catalog"].includes(view))
         return Response.json({ error: "unsupported_sandbox_view" }, { status: 400 });
+      const seed = url.searchParams.get("seed");
+      if (seed !== null && (view !== "deal" || !/^[a-f0-9]{12}$/.test(seed)))
+        return Response.json({ error: "invalid_sandbox_seed" }, { status: 400 });
       let returnPath;
       const loginMode = view === "catalog" ? "catalog" : "dealCreate";
       if (view === "catalog") {
@@ -198,11 +201,19 @@ export default {
       } else {
         let buildId = url.searchParams.get("build_id"), companyId = url.searchParams.get("company_id");
         if (!buildId && !companyId) {
-          const generated = await createCatalogBuildService().build({ profileId: "profile_A",
-            idempotencyKey: "connected-worker-seed", exhibitionId: "demo-expo-001" });
+          const idempotencyKey = seed ? `connected-worker-seed-${seed}` : "connected-worker-seed";
+          const seedBuildService = seed ? createCatalogBuildService({ sourceAdapter: {
+            async load(exhibitionId) { return { sourceRevision: `fixture-sandbox-${seed}-r1`, records: [
+              { sourceRecordId: `src-sbx-${seed}`, name: `Synthetic Sandbox Participant ${seed}`,
+                country: "RU", booth: "S-01" }
+            ] }; }
+          } }) : createCatalogBuildService();
+          const generated = await seedBuildService.build({ profileId: "profile_A",
+            idempotencyKey,
+            exhibitionId: "demo-expo-001" });
           const repo = createBuiltCatalogD1Repository(env.CRM_DB);
-          const saved = await repo.saveBuild({ profileRef: "profile_A", idempotencyKey: "connected-worker-seed",
-            build: generated.body });
+          const saved = await repo.saveBuild({ profileRef: "profile_A",
+            idempotencyKey, build: generated.body });
           if (!["stored", "replay"].includes(saved.status))
             return Response.json({ error: "synthetic_catalog_unavailable" }, { status: 503 });
           const listing = await repo.readParticipants({ profileRef: "profile_A", buildId: saved.buildId });
