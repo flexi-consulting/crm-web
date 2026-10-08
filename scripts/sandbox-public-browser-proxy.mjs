@@ -4,14 +4,11 @@
 import { createServer } from "node:http";
 
 const upstream = process.env.CRM_SANDBOX_WORKER_ORIGIN ?? "http://127.0.0.1:33008";
-const publicOrigin = process.env.CRM_SANDBOX_PUBLIC_ORIGIN;
 const port = Number(process.env.CRM_SANDBOX_PROXY_PORT ?? 33006);
 const upstreamUrl = new URL(upstream);
 if (upstreamUrl.protocol !== "http:" || !["127.0.0.1", "localhost"].includes(upstreamUrl.hostname) ||
     upstreamUrl.pathname !== "/" || upstreamUrl.search || upstreamUrl.hash || upstreamUrl.username || upstreamUrl.password)
   throw new Error("CRM_SANDBOX_WORKER_ORIGIN must point to a local Worker origin");
-if (!/^https:\/\//.test(publicOrigin ?? "") || new URL(publicOrigin).origin !== publicOrigin)
-  throw new Error("CRM_SANDBOX_PUBLIC_ORIGIN must be the HTTPS Quick Tunnel origin");
 let pendingApproval = null;
 const escape = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({
   "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;"
@@ -63,13 +60,13 @@ const server = createServer(async (request, response) => {
     outgoingHeaders.delete("content-encoding");
     outgoingHeaders.delete("content-length");
     const location = outgoingHeaders.get("location");
-    if (location?.startsWith("https://crm.example.invalid"))
-      outgoingHeaders.set("location", location.replace("https://crm.example.invalid", publicOrigin));
+    if (location?.startsWith("https://crm.example.invalid/"))
+      outgoingHeaders.set("location", location.slice("https://crm.example.invalid".length));
     let responseBody = Buffer.from(await result.arrayBuffer());
     if (result.headers.get("content-type")?.includes("text/html")) {
       const html = responseBody.toString("utf8").replace(
         /https:\/\/cp\.example\.invalid\/v1\/connected-app-approvals\/review\?intent=[a-f0-9]{64}/g,
-        `${publicOrigin}/__sandbox-approve`);
+        "/__sandbox-approve");
       responseBody = Buffer.from(html);
     }
     response.writeHead(result.status, Object.fromEntries(outgoingHeaders));

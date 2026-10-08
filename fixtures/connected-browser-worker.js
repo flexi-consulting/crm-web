@@ -132,6 +132,46 @@ const connected = createCrmConnectedWorkerHandler({ fetcher: cpFetch,
   resolveWeeekStatusIds: async (profileId) => profileId === "profile_A" ? ["status-lead-A"] : [],
   resolveLeadStatusId: async (profileId) => profileId === "profile_A" ? "status-lead-A" : null });
 
+const seedLegacyCatalog = async (db) => {
+  const generated = await createCatalogBuildService().build({ profileId: "profile_A",
+    idempotencyKey: "connected-worker-seed", exhibitionId: "demo-expo-001" });
+  const repo = createBuiltCatalogD1Repository(db);
+  const saved = await repo.saveBuild({ profileRef: "profile_A", idempotencyKey: "connected-worker-seed",
+    build: generated.body });
+  if (!["stored", "replay"].includes(saved.status)) throw new Error("synthetic catalog seed failed");
+  const listing = await repo.readParticipants({ profileRef: "profile_A", buildId: saved.buildId });
+  const item = listing.body.items[0];
+  await repo.ensurePrelead({ profileRef: "profile_A", buildId: saved.buildId, companyId: item.id });
+  const exhibitionId = "synthetic-current-source-shape";
+  const sourceRows = [{ id: "SYNTH001", n: "Synthetic manufacturing", s: "S-01", t: 1, nt: 0,
+    inn: "0000000001", ogrn: null, ru: 1, country: "Sample Federation",
+    cat: "Synthetic manufacturing", b: "Synthetic source description", seg: "Synthetic segment",
+    rev: 250, ry: 2025, prof: 0, py: 2024, href: "https://example.invalid/synthetic-exhibitor",
+    dir: "Synthetic Director 001", dirpos: "Synthetic director role",
+    taxesPaidRub: 1250000, taxesPaidYear: 2024, taxesPaidProvider: "synthetic-registry",
+    employeeCount: 42, employeeYear: 2025, employeeDefinition: "year_end",
+    employeeCountProvider: "synthetic-registry" }];
+  const legacyV1 = projectLegacyExSnapshot({ profileRef: "profile_A", eventKey: exhibitionId, entries: sourceRows });
+  const legacyV11 = projectLegacyExSnapshotV11({ profileRef: "profile_A", eventKey: exhibitionId, entries: sourceRows });
+  const legacyV12 = projectLegacyExSnapshotV12({ profileRef: "profile_A", eventKey: exhibitionId, entries: sourceRows });
+  if (legacyV1.status !== "projected" || legacyV11.status !== "projected" || legacyV12.status !== "projected")
+    throw new Error("synthetic legacy catalog projection failed");
+  const linkedBuild = await repo.saveBuild({ profileRef: "profile_A", idempotencyKey: legacyV1.idempotencyKey,
+    build: legacyV1.build, legacyRefs: legacyV1.legacyRefs });
+  if (!["stored", "replay"].includes(linkedBuild.status)) throw new Error(`v1.0 linked seed failed: ${linkedBuild.status}`);
+  await repo.ensurePrelead({ profileRef: "profile_A", buildId: linkedBuild.buildId,
+    companyId: legacyV1.legacyRefs[0].companyId });
+  const v11Saved = await createCatalogV11D1Repository(db).saveArtifact({ profileId: "profile_A",
+    artifact: legacyV11.artifact });
+  if (!["stored", "replay"].includes(v11Saved.status)) throw new Error(`v1.1 seed failed: ${v11Saved.status}`);
+  const v12Saved = await createCatalogV12D1Repository(db).saveArtifact({ profileId: "profile_A",
+    artifact: legacyV12.artifact });
+  if (!["stored", "replay"].includes(v12Saved.status)) throw new Error(`v1.2 seed failed: ${v12Saved.status}`);
+  return { buildId: saved.buildId, companyId: item.id, v11ExhibitionId: exhibitionId,
+    v12CompanyId: legacyV12.artifact.companies[0].id, v11CompanyId: legacyV1.legacyRefs[0].companyId,
+    exhibitionId: "demo-expo-001", companyName: item.name };
+};
+
 // Fixture only: all public-shaped routes below call the real Worker composition.
 export default {
   async fetch(request, env) {
@@ -146,26 +186,37 @@ export default {
     const url = new URL(request.url);
     if (url.pathname === "/health") return new Response("ok");
     if (url.pathname === "/__sandbox-login" && request.method === "GET") {
-      let buildId = url.searchParams.get("build_id"), companyId = url.searchParams.get("company_id");
-      if (!buildId && !companyId) {
-        const generated = await createCatalogBuildService().build({ profileId: "profile_A",
-          idempotencyKey: "connected-worker-seed", exhibitionId: "demo-expo-001" });
-        const repo = createBuiltCatalogD1Repository(env.CRM_DB);
-        const saved = await repo.saveBuild({ profileRef: "profile_A", idempotencyKey: "connected-worker-seed",
-          build: generated.body });
-        if (!["stored", "replay"].includes(saved.status))
-          return Response.json({ error: "synthetic_catalog_unavailable" }, { status: 503 });
-        const listing = await repo.readParticipants({ profileRef: "profile_A", buildId: saved.buildId });
-        buildId = saved.buildId;
-        companyId = listing.body?.items?.[0]?.id;
-        if (companyId) await repo.ensurePrelead({ profileRef: "profile_A", buildId, companyId });
+      const view = url.searchParams.get("view") ?? "deal";
+      if (!["deal", "catalog"].includes(view))
+        return Response.json({ error: "unsupported_sandbox_view" }, { status: 400 });
+      let returnPath;
+      const loginMode = view === "catalog" ? "catalog" : "dealCreate";
+      if (view === "catalog") {
+        const seeded = await seedLegacyCatalog(env.CRM_DB);
+        await setFixtureMode("catalog_only");
+        returnPath = `/catalogs/${seeded.v11ExhibitionId}`;
+      } else {
+        let buildId = url.searchParams.get("build_id"), companyId = url.searchParams.get("company_id");
+        if (!buildId && !companyId) {
+          const generated = await createCatalogBuildService().build({ profileId: "profile_A",
+            idempotencyKey: "connected-worker-seed", exhibitionId: "demo-expo-001" });
+          const repo = createBuiltCatalogD1Repository(env.CRM_DB);
+          const saved = await repo.saveBuild({ profileRef: "profile_A", idempotencyKey: "connected-worker-seed",
+            build: generated.body });
+          if (!["stored", "replay"].includes(saved.status))
+            return Response.json({ error: "synthetic_catalog_unavailable" }, { status: 503 });
+          const listing = await repo.readParticipants({ profileRef: "profile_A", buildId: saved.buildId });
+          buildId = saved.buildId;
+          companyId = listing.body?.items?.[0]?.id;
+          if (companyId) await repo.ensurePrelead({ profileRef: "profile_A", buildId, companyId });
+        }
+        if (!/^build-[a-f0-9]{24}$/.test(buildId ?? "") || !/^co-[a-f0-9]{20}$/.test(companyId ?? ""))
+          return Response.json({ error: "synthetic_catalog_required" }, { status: 400 });
+        await setFixtureMode("deal_create");
+        returnPath = `/catalogs/${buildId}/participants/${companyId}/deal`;
       }
-      if (!/^build-[a-f0-9]{24}$/.test(buildId ?? "") || !/^co-[a-f0-9]{20}$/.test(companyId ?? ""))
-        return Response.json({ error: "synthetic_catalog_required" }, { status: 400 });
-      await setFixtureMode("deal_create");
-      const returnPath = `/catalogs/${buildId}/participants/${companyId}/deal`;
       const start = await connected(new Request(`https://crm.example.invalid/auth/connected/start?${
-        new URLSearchParams({ from: "dealCreate", returnTo: returnPath })}`), env);
+        new URLSearchParams({ from: loginMode, returnTo: returnPath })}`), env);
       if (start.status !== 303) return Response.json({ error: "synthetic_login_unavailable" }, { status: 503 });
       const target = new URL(start.headers.get("location"));
       const pending = start.headers.getSetCookie().find((value) => value.startsWith("__Host-crm-connected-pending="))
@@ -186,44 +237,7 @@ export default {
         { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-robots-tag": "noindex" } });
     }
     if (url.pathname === "/__seed") {
-      const generated = await createCatalogBuildService().build({ profileId: "profile_A",
-        idempotencyKey: "connected-worker-seed", exhibitionId: "demo-expo-001" });
-      const saved = await createBuiltCatalogD1Repository(env.CRM_DB, () => new Date().toISOString())
-        .saveBuild({ profileRef: "profile_A", idempotencyKey: "connected-worker-seed", build: generated.body });
-      const repo = createBuiltCatalogD1Repository(env.CRM_DB, () => new Date().toISOString());
-      const listing = await repo.readParticipants({ profileRef: "profile_A", buildId: saved.buildId });
-      const item = listing.body.items[0];
-      await repo.ensurePrelead({ profileRef: "profile_A", buildId: saved.buildId, companyId: item.id });
-      const exhibitionId = "synthetic-current-source-shape";
-      const sourceRows = [{ id: "SYNTH001", n: "Synthetic manufacturing", s: "S-01", t: 1, nt: 0,
-        inn: "0000000001", ogrn: null, ru: 1, country: "Sample Federation",
-        cat: "Synthetic manufacturing", b: "Synthetic source description", seg: "Synthetic segment",
-        rev: 250, ry: 2025, prof: 0, py: 2024, href: "https://example.invalid/synthetic-exhibitor",
-        dir: "Synthetic Director 001", dirpos: "Synthetic director role",
-        taxesPaidRub: 1250000, taxesPaidYear: 2024, taxesPaidProvider: "synthetic-registry",
-        employeeCount: 42, employeeYear: 2025, employeeDefinition: "year_end",
-        employeeCountProvider: "synthetic-registry" }];
-      const legacyV1 = projectLegacyExSnapshot({ profileRef: "profile_A", eventKey: exhibitionId, entries: sourceRows });
-      const legacyV11 = projectLegacyExSnapshotV11({ profileRef: "profile_A", eventKey: exhibitionId, entries: sourceRows });
-      const legacyV12 = projectLegacyExSnapshotV12({ profileRef: "profile_A", eventKey: exhibitionId, entries: sourceRows });
-      if (legacyV1.status !== "projected" || legacyV11.status !== "projected" || legacyV12.status !== "projected")
-        throw new Error("synthetic legacy catalog projection failed");
-      const linkedBuild = await repo.saveBuild({ profileRef: "profile_A", idempotencyKey: legacyV1.idempotencyKey,
-        build: legacyV1.build, legacyRefs: legacyV1.legacyRefs });
-      if (!["stored", "replay"].includes(linkedBuild.status)) throw new Error(`v1.0 linked seed failed: ${linkedBuild.status}`);
-      await repo.ensurePrelead({ profileRef: "profile_A", buildId: linkedBuild.buildId,
-        companyId: legacyV1.legacyRefs[0].companyId });
-      const v11 = createCatalogV11D1Repository(env.CRM_DB);
-      const v11Saved = await v11.saveArtifact({ profileId: "profile_A", artifact: legacyV11.artifact });
-      if (!["stored", "replay"].includes(v11Saved.status)) throw new Error(`v11 seed failed: ${v11Saved.status}`);
-      const v12 = createCatalogV12D1Repository(env.CRM_DB);
-      const v12Saved = await v12.saveArtifact({ profileId: "profile_A", artifact: legacyV12.artifact });
-      if (!["stored", "replay"].includes(v12Saved.status)) throw new Error(`v12 seed failed: ${v12Saved.status}`);
-      return Response.json({ buildId: saved.buildId, companyId: item.id,
-        v11ExhibitionId: exhibitionId,
-        v12CompanyId: legacyV12.artifact.companies[0].id,
-        v11CompanyId: legacyV1.legacyRefs[0].companyId,
-        exhibitionId: "demo-expo-001", companyName: item.name });
+      return Response.json(await seedLegacyCatalog(env.CRM_DB));
     }
     if (url.pathname === "/__cp-control") {
       const state = await setFixtureMode(url.searchParams.get("mode") ?? "active");
