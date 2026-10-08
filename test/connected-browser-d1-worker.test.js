@@ -129,6 +129,17 @@ test("Worker Fetch uses atomic D1 browser handoff and real profile-scoped catalo
     assert.equal(v11Details.status, 200, await v11Details.clone().text());
     const v11Html = await v11Details.text();
     assert.match(v11Html, /Synthetic manufacturing/);
+    const catalogSearch = await call(worker.base, `/api/v1/catalogs/${v11ExhibitionId}/entries?limit=10`,
+      { headers: { cookie: v11Session } });
+    assert.equal(catalogSearch.status, 200, await catalogSearch.clone().text());
+    const catalogSearchBody = await catalogSearch.json();
+    assert.equal(catalogSearchBody.total, 1);
+    assert.equal(catalogSearchBody.items[0].name, "Synthetic manufacturing");
+    await call(worker.base, "/__cp-control?mode=deals_only");
+    const noCatalogScope = await call(worker.base, `/api/v1/catalogs/${v11ExhibitionId}/entries`,
+      { headers: { cookie: v11Session } });
+    assert.equal(noCatalogScope.status, 403, await noCatalogScope.clone().text());
+    await call(worker.base, "/__cp-control?mode=active");
     const v11CardPath = `/catalogs/${v11ExhibitionId}/participants/${v11CompanyId}`;
     assert.match(v11Html, new RegExp(v11CardPath.replaceAll("/", "\\/")));
     assert.equal((await call(worker.base, `${v11CardPath}?profileId=profile_B`,
