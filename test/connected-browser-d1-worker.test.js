@@ -496,7 +496,9 @@ test("connected MCP Worker serves the pinned catalog tool through CP introspecti
     assert.equal((await initialized.json()).result.protocolVersion, "2025-06-18");
     const listing = await send({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
     const tools = (await listing.json()).result.tools;
-    assert.deepEqual(tools.map(tool => tool.name), ["crm_exhibitions_catalog_search"]);
+    assert.deepEqual(tools.map(tool => tool.name), ["crm_exhibitions_catalog_search",
+      "crm_deal_prepare_from_participant", "crm_deal_create_from_participant",
+      "crm_deal_get_operation", "crm_deal_reconcile_operation"]);
     assert.equal(tools[0]._meta.capabilityVersion, "1.1.0");
     const result = await send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: {
       name: "crm_exhibitions_catalog_search",
@@ -540,6 +542,81 @@ test("connected MCP Worker serves the pinned catalog tool through CP introspecti
     } });
     assert.equal((await denied.json()).error.message, "SCOPE_DENIED");
     await call(worker.base, "/__cp-control?mode=active");
+  } finally {
+    if (worker) await stop(worker.child);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("connected MCP S-04 routes profile-bound deal methods through canonical handlers and requires CP approval", async () => {
+  const root = mkdtempSync(join(tmpdir(), "crm-connected-mcp-s04-"));
+  let worker;
+  try {
+    migrate(root);
+    worker = await start(root);
+    const seed = await call(worker.base, "/__sandbox-login?view=deal&seed=012345abcdef");
+    assert.equal(seed.status, 303);
+    const participantUrl = new URL(seed.headers.get("location"), worker.base);
+    const [, buildId, companyId] = participantUrl.pathname.match(/^\/catalogs\/(build-[a-f0-9]{24})\/participants\/(co-[a-f0-9]{20})\/deal$/) ?? [];
+    assert.ok(buildId && companyId, participantUrl.pathname);
+    const diagnostic = await (await call(worker.base,
+      `/__deal-diagnostics?buildId=${buildId}&companyId=${companyId}`)).json();
+    assert.deepEqual(diagnostic, { selectedStatus: 200, selectedError: null, preleadStatus: 200,
+      preleadError: null, resolved: true, contextFound: true, selectedExhibitionId: "demo-expo-001",
+      selectedCompanyId: companyId });
+
+    const headers = { accept: "application/json, text/event-stream", "content-type": "application/json",
+      authorization: `Bearer ${"b".repeat(64)}`, "mcp-protocol-version": "2025-06-18" };
+    const send = (id, name, args, version = "1.0.0") => call(worker.base, "/mcp", { method: "POST", headers,
+      body: JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: {
+        name, arguments: args, _meta: { capabilityVersion: version } } }) });
+    const args = { buildId, companyId, exhibitionId: "demo-expo-001", title: "Synthetic sandbox deal",
+      companyInn: "0000000001", contactName: "Synthetic Contact", dealComment: "Synthetic MCP review." };
+
+    const forgedProfile = await send(1, "crm_deal_prepare_from_participant", { ...args, profileId: "profile_B" });
+    assert.equal((await forgedProfile.json()).error.message, "INVALID_ARGUMENTS");
+    await call(worker.base, "/__cp-control?mode=deals_only");
+    const denied = await send(2, "crm_deal_prepare_from_participant", args);
+    assert.equal((await denied.json()).error.message, "SCOPE_DENIED");
+    await call(worker.base, "/__cp-control?mode=profile_B");
+    const foreign = await send(3, "crm_deal_prepare_from_participant", args);
+    assert.equal((await foreign.json()).error.message, "NOT_FOUND");
+    await call(worker.base, "/__cp-control?mode=deal_create");
+
+    const preparedResponse = await send(4, "crm_deal_prepare_from_participant", args);
+    const preparedBody = await preparedResponse.json();
+    assert.ok(preparedBody.result, JSON.stringify(preparedBody));
+    const prepared = preparedBody.result.structuredContent;
+    assert.equal(prepared.status, "prepared");
+    assert.equal(prepared.details.companyId, companyId);
+    const beforeApproval = await (await call(worker.base, "/__cp-count")).json();
+    assert.equal(beforeApproval.weeekCreatePosts, 0);
+
+    const confirmArgs = { reviewId: prepared.reviewId, revision: prepared.revision };
+    const approvalRequired = await send(5, "crm_deal_create_from_participant", confirmArgs);
+    const pending = (await approvalRequired.json()).result;
+    assert.equal(pending.isError, false);
+    assert.equal(pending._meta.outcome, "pending");
+    assert.equal(pending.structuredContent.error, "human_approval_required");
+    assert.match(pending.structuredContent.approvalUrl, /^https:\/\/cp\.example\.invalid\/v1\/connected-app-approvals\/review\?intent=/);
+    assert.equal((await (await call(worker.base, "/__cp-count")).json()).weeekCreatePosts, 0);
+
+    await call(worker.base, "/__sandbox-approve");
+    const accepted = await send(6, "crm_deal_create_from_participant", confirmArgs);
+    const unknown = (await accepted.json()).result;
+    assert.equal(unknown.isError, false);
+    assert.equal(unknown._meta.outcome, "pending");
+    assert.equal(unknown.structuredContent.status, "unknown");
+    const operationId = prepared.operationId;
+    const reconciledResponse = await send(7, "crm_deal_reconcile_operation", { operationId });
+    const reconciled = (await reconciledResponse.json()).result.structuredContent;
+    assert.equal(reconciled.status, "created");
+    assert.equal(reconciled.linkStatus, "linked");
+    const final = await send(8, "crm_deal_get_operation", { operationId });
+    assert.equal((await final.json()).result.structuredContent.dealId, reconciled.dealId);
+    const counts = await (await call(worker.base, "/__cp-count")).json();
+    assert.equal(counts.weeekCreatePosts, 1, "unknown provider response is reconciled without a second create");
+    assert.equal(counts.foreignEgress, 0);
   } finally {
     if (worker) await stop(worker.child);
     rmSync(root, { recursive: true, force: true });

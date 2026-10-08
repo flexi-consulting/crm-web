@@ -7,7 +7,7 @@ import { createBuiltCatalogD1Repository } from "./built-catalog-d1.js";
 import { createWeeekHttpTransport } from "./weeek-http-transport.js";
 import { createWeeekCorrelationProvider } from "./weeek-correlation-provider.js";
 import { createConnectedAppDealApproval } from "./connected-app-approval.js";
-import { createConnectedCrmReadBoundary } from "./connected-profile-session.js";
+import { createConnectedCrmMcpCallBoundary, createConnectedCrmReadBoundary } from "./connected-profile-session.js";
 import { createCrmConnectedMcpHandler } from "./connected-mcp.js";
 
 const unavailable = () => new Response(JSON.stringify({ error: "connected_browser_unavailable" }), {
@@ -63,6 +63,8 @@ export function createCrmConnectedWorkerHandler({ fetcher = fetch, now = () => D
           resolveDealApproval({ request: receivedRequest, identity: trusted, reviewId, revision, review }) })(received);
       const connectedRead = async (received, identity) => {
         const path = new URL(received.url).pathname;
+        if (path.startsWith("/api/v1/deal-") || path.startsWith("/api/v1/catalog-builds/") ||
+            path.startsWith("/api/v1/catalogs/build-")) return read(received, identity);
         const eventParticipant = path.match(/^\/catalogs\/(?!build-)([a-z0-9][a-z0-9-]{0,79})\/participants\/(co-[a-f0-9]{20})$/);
         const catalogSearch = /^\/api\/v1\/catalogs\/[a-z0-9][a-z0-9-]{0,79}\/entries$/.test(path);
         const exhibition = /^\/catalogs\/(?!build-)[a-z0-9][a-z0-9-]{0,79}$/.test(path);
@@ -88,13 +90,31 @@ export function createCrmConnectedWorkerHandler({ fetcher = fetch, now = () => D
           resolveParticipantCompanyIds: ({ profileId, eventKey }) => builtCatalog.listLegacyParticipantCompanyIds({
             profileRef: profileId, eventKey }) })(received);
       };
+      const connectedMcpCall = async (received, identity) => {
+        const scopes = identity.scopes.flatMap((scope) => scope === "crm.catalog.read"
+          ? ["crm.catalog.build.read.synthetic"] : scope === "crm.deals.read"
+            ? ["crm.deals.review.synthetic", "crm.deals.operations.read.synthetic"] :
+              scope === "crm.deals.create" ? ["crm.deals.review.synthetic", "crm.deals.confirm.synthetic",
+                "crm.deals.create.synthetic", "crm.deals.operations.read.synthetic"] : []);
+        const path = new URL(received.url).pathname;
+        if (path.startsWith("/api/v1/deal-") || path.startsWith("/api/v1/catalog-builds/") ||
+            path.startsWith("/api/v1/catalogs/build-"))
+          return read(received, { ...identity, scopes });
+        return connectedRead(received, { ...identity, scopes });
+      };
       if (pathname === "/mcp") {
         const trustedRead = createConnectedCrmReadBoundary({
           enabled: true, issuer, introspect: client.introspect,
-          handleScopedRequest: connectedRead,
+          handleScopedRequest: connectedMcpCall,
           now: () => Math.floor(now() / 1000)
         });
-        return await createCrmConnectedMcpHandler({ enabled: mcpEnabled, handleRead: trustedRead })(request);
+        const s04Enabled = env?.CRM_CONNECTED_MCP_S04_ENABLED === "true" &&
+          env?.CRM_CONNECTED_ENVIRONMENT === "sandbox" && env?.WEEEK_FIXTURE_DB;
+        const trustedCall = createConnectedCrmMcpCallBoundary({ enabled: true, issuer,
+          introspect: client.introspect, handleScopedRequest: connectedMcpCall,
+          now: () => Math.floor(now() / 1000) });
+        return await createCrmConnectedMcpHandler({ enabled: mcpEnabled, dealsEnabled: s04Enabled,
+          handleRead: trustedRead, handleCall: trustedCall })(request);
       }
       const store = createCrmBrowserD1Store(env.CRM_DB, {
         encryptionKey: env.CRM_CONNECTED_BFF_ENCRYPTION_KEY, now });

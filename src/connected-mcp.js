@@ -1,5 +1,9 @@
 import capability from "../capabilities/s01-exhibition-catalog-search.v1.1.json" with { type: "json" };
 import inputSchema from "../schemas/s01-catalog-search-input.schema.json" with { type: "json" };
+import dealCapability from "../capabilities/s04-deals-agent-mcp.v1.json" with { type: "json" };
+import dealReviewInput from "../schemas/s04-review-input.schema.json" with { type: "json" };
+import dealCreateInput from "../schemas/s04-create-input.schema.json" with { type: "json" };
+import dealOperationInput from "../schemas/s04-operation-input.schema.json" with { type: "json" };
 
 const JSON_HEADERS = {
   "content-type": "application/json; charset=utf-8",
@@ -77,7 +81,7 @@ function errorForDomain(status) {
   return { code: -32005, message: "DOMAIN_UNAVAILABLE" };
 }
 
-async function callCatalog(request, args, handleRead) {
+async function callCatalog(request, args, handleCall) {
   const url = new URL(`/api/v1/catalogs/${encodeURIComponent(args.exhibitionId)}/entries`, request.url);
   for (const [key, value] of Object.entries(args)) {
     if (key !== "exhibitionId") url.searchParams.set(key, String(value));
@@ -85,15 +89,68 @@ async function callCatalog(request, args, handleRead) {
   const headers = new Headers();
   const authorization = request.headers.get("authorization");
   if (authorization) headers.set("authorization", authorization);
-  const result = await handleRead(new Request(url, { method: "GET", headers }));
+  const result = await handleCall(new Request(url, { method: "GET", headers }));
   const body = await result.json().catch(() => null);
   if (!result.ok) return { error: errorForDomain(result.status) };
   return { body };
 }
 
+const exactKeys = (value, schema) => value && typeof value === "object" && !Array.isArray(value) &&
+  Object.keys(value).every((key) => Object.hasOwn(schema.properties, key)) &&
+  schema.required.every((key) => Object.hasOwn(value, key));
+function validDealArgs(tool, args) {
+  const schema = tool.operation === "prepare" ? dealReviewInput :
+    tool.operation === "confirm" ? dealCreateInput : dealOperationInput;
+  if (!exactKeys(args, schema)) return false;
+  for (const [key, value] of Object.entries(args)) {
+    const field = schema.properties[key];
+    if (field.type === "string" && (typeof value !== "string" ||
+        field.minLength !== undefined && [...value].length < field.minLength ||
+        field.maxLength !== undefined && [...value].length > field.maxLength ||
+        field.pattern && !(new RegExp(field.pattern)).test(value))) return false;
+  }
+  if (args.buildId && !/^co-[a-f0-9]{20}$/.test(args.companyId ?? "") ||
+      !args.buildId && /^co-/.test(args.companyId ?? "")) return false;
+  return true;
+}
+
+function dealRequest(request, tool, args) {
+  let path = tool.httpBinding.split(" ", 2)[1];
+  for (const [key, value] of Object.entries(args))
+    path = path.replace(`{${key}}`, encodeURIComponent(value));
+  const method = tool.httpBinding.split(" ", 2)[0];
+  const body = tool.operation === "prepare" ? args : tool.operation === "confirm" ? { revision: args.revision } : {};
+  return new Request(new URL(path, request.url), { method,
+    headers: { authorization: request.headers.get("authorization") ?? "",
+      ...(method === "POST" ? { "content-type": "application/json" } : {}) },
+    ...(method === "POST" ? { body: JSON.stringify(body) } : {}) });
+}
+
+async function invokeDomain(handleCall, request, { expectedPending = false } = {}) {
+  const result = await handleCall(request);
+  const body = await result.json().catch(() => null);
+  if (expectedPending && result.status === 409 && body?.error === "human_approval_required")
+    return { body, pending: true };
+  if (result.status === 202 && body?.status === "unknown") return { body, pending: true };
+  if (!result.ok) return { error: errorForDomain(result.status) };
+  return { body };
+}
+
 /** Stateless Streamable HTTP JSON MCP endpoint for the declared CRM catalog read capability. */
-export function createCrmConnectedMcpHandler({ enabled = false, handleRead } = {}) {
-  if (typeof handleRead !== "function") throw new TypeError("connected CRM MCP requires the trusted canonical read handler");
+export function createCrmConnectedMcpHandler({ enabled = false, dealsEnabled = false,
+  handleRead, handleCall = handleRead } = {}) {
+  if (typeof handleRead !== "function" || typeof handleCall !== "function")
+    throw new TypeError("connected CRM MCP requires trusted canonical handlers");
+  const dealTools = dealCapability.tools.filter((tool) =>
+    ["prepare", "confirm", "get", "reconcile"].includes(tool.operation));
+  const listedTools = [{ name: capability.mcpTool.name, description: capability.description,
+    inputSchema, _meta: { capabilityId: capability.capabilityId, capabilityVersion: capability.version,
+      effect: capability.effect, requiredScopes: capability.requiredScopes } },
+  ...(dealsEnabled ? dealTools.map((tool) => ({ name: tool.name, description: dealCapability.description,
+    inputSchema: JSON.parse(JSON.stringify(tool.operation === "prepare" ? dealReviewInput :
+      tool.operation === "confirm" ? dealCreateInput : dealOperationInput)),
+    _meta: { capabilityId: dealCapability.capabilityId, capabilityVersion: dealCapability.version,
+      effect: tool.operation === "get" ? "read" : "write", requiredScopes: [tool.scope] } })) : [])];
   return async request => {
     if (!enabled) return response({ error: "not_found" }, 404);
     if (request.method !== "POST") return response({ error: "method_not_allowed" }, 405, { allow: "POST" });
@@ -127,36 +184,37 @@ export function createCrmConnectedMcpHandler({ enabled = false, handleRead } = {
       return rpc(message.id, { result: {
         protocolVersion: capability.mcpTool.protocolVersion,
         capabilities: { tools: { listChanged: false } },
-        serverInfo: { name: "crm-web", version: capability.version }
+        serverInfo: { name: "crm-web", version: dealsEnabled ? "1.2.0" : capability.version }
       } });
     }
     if (message.method === "tools/list") {
-      return rpc(message.id, { result: { tools: [{
-        name: capability.mcpTool.name,
-        description: capability.description,
-        inputSchema,
-        _meta: { capabilityId: capability.capabilityId, capabilityVersion: capability.version,
-          effect: capability.effect, requiredScopes: capability.requiredScopes }
-      }] } });
+      return rpc(message.id, { result: { tools: listedTools } });
     }
     if (message.method !== "tools/call")
       return rpc(message.id, { error: { code: -32601, message: "Method not found" } });
 
     const params = message.params;
-    if (params?.name !== capability.mcpTool.name)
+    const dealTool = dealsEnabled && dealTools.find((tool) => tool.name === params?.name);
+    const expectedVersion = dealTool ? dealCapability.version : capability.version;
+    if (params?.name !== capability.mcpTool.name && !dealTool)
       return rpc(message.id, { error: { code: -32602, message: "UNKNOWN_TOOL" } });
-    if (params?._meta?.capabilityVersion !== capability.version)
+    if (params?._meta?.capabilityVersion !== expectedVersion)
       return rpc(message.id, { error: { code: -32002, message: "CAPABILITY_VERSION_MISMATCH" } });
-    if (!validArgs(params.arguments))
+    if (dealTool ? !validDealArgs(dealTool, params.arguments) : !validArgs(params.arguments))
       return rpc(message.id, { error: { code: -32602, message: "INVALID_ARGUMENTS" } });
     let domain;
-    try { domain = await callCatalog(request, params.arguments, handleRead); }
-    catch { return rpc(message.id, { error: { code: -32005, message: "DOMAIN_UNAVAILABLE" } }); }
+    try {
+      domain = dealTool
+        ? await invokeDomain(handleCall, dealRequest(request, dealTool, params.arguments),
+          { expectedPending: dealTool.operation === "confirm" })
+        : await callCatalog(request, params.arguments, handleCall);
+    } catch { return rpc(message.id, { error: { code: -32005, message: "DOMAIN_UNAVAILABLE" } }); }
     if (domain.error) return rpc(message.id, { error: domain.error });
     return rpc(message.id, { result: {
       content: [{ type: "text", text: JSON.stringify(domain.body) }],
       structuredContent: domain.body,
-      isError: false
+      isError: false,
+      ...(domain.pending ? { _meta: { outcome: "pending" } } : {})
     } });
   };
 }

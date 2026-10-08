@@ -6,6 +6,8 @@ compatibility_flags = ["nodejs_compat"]
 [vars]
 CRM_CONNECTED_BROWSER_ENABLED = "true"
 CRM_CONNECTED_MCP_ENABLED = "true"
+CRM_CONNECTED_ENVIRONMENT = "sandbox"
+CRM_CONNECTED_MCP_S04_ENABLED = "true"
 CRM_CONNECTED_CP_ISSUER = "https://cp.example.invalid"
 CRM_CONNECTED_PUBLIC_ORIGIN = "https://crm.example.invalid"
 CRM_CONNECTED_REDIRECT_URI = "https://crm.example.invalid/auth/connected/callback"

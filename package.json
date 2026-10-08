@@ -9,6 +9,7 @@
     "test": "node --test --test-concurrency=1",
     "test:sandbox-agent-catalog": "node scripts/sandbox-agent-catalog-probe.mjs",
     "test:sandbox-public-mcp": "node scripts/sandbox-public-mcp-probe.mjs",
+    "test:sandbox-public-deal-mcp": "node scripts/sandbox-public-deal-mcp-probe.mjs",
     "test:sandbox-agent-s04": "node scripts/sandbox-agent-s04-probe.mjs",
     "test:sandbox-agent-public-deal": "node scripts/sandbox-agent-public-deal-probe.mjs"
   },

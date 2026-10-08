@@ -1,9 +1,10 @@
-name = "crm-web-connected-mcp-sandbox-20261008"
+name = "crm-web-connected-mcp-sandbox-20261008b"
 main = "fixtures/connected-browser-worker.js"
 compatibility_date = "2025-04-01"
 compatibility_flags = ["nodejs_compat"]
 workers_dev = true
 preview_urls = false
+
 
 # Provision CRM_CONNECTED_SANDBOX_TEST_KEY as a Wrangler secret. Public fixture
 # control, seeding, login, approval and diagnostics routes fail closed without it.
@@ -11,17 +12,20 @@ preview_urls = false
 [vars]
 CRM_CONNECTED_BROWSER_ENABLED = "true"
 CRM_CONNECTED_MCP_ENABLED = "true"
+CRM_CONNECTED_ENVIRONMENT = "sandbox"
+CRM_CONNECTED_MCP_S04_ENABLED = "true"
 CRM_CONNECTED_CP_ISSUER = "https://cp.example.invalid"
-CRM_CONNECTED_PUBLIC_ORIGIN = "https://crm-web-connected-mcp-sandbox-20261008.skillset-apply.workers.dev"
-CRM_CONNECTED_REDIRECT_URI = "https://crm-web-connected-mcp-sandbox-20261008.skillset-apply.workers.dev/auth/connected/callback"
+CRM_CONNECTED_PUBLIC_ORIGIN = "https://crm-web-connected-mcp-sandbox-20261008b.skillset-apply.workers.dev"
+CRM_CONNECTED_REDIRECT_URI = "https://crm-web-connected-mcp-sandbox-20261008b.skillset-apply.workers.dev/auth/connected/callback"
 CRM_CONNECTED_DEFAULT_CATALOG_PATH = "/catalogs/build-aaaaaaaaaaaaaaaaaaaaaaaa"
 CRM_CONNECTED_CP_SERVICE_KEY = "local-test-service-key-12345678901234567890"
 CRM_CONNECTED_BFF_ENCRYPTION_KEY = "1111111111111111111111111111111111111111111111111111111111111111"
 
 [[d1_databases]]
 binding = "CRM_DB"
-database_name = "crm-web-connected-mcp-sandbox-20261008"
-database_id = "ba549a78-7956-4e30-9507-9f9e710a23ee"
+database_name = "crm-web-connected-mcp-sandbox-20261008b"
+database_id = "05071a50-3c2b-48a4-a7a6-86bfc5877e94"
+migrations_dir = "migrations"
 
 [[d1_databases]]
 binding = "WEEEK_FIXTURE_DB"
