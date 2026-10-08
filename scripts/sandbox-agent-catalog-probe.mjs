@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -36,6 +36,11 @@ const run = (command, args, options = {}) => {
 const cookie = (response, name) => response.headers.getSetCookie().map(part => part.split(";")[0])
   .find(part => part.startsWith(`${name}=`));
 const request = (base, path, options = {}) => fetch(`${base}${path}`, { redirect: "manual", ...options });
+const readMcpEvidence = (runRoot) => readFileSync(join(runRoot, "events.jsonl"), "utf8")
+  .trim().split("\n").map(JSON.parse)
+  .filter(event => event.type === "log" && event.payload?.stream === "stdout" &&
+    event.payload.message.startsWith("mcp-evidence: "))
+  .map(event => JSON.parse(event.payload.message.slice("mcp-evidence: ".length)));
 let worker;
 let runner;
 
@@ -132,9 +137,11 @@ try {
   assert.equal(validated.ok, true, validated.errors?.join("; "));
   const receipt = runner.start(validated.value);
   const outcome = await runner.waitFor(receipt.runId, 30_000);
-  assert.equal(outcome.outcome, "succeeded");
-  const evidence = JSON.parse(readFileSync(join(validated.value.cwd, "mcp-evidence.jsonl"), "utf8").trim().split("\n").at(-1) ?? "{}");
-  const lines = readFileSync(join(validated.value.cwd, "mcp-evidence.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
+  const runRoot = join(workDir, "runs", receipt.runId);
+  const eventText = readFileSync(join(runRoot, "events.jsonl"), "utf8");
+  assert.equal(outcome.outcome, "succeeded", `${JSON.stringify(outcome)}\n${eventText}`);
+  assert.equal(existsSync(validated.value.cwd), false, "Runner should sweep the temporary MCP workspace");
+  const lines = readMcpEvidence(runRoot);
   const listed = lines.find(item => item.step === "tools_list");
   const toolCall = lines.find(item => item.step === "tool_call");
   assert.ok(listed?.tools.some(tool => tool.name === toolName && tool.effect === "read"));
@@ -143,10 +150,7 @@ try {
   assert.equal(toolCall.result.items[0].taxesPaidRub, 1250000);
   assert.equal(toolCall.result.items[0].employeeCount, 42);
   assert.equal(toolCall.result.items[0].directorName, "Synthetic Director 001");
-  const runRoot = join(workDir, "runs", receipt.runId);
   const surfaces = ["events.jsonl", "state.json", "result.json"].map(name => readFileSync(join(runRoot, name), "utf8"));
-  surfaces.push(readFileSync(join(validated.value.cwd, "mcp-evidence.jsonl"), "utf8"));
-  surfaces.push(readFileSync(join(validated.value.cwd, ".runner/mcp.json"), "utf8"));
   assert.equal(surfaces.some(value => value.includes(sessionBinding)), false,
     "session credential must not appear in Agent Run evidence or MCP config");
   process.stdout.write(`${JSON.stringify({ outcome: "pass", runner: "FakeEngine over Agent Runner MCP bridge",
