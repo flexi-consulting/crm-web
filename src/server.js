@@ -115,7 +115,7 @@ export function createServer({
     serviceManifest.capabilities.splice(participantIndex + 1, 0, {
       id: s01CatalogSearchCapability.capabilityId, version: s01CatalogSearchCapability.version, required: true,
       inputSchemaRef: s01CatalogSearchCapability.inputSchemaRef, outputSchemaRef: s01CatalogSearchCapability.outputSchemaRef,
-      errorsSchemaRef: s01CatalogSearchCapability.errorsSchemaRef, descriptorRef: "capabilities/s01-exhibition-catalog-search.v1.json",
+      errorsSchemaRef: s01CatalogSearchCapability.errorsSchemaRef, descriptorRef: "capabilities/s01-exhibition-catalog-search.v1.1.json",
       handlerBinding: s01CatalogSearchCapability.handlerBinding, mcpTool: s01CatalogSearchCapability.mcpTool,
       effect: s01CatalogSearchCapability.effect, requiredScopes: s01CatalogSearchCapability.requiredScopes,
       operationRef: s01CatalogSearchCapability.httpBinding

@@ -8,7 +8,7 @@ import { createHash } from "node:crypto";
 import { createServer } from "../src/server.js";
 import { createCatalogBuildService, createSyntheticSourceAdapter, createSyntheticEnrichmentAdapter, createSyntheticRegistryAdapter, normalizeEnrichment, normalizeRegistry, qualify } from "../src/catalog-build.js";
 import { renderCatalogPreview } from "../src/catalog-preview.js";
-import { importLegacyExSnapshotV11, projectLegacyExSnapshotV11 } from "../src/legacy-ex-snapshot.js";
+import { importLegacyExSnapshotV11, projectLegacyExSnapshotV11, projectLegacyExSnapshotV12 } from "../src/legacy-ex-snapshot.js";
 import { queryCatalogV11, renderCatalogV11, createCatalogV11ReadHandler,
   createCatalogV11SearchHandler, createCatalogV11D1Repository } from "../src/catalog-query-v11.js";
 import initSqlJs from "sql.js";
@@ -212,6 +212,74 @@ test("S-01 v1.1 metadata schema preserves synthetic legacy filter fields with ex
   assert.equal((await searchRequest("demo-profile-a", "", "")).status, 403);
   assert.equal((await searchRequest("demo-profile-b")).status, 404);
   assert.equal((await searchRequest("unavailable")).status, 503);
+});
+
+test("S-01 v1.2 golden carries public business facts with period and provenance, and keeps unknown values null", async () => {
+  const row = { id: "SYNTH001", n: "Synthetic Public Company", s: "S-01", t: 1, nt: 0,
+    inn: "0000000001", ogrn: null, ru: 1, country: "Sample Federation", cat: "Manufacturing",
+    b: "Synthetic source description", seg: "Synthetic segment", rev: 250, ry: 2025,
+    prof: 0, py: 2024, href: "https://example.invalid/company", dir: "Synthetic Director",
+    dirpos: "Synthetic director role", taxesPaidRub: 1_250_000, taxesPaidYear: 2024,
+    taxesPaidProvider: "synthetic-registry", employeeCount: 42, employeeYear: 2025,
+    employeeDefinition: "year_end", employeeCountProvider: "synthetic-registry" };
+  const projected = projectLegacyExSnapshotV12({ profileRef: "demo-profile-a",
+    eventKey: "synthetic-business-facts", entries: [row] });
+  assert.equal(projected.status, "projected");
+  const company = projected.artifact.companies[0];
+  assert.deepEqual(company.source.director, { name: "Synthetic Director", position: "Synthetic director role",
+    provenance: { provider: "legacy-ex-snapshot", fixtureRef: projected.artifact.sourceRevision } });
+  assert.deepEqual(company.enrichment.taxesPaid, { amountRub: 1_250_000, period: "2024",
+    provenance: { provider: "synthetic-registry", fixtureRef: projected.artifact.sourceRevision } });
+  assert.deepEqual(company.enrichment.employeeCount, { count: 42, period: "2025", definition: "year_end",
+    provenance: { provider: "synthetic-registry", fixtureRef: projected.artifact.sourceRevision } });
+  const missing = projectLegacyExSnapshotV12({ profileRef: "demo-profile-a", eventKey: "synthetic-business-facts",
+    entries: [{ ...row, dir: undefined, dirpos: undefined, taxesPaidRub: undefined, taxesPaidYear: undefined,
+      taxesPaidProvider: undefined, employeeCount: undefined, employeeYear: undefined,
+      employeeDefinition: undefined, employeeCountProvider: undefined }] }).artifact.companies[0];
+  assert.deepEqual(missing.source.director, { name: null, position: null, provenance: null });
+  assert.deepEqual(missing.enrichment.taxesPaid, { amountRub: null, period: null, provenance: null });
+  assert.deepEqual(missing.enrichment.employeeCount, { count: null, period: null, definition: null, provenance: null });
+  for (const invalid of [{ taxesPaidRub: -1 }, { taxesPaidRub: 1.5 }, { taxesPaidYear: 1800 },
+    { employeeCount: -1 }, { employeeCount: 2.5 }, { employeeDefinition: "invented" }]) {
+    assert.equal(projectLegacyExSnapshotV12({ profileRef: "demo-profile-a", eventKey: "synthetic-business-facts",
+      entries: [{ ...row, ...invalid }] }).status, "legacy_record_invalid");
+  }
+  const schema = JSON.parse(await readFile(new URL("../schemas/catalog-build-artifact-v1.2.schema.json", import.meta.url)));
+  const validate = new Ajv({ strict: false }).compile(schema);
+  assert.equal(validate(projected.artifact), true, JSON.stringify(validate.errors));
+  const outputSchema = JSON.parse(await readFile(new URL("../schemas/s01-catalog-search-output.schema.json", import.meta.url)));
+  const outputAjv = new Ajv({ strict: true });
+  addFormats(outputAjv);
+  const validateOutput = outputAjv.compile(outputSchema);
+  const item = { id: company.id, name: company.name, country: company.source.country, booth: company.source.booth,
+    category: company.source.category, description: company.source.description, segment: company.source.segment,
+    revenueRub: company.enrichment.revenueRub, revenueYear: company.enrichment.revenueYear,
+    profitRub: company.enrichment.profitRub, profitYear: company.enrichment.profitYear,
+    activity: company.enrichment.activity, website: company.enrichment.website, classification: "target",
+    taxesPaidRub: company.enrichment.taxesPaid.amountRub, taxesPaidPeriod: company.enrichment.taxesPaid.period,
+    taxesPaidProvenance: company.enrichment.taxesPaid.provenance,
+    employeeCount: company.enrichment.employeeCount.count, employeePeriod: company.enrichment.employeeCount.period,
+    employeeDefinition: company.enrichment.employeeCount.definition,
+    employeeProvenance: company.enrichment.employeeCount.provenance,
+    directorName: company.source.director.name, directorPosition: company.source.director.position,
+    directorProvenance: company.source.director.provenance };
+  const output = { domainApiVersion: "1.1.0", artifactVersion: "1.2.0", exhibitionId: projected.artifact.exhibitionId,
+    sourceRevision: projected.artifact.sourceRevision, total: 1, limit: 25, offset: 0, items: [item] };
+  assert.equal(validateOutput(output), true, JSON.stringify(validateOutput.errors));
+  const v11Output = { ...output, domainApiVersion: "1.0.0", artifactVersion: "1.1.0",
+    items: [{ ...item, taxesPaidRub: undefined, taxesPaidPeriod: undefined, taxesPaidProvenance: undefined,
+      employeeCount: undefined, employeePeriod: undefined, employeeDefinition: undefined, employeeProvenance: undefined,
+      directorName: undefined, directorPosition: undefined, directorProvenance: undefined }] };
+  for (const [label, mutate] of [
+    ["known taxes require provenance", value => { value.items[0].taxesPaidProvenance = null; }],
+    ["known taxes require a period", value => { value.items[0].taxesPaidPeriod = null; }],
+    ["artifact and domain API versions must agree", value => { value.domainApiVersion = "1.0.0"; }],
+    ["v1.1 forbids v1.2 fields", value => { value.items[0].directorName = null; }]
+  ]) {
+    const invalid = structuredClone(label === "v1.1 forbids v1.2 fields" ? v11Output : output);
+    mutate(invalid);
+    assert.equal(validateOutput(invalid), false, label);
+  }
 });
 
 test("S-01 v1.1 D1 repository persists durable profile-scoped artifacts and verifies content hash", async () => {

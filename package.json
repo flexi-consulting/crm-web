@@ -6,7 +6,8 @@
   "description": "Synthetic CRM and exhibitions domain API foundation",
   "scripts": {
     "start": "node src/server.js",
-    "test": "node --test --test-concurrency=1"
+    "test": "node --test --test-concurrency=1",
+    "test:sandbox-agent-catalog": "node scripts/sandbox-agent-catalog-probe.mjs"
   },
   "devDependencies": {
     "ajv": "^8.17.1",

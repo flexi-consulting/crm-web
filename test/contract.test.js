@@ -41,10 +41,10 @@ test("manifest declares stable v1 read-only contract and capabilities", async ()
         effect: "read", requiredScopes: ["crm.companies.read"], operationRef: "GET /api/v1/companies"
       },
       {
-        id: "crm.exhibitions.catalog.search", version: "1.0.0", required: true,
+        id: "crm.exhibitions.catalog.search", version: "1.1.0", required: true,
         inputSchemaRef: "schemas/s01-catalog-search-input.schema.json", outputSchemaRef: "schemas/s01-catalog-search-output.schema.json",
-        errorsSchemaRef: "schemas/s01-catalog-search-errors.schema.json", descriptorRef: "capabilities/s01-exhibition-catalog-search.v1.json",
-        handlerBinding: "src/catalog-query-v11.js#createCatalogV11SearchHandler", mcpTool: { name: "crm_exhibitions_catalog_search", protocolVersion: "2025-06-18" },
+        errorsSchemaRef: "schemas/s01-catalog-search-errors.schema.json", descriptorRef: "capabilities/s01-exhibition-catalog-search.v1.1.json",
+        handlerBinding: "src/catalog-query-v11.js#createCatalogV12CompatibleSearchHandler", mcpTool: { name: "crm_exhibitions_catalog_search", protocolVersion: "2025-06-18" },
         effect: "read", requiredScopes: ["crm.catalog.read"], operationRef: "GET /api/v1/catalogs/{exhibitionId}/entries"
       },
       {
@@ -60,7 +60,8 @@ test("manifest declares stable v1 read-only contract and capabilities", async ()
     assert.deepEqual(s01.requiredScopes, ["crm.companies.read"]);
     const catalogSearch = body.capabilities.find((capability) => capability.id === "crm.exhibitions.catalog.search");
     assert.ok(catalogSearch);
-    assert.equal(catalogSearch.handlerBinding, "src/catalog-query-v11.js#createCatalogV11SearchHandler");
+    assert.equal(catalogSearch.version, "1.1.0");
+    assert.equal(catalogSearch.handlerBinding, "src/catalog-query-v11.js#createCatalogV12CompatibleSearchHandler");
     assert.equal(catalogSearch.operationRef, "GET /api/v1/catalogs/{exhibitionId}/entries");
     assert.deepEqual(catalogSearch.requiredScopes, ["crm.catalog.read"]);
     assert.equal(body.capabilities.some((capability) => capability.id.startsWith("crm.deal_intents.")), false);
