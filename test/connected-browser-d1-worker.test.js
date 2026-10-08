@@ -44,7 +44,7 @@ function migrate(root) {
     "0004_legacy_catalog_refs.sql", "0005_connected_browser_sessions.sql",
     "0006_connected_browser_mode.sql", "0007_connected_browser_s04_commands.sql",
     "0008_cp_approval_intents.sql", "0009_encrypt_connected_browser_secrets.sql",
-    "0010_catalog_v11_artifacts.sql"]) {
+    "0010_catalog_v11_artifacts.sql", "0011_catalog_v12_artifacts.sql"]) {
     const result = spawnSync(node, [wrangler, "d1", "execute", "CRM_DB", "--config", config,
       "--local", "--persist-to", root, "--file", `migrations/${file}`, "--yes", "--json"],
     { cwd, encoding: "utf8" });
@@ -72,7 +72,8 @@ test("Worker Fetch uses atomic D1 browser handoff and real profile-scoped catalo
       cpCalls: 0, foreignEgress: 0, approvalPrepareCalls: 0, approvalConsumeCalls: 0, weeekCreatePosts: 0
     }, "missing encryption key fails closed before external requests or writes");
     const seeded = await (await call(worker.base, "/__seed")).json();
-    const { buildId, v11ExhibitionId, v11CompanyId } = seeded;
+    const { buildId, v11ExhibitionId, v11CompanyId, v12CompanyId } = seeded;
+    assert.equal(v12CompanyId, v11CompanyId, "versioned catalog preserves participant identity");
     const deepLink = await call(worker.base, `/catalogs/${buildId}`);
     assert.equal(deepLink.status, 303);
     assert.equal(new URL(deepLink.headers.get("location")).searchParams.get("returnTo"), `/catalogs/${buildId}`);
@@ -129,12 +130,23 @@ test("Worker Fetch uses atomic D1 browser handoff and real profile-scoped catalo
     assert.equal(v11Details.status, 200, await v11Details.clone().text());
     const v11Html = await v11Details.text();
     assert.match(v11Html, /Synthetic manufacturing/);
+    assert.match(v11Html, /Уплаченные налоги: 1,25 млн ₽ \(2024\)/);
+    assert.match(v11Html, /Сотрудники: 42 \(2025\)/);
+    assert.match(v11Html, /Директор: Synthetic Director 001 · Synthetic director role/);
     const catalogSearch = await call(worker.base, `/api/v1/catalogs/${v11ExhibitionId}/entries?limit=10`,
       { headers: { cookie: v11Session } });
     assert.equal(catalogSearch.status, 200, await catalogSearch.clone().text());
     const catalogSearchBody = await catalogSearch.json();
     assert.equal(catalogSearchBody.total, 1);
     assert.equal(catalogSearchBody.items[0].name, "Synthetic manufacturing");
+    assert.equal(catalogSearchBody.artifactVersion, "1.2.0");
+    assert.equal(catalogSearchBody.items[0].taxesPaidRub, 1250000);
+    assert.equal(catalogSearchBody.items[0].taxesPaidPeriod, "2024");
+    assert.equal(catalogSearchBody.items[0].employeeCount, 42);
+    assert.equal(catalogSearchBody.items[0].employeePeriod, "2025");
+    assert.equal(catalogSearchBody.items[0].directorName, "Synthetic Director 001");
+    assert.deepEqual(catalogSearchBody.items[0].directorProvenance, {
+      provider: "legacy-ex-snapshot", fixtureRef: catalogSearchBody.sourceRevision });
     await call(worker.base, "/__cp-control?mode=deals_only");
     const noCatalogScope = await call(worker.base, `/api/v1/catalogs/${v11ExhibitionId}/entries`,
       { headers: { cookie: v11Session } });
@@ -147,8 +159,12 @@ test("Worker Fetch uses atomic D1 browser handoff and real profile-scoped catalo
     assert.equal((await call(worker.base,
       `/catalogs/${v11ExhibitionId}/participants/co-${"0".repeat(20)}`, { headers: { cookie: v11Session } })).status, 404);
     const v11CardRedirect = await call(worker.base, v11CardPath, { headers: { cookie: v11Session } });
-    assert.equal(v11CardRedirect.status, 303, await v11CardRedirect.clone().text());
-    const canonicalCardPath = new URL(v11CardRedirect.headers.get("location"), "https://crm.example.invalid").pathname;
+    assert.equal(v11CardRedirect.status, 200, await v11CardRedirect.clone().text());
+    const v12ParticipantCard = await v11CardRedirect.text();
+    assert.match(v12ParticipantCard, /Synthetic Director 001/);
+    assert.match(v12ParticipantCard, /Уплаченные налоги/);
+    assert.match(v12ParticipantCard, /Сотрудники/);
+    const canonicalCardPath = v12ParticipantCard.match(/href="([^\"]+)"/)?.[1];
     assert.match(canonicalCardPath, /^\/catalogs\/build-[a-f0-9]{24}\/participants\/co-[a-f0-9]{20}$/);
     const canonicalCard = await call(worker.base, canonicalCardPath, { headers: { cookie: v11Session } });
     assert.equal(canonicalCard.status, 200, await canonicalCard.clone().text());

@@ -2,7 +2,7 @@ import { createCrmConnectedBrowserHandler, createCrmControlPlaneClient } from ".
 import { createCrmBrowserD1Store } from "./connected-browser-d1-store.js";
 import { createBuiltCatalogD1HttpHandler } from "./built-catalog-d1-http.js";
 import { createCatalogV11ReadHandler, createCatalogV11SearchHandler, createCatalogV11ParticipantLinkHandler,
-  createCatalogV11D1Repository } from "./catalog-query-v11.js";
+  createCatalogV11D1Repository, createCatalogV12D1Repository, createCatalogVersionedD1Repository } from "./catalog-query-v11.js";
 import { createBuiltCatalogD1Repository } from "./built-catalog-d1.js";
 import { createWeeekHttpTransport } from "./weeek-http-transport.js";
 import { createWeeekCorrelationProvider } from "./weeek-correlation-provider.js";
@@ -70,16 +70,18 @@ export function createCrmConnectedWorkerHandler({ fetcher = fetch, now = () => D
           scopes: identity.scopes.includes("crm.catalog.read") ||
             identity.scopes.includes("crm.catalog.build.read.synthetic") ? ["crm.catalog.read"] : [] });
         const catalogV11 = createCatalogV11D1Repository(env.CRM_DB);
+        const catalog = createCatalogVersionedD1Repository({ v11: catalogV11,
+          v12: createCatalogV12D1Repository(env.CRM_DB) });
         const builtCatalog = createBuiltCatalogD1Repository(env.CRM_DB);
         if (eventParticipant) return createCatalogV11ParticipantLinkHandler({
-          repository: catalogV11, resolveTrustedProfile,
+          repository: catalog, resolveTrustedProfile,
           resolveLegacyParticipant: ({ profileId, eventKey, companyId }) =>
             builtCatalog.resolveLegacyParticipantByCompanyId({
               profileRef: profileId, eventKey, companyId })
         })(received);
-        if (catalogSearch) return createCatalogV11SearchHandler({ repository: catalogV11,
+        if (catalogSearch) return createCatalogV11SearchHandler({ repository: catalog,
           resolveTrustedProfile })(received);
-        return createCatalogV11ReadHandler({ repository: catalogV11, resolveTrustedProfile,
+        return createCatalogV11ReadHandler({ repository: catalog, resolveTrustedProfile,
           resolveParticipantCompanyIds: ({ profileId, eventKey }) => builtCatalog.listLegacyParticipantCompanyIds({
             profileRef: profileId, eventKey }) })(received);
       };

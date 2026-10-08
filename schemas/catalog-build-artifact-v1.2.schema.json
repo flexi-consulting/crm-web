@@ -1,0 +1,421 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crm-web.example.invalid/schemas/catalog-build-artifact-v1.2.schema.json",
+  "title": "Exhibition catalog artifact with provenance-bound public business facts",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "exhibitionId",
+    "sourceRevision",
+    "companies"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "1.2.0"
+    },
+    "exhibitionId": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,79}$"
+    },
+    "sourceRevision": {
+      "type": "string",
+      "minLength": 1
+    },
+    "companies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "name",
+          "source",
+          "enrichment",
+          "registry",
+          "qualification"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^co-[a-f0-9]{20}$"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "sourceRecordId",
+              "country",
+              "booth",
+              "href",
+              "category",
+              "description",
+              "segment",
+              "duplicateSourceRecordIds",
+              "director"
+            ],
+            "properties": {
+              "sourceRecordId": {
+                "type": "string",
+                "pattern": "^src-[a-z0-9-]{1,48}$"
+              },
+              "country": {
+                "type": "string",
+                "minLength": 1
+              },
+              "booth": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "maxLength": 80
+              },
+              "href": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "pattern": "^https?:\\/\\/[^\\s]+$"
+              },
+              "category": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "maxLength": 240
+              },
+              "description": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "maxLength": 2000
+              },
+              "segment": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "maxLength": 120
+              },
+              "duplicateSourceRecordIds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^src-[a-z0-9-]{1,48}$"
+                }
+              },
+              "director": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "name",
+                  "position",
+                  "provenance"
+                ],
+                "properties": {
+                  "name": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 160
+                  },
+                  "position": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 160
+                  },
+                  "provenance": {
+                    "oneOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "$ref": "#/$defs/provenance"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "enrichment": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "status",
+              "inn",
+              "ogrn",
+              "revenueRub",
+              "revenueYear",
+              "profitRub",
+              "profitYear",
+              "activity",
+              "website",
+              "provenance",
+              "taxesPaid",
+              "employeeCount"
+            ],
+            "properties": {
+              "status": {
+                "enum": [
+                  "found",
+                  "not_found",
+                  "unavailable"
+                ]
+              },
+              "inn": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "pattern": "^([0-9]{10}|[0-9]{12})$"
+              },
+              "ogrn": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "pattern": "^([0-9]{13}|[0-9]{15})$"
+              },
+              "revenueRub": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "revenueYear": {
+                "$ref": "#/$defs/yearOrNull"
+              },
+              "profitRub": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "profitYear": {
+                "$ref": "#/$defs/yearOrNull"
+              },
+              "activity": {
+                "enum": [
+                  "manufacturer",
+                  "distributor",
+                  "service",
+                  "unknown"
+                ]
+              },
+              "website": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "pattern": "^https?:\\/\\/[^\\s]+$"
+              },
+              "provenance": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "provider",
+                  "fixtureRef"
+                ],
+                "properties": {
+                  "provider": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "fixtureRef": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              },
+              "taxesPaid": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "amountRub",
+                  "period",
+                  "provenance"
+                ],
+                "properties": {
+                  "amountRub": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 0
+                  },
+                  "period": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "pattern": "^\\d{4}$"
+                  },
+                  "provenance": {
+                    "oneOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "$ref": "#/$defs/provenance"
+                      }
+                    ]
+                  }
+                }
+              },
+              "employeeCount": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "count",
+                  "period",
+                  "definition",
+                  "provenance"
+                ],
+                "properties": {
+                  "count": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 0
+                  },
+                  "period": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "pattern": "^\\d{4}$"
+                  },
+                  "definition": {
+                    "enum": [
+                      "year_end",
+                      "annual_average",
+                      "unknown",
+                      null
+                    ]
+                  },
+                  "provenance": {
+                    "oneOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "$ref": "#/$defs/provenance"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "registry": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "status",
+              "provenance"
+            ],
+            "properties": {
+              "status": {
+                "enum": [
+                  "ok",
+                  "sanctioned",
+                  "not_found",
+                  "inactive",
+                  "unknown"
+                ]
+              },
+              "provenance": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "source",
+                  "fixtureRef"
+                ],
+                "properties": {
+                  "source": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "fixtureRef": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          },
+          "qualification": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "classification",
+              "target",
+              "nearTarget",
+              "reason"
+            ],
+            "properties": {
+              "classification": {
+                "enum": [
+                  "target",
+                  "near_target",
+                  "not_target",
+                  "unknown"
+                ]
+              },
+              "target": {
+                "type": "boolean"
+              },
+              "nearTarget": {
+                "type": "boolean"
+              },
+              "reason": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "yearOrNull": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1900,
+      "maximum": 2200
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "fixtureRef"
+      ],
+      "properties": {
+        "provider": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "fixtureRef": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        }
+      }
+    }
+  }
+}

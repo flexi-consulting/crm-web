@@ -182,9 +182,66 @@ export function projectLegacyExSnapshotV11({ profileRef, eventKey, entries }) {
   return { status: "projected", artifact: { schemaVersion: "1.1.0", exhibitionId: eventKey, sourceRevision, companies } };
 }
 
+// V1.2 is additive and leaves the v1.1 projection and its stored contract intact.
+// The director originates in the archived exhibition row; tax and employee facts
+// require explicit provider and period evidence from an enrichment source.
+export function projectLegacyExSnapshotV12({ profileRef, eventKey, entries }) {
+  if (!Array.isArray(entries)) return { status: "invalid_snapshot" };
+  const isOptionalCount = value => value == null || value === "" || Number.isSafeInteger(value) && value >= 0;
+  for (const row of entries) {
+    if (!row || typeof row !== "object" || Array.isArray(row) ||
+        optionalText(row.dir, 160) === undefined || optionalText(row.dirpos, 160) === undefined ||
+        !isOptionalCount(row.taxesPaidRub) || legacyYear(row.taxesPaidYear) === undefined ||
+        !isOptionalCount(row.employeeCount) || legacyYear(row.employeeYear) === undefined ||
+        ![null, "year_end", "annual_average", "unknown"].includes(row.employeeDefinition ?? null) ||
+        (row.taxesPaidRub != null && (!Number.isInteger(row.taxesPaidYear) || typeof row.taxesPaidProvider !== "string" || !row.taxesPaidProvider.trim())) ||
+        (row.employeeCount != null && (!Number.isInteger(row.employeeYear) || typeof row.employeeCountProvider !== "string" || !row.employeeCountProvider.trim())))
+      return { status: "legacy_record_invalid" };
+  }
+  const projected = projectLegacyExSnapshotV11({ profileRef, eventKey, entries });
+  if (projected.status !== "projected") return projected;
+  const facts = entries.map(row => ({ id: row.id, dir: optionalText(row.dir, 160), dirpos: optionalText(row.dirpos, 160),
+    taxesPaidRub: row.taxesPaidRub ?? null, taxesPaidYear: legacyYear(row.taxesPaidYear),
+    taxesPaidProvider: row.taxesPaidRub == null ? null : row.taxesPaidProvider.trim(),
+    employeeCount: row.employeeCount ?? null, employeeYear: legacyYear(row.employeeYear),
+    employeeDefinition: row.employeeCount == null ? null : row.employeeDefinition ?? "unknown",
+    employeeCountProvider: row.employeeCount == null ? null : row.employeeCountProvider.trim() }));
+  const sourceRevision = `legacy-ex-sha256-${sha(JSON.stringify([projected.artifact.sourceRevision, facts]))}`;
+  const fixtureRef = sourceRevision;
+  const factsByCompanyId = new Map(facts.map(fact =>
+    [`co-${sha(JSON.stringify([eventKey, fact.id])).slice(0, 20)}`, fact]));
+  for (const company of projected.artifact.companies) {
+    const row = factsByCompanyId.get(company.id);
+    if (!row) return { status: "legacy_identity_conflict" };
+    company.source.director = { name: row.dir, position: row.dirpos,
+      provenance: row.dir || row.dirpos ? { provider: "legacy-ex-snapshot", fixtureRef } : null };
+    company.enrichment.taxesPaid = { amountRub: row.taxesPaidRub,
+      period: row.taxesPaidRub === null ? null : String(row.taxesPaidYear),
+      provenance: row.taxesPaidRub === null ? null : { provider: row.taxesPaidProvider, fixtureRef } };
+    company.enrichment.employeeCount = { count: row.employeeCount,
+      period: row.employeeCount === null ? null : String(row.employeeYear),
+      definition: row.employeeCount === null ? null : row.employeeDefinition,
+      provenance: row.employeeCount === null ? null : { provider: row.employeeCountProvider, fixtureRef } };
+    company.enrichment.provenance.fixtureRef = fixtureRef;
+    if (row.taxesPaidRub !== null || row.employeeCount !== null) company.enrichment.status = "found";
+  }
+  projected.artifact.schemaVersion = "1.2.0";
+  projected.artifact.sourceRevision = sourceRevision;
+  return projected;
+}
+
 export async function importLegacyExSnapshotV11({ repository, profileRef, eventKey, entries }) {
   if (!repository?.saveArtifact) throw new Error("catalog_v11_repository_required");
   const projected = projectLegacyExSnapshotV11({ profileRef, eventKey, entries });
+  if (projected.status !== "projected") return { status: projected.status };
+  const saved = await repository.saveArtifact({ profileId: profileRef, artifact: projected.artifact });
+  return { status: saved.status, exhibitionId: projected.artifact.exhibitionId,
+    sourceRevision: projected.artifact.sourceRevision, imported: projected.artifact.companies.length };
+}
+
+export async function importLegacyExSnapshotV12({ repository, profileRef, eventKey, entries }) {
+  if (!repository?.saveArtifact) throw new Error("catalog_v12_repository_required");
+  const projected = projectLegacyExSnapshotV12({ profileRef, eventKey, entries });
   if (projected.status !== "projected") return { status: projected.status };
   const saved = await repository.saveArtifact({ profileId: profileRef, artifact: projected.artifact });
   return { status: saved.status, exhibitionId: projected.artifact.exhibitionId,

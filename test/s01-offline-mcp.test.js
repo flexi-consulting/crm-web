@@ -6,7 +6,9 @@ import { readFile } from "node:fs/promises";
 import { createServer } from "../src/server.js";
 import { createOfflineS01McpClient, createOfflineS01McpServer } from "../src/offline-mcp.js";
 import { s01CatalogSearchCapability } from "../src/s01-catalog-search.js";
-import { createCatalogV11SearchHandler } from "../src/catalog-query-v11.js";
+import { createCatalogV11SearchHandler, createCatalogV12D1Repository } from "../src/catalog-query-v11.js";
+import { importLegacyExSnapshotV12, projectLegacyExSnapshotV12 } from "../src/legacy-ex-snapshot.js";
+import initSqlJs from "sql.js";
 
 const profile = (profileId = "demo-profile-a", scopes = ["crm.companies.read"]) => ({ profileId, scopes });
 
@@ -45,11 +47,11 @@ test("descriptor is versioned, resolves every schema and binds UI/API/MCP to one
   assert.equal(descriptor.handlerBinding, "src/s01-participants.js#readExhibitionParticipants");
   assert.equal(descriptor.httpBinding, "GET /api/v1/companies");
   assert.deepEqual(descriptor.requiredScopes, ["crm.companies.read"]);
-  const catalogDescriptor = JSON.parse(await readFile(new URL("../capabilities/s01-exhibition-catalog-search.v1.json", import.meta.url)));
+  const catalogDescriptor = JSON.parse(await readFile(new URL("../capabilities/s01-exhibition-catalog-search.v1.1.json", import.meta.url)));
   assert.deepEqual(catalogDescriptor, s01CatalogSearchCapability);
   assert.equal(catalogDescriptor.capabilityId, "crm.exhibitions.catalog.search");
   assert.equal(catalogDescriptor.httpBinding, "GET /api/v1/catalogs/{exhibitionId}/entries");
-  assert.equal(catalogDescriptor.handlerBinding, "src/catalog-query-v11.js#createCatalogV11SearchHandler");
+  assert.equal(catalogDescriptor.handlerBinding, "src/catalog-query-v11.js#createCatalogV12CompatibleSearchHandler");
   assert.deepEqual(catalogDescriptor.requiredScopes, ["crm.catalog.read"]);
   const html = await readFile(new URL("../public/index.html", import.meta.url), "utf8");
   assert.match(html, /fetch\('\/api\/v1\/companies'/);
@@ -102,11 +104,72 @@ test("catalog UI HTTP route and Agent MCP capability share the private paged sea
     addFormats(validate);
     assert.equal(validate.compile(outputSchema)(api), true, JSON.stringify(validate.errors));
 
-    const calls = (args, version = "1.0.0") => mcpServer.receive({ jsonrpc: "2.0", id: 3, method: "tools/call",
+    const calls = (args, version = s01CatalogSearchCapability.version) => mcpServer.receive({ jsonrpc: "2.0", id: 3, method: "tools/call",
       params: { name: s01CatalogSearchCapability.mcpTool.name, arguments: args, _meta: { capabilityVersion: version } } }).then(JSON.parse);
     assert.equal((await calls({ exhibitionId: "demo-expo-001", profileId: "demo-profile-b" })).error.message, "INVALID_ARGUMENTS");
     assert.equal((await calls({ exhibitionId: "demo-expo-001" }, "8.0.0")).error.message, "CAPABILITY_VERSION_MISMATCH");
   }, { trusted: profile("demo-profile-a", ["crm.companies.read", "crm.catalog.read"]) });
+});
+
+test("v1.2 business facts match through catalog HTTP and MCP and satisfy the published output schema", async () => {
+  const row = {
+    id: "SYNTH001", n: "Synthetic Fact Company", s: "F-12", t: 1, nt: 0, inn: "0000000001", ogrn: null,
+    ru: 1, country: "Synthetic Republic", cat: "Synthetic manufacturing", b: "Invented record", seg: "Synthetic",
+    rev: 250, ry: 2025, prof: 12, py: 2024, href: "https://example.invalid/fact-company",
+    dir: "Synthetic Director", dirpos: "Synthetic Chief Officer", taxesPaidRub: 987654, taxesPaidYear: 2024,
+    taxesPaidProvider: "synthetic-fact-source", employeeCount: 38, employeeYear: 2025,
+    employeeDefinition: "annual_average", employeeCountProvider: "synthetic-fact-source"
+  };
+  const projected = projectLegacyExSnapshotV12({ profileRef: "demo-profile-a", eventKey: "demo-expo-facts", entries: [row] });
+  assert.equal(projected.status, "projected");
+  const SQL = await initSqlJs(), db = new SQL.Database();
+  db.run(await readFile(new URL("../migrations/0011_catalog_v12_artifacts.sql", import.meta.url), "utf8"));
+  const repository = createCatalogV12D1Repository({
+    prepare(sql) { return { bind(...values) {
+      const statement = db.prepare(sql);
+      statement.bind(values);
+      return {
+        async first() { try { return statement.step() ? statement.getAsObject() : null; } finally { statement.free(); } },
+        async run() { try { statement.step(); return { success: true }; } finally { statement.free(); } }
+      };
+    } }; }
+  });
+  for (const corrupt of [
+    value => { value.companies[0].enrichment.taxesPaid.provenance.fixtureRef = "stale-source-revision"; },
+    value => { value.companies[0].enrichment.employeeCount.period = null; },
+    value => { value.companies[0].source.href = "javascript:alert(1)"; }
+  ]) {
+    const invalid = structuredClone(projected.artifact); corrupt(invalid);
+    assert.equal((await repository.saveArtifact({ profileId: "demo-profile-a", artifact: invalid })).status, "invalid_artifact");
+  }
+  assert.equal((await importLegacyExSnapshotV12({ repository, profileRef: "demo-profile-a",
+    eventKey: "demo-expo-facts", entries: [row] })).status, "stored");
+  const trusted = () => profile("demo-profile-a", ["crm.catalog.read"]);
+  const catalogSearchHandler = createCatalogV11SearchHandler({ repository, resolveTrustedProfile: trusted });
+  const http = createServer({ resolveTrustedProfile: trusted,
+    dealIntents: { visibleCompanies: () => [] }, catalogV11Repository: repository,
+    resolveCatalogV11TrustedProfile: trusted });
+  await new Promise((resolve) => http.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${http.address().port}`;
+  const mcpServer = createOfflineS01McpServer({ dealIntents: { visibleCompanies: () => [] },
+    resolveTrustedProfile: trusted, catalogSearchHandler });
+  try {
+    const apiResponse = await fetch(`${base}/api/v1/catalogs/demo-expo-facts/entries`, {
+      headers: { "x-test-profile": "demo-profile-a", "x-test-scopes": "crm.catalog.read" }
+    });
+    assert.equal(apiResponse.status, 200);
+    const api = await apiResponse.json();
+    const mcp = await createOfflineS01McpClient(mcpServer).searchCatalog({ exhibitionId: "demo-expo-facts" });
+    assert.deepEqual(mcp, api);
+    const schema = JSON.parse(await readFile(new URL(`../${s01CatalogSearchCapability.outputSchemaRef}`, import.meta.url)));
+    const validate = new Ajv({ strict: true }); addFormats(validate);
+    assert.equal(validate.compile(schema)(api), true, JSON.stringify(validate.errors));
+    assert.equal(api.artifactVersion, "1.2.0");
+    assert.equal(api.items[0].taxesPaidRub, 987654);
+    assert.equal(api.items[0].employeeCount, 38);
+    assert.equal(api.items[0].directorName, "Synthetic Director");
+    assert.equal(api.items[0].taxesPaidProvenance.fixtureRef, api.sourceRevision);
+  } finally { await new Promise((resolve, reject) => http.close((error) => error ? reject(error) : resolve())); }
 });
 
 test("offline MCP JSON-RPC round trip matches API for the trusted profile and stateful fixture", async () => {

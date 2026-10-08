@@ -16,7 +16,7 @@ function matchesBand(value, band, kind) {
 
 export function queryCatalogV11(artifact, { query = "", classification = null, country = null,
   revenueBand = null, profitBand = null } = {}) {
-  if (artifact?.schemaVersion !== "1.1.0" || !Array.isArray(artifact.companies) ||
+  if (!new Set(["1.1.0", "1.2.0"]).has(artifact?.schemaVersion) || !Array.isArray(artifact.companies) ||
       typeof query !== "string" || query.length > 120 ||
       classification !== null && !classifications.has(classification) ||
       country !== null && (typeof country !== "string" || country.length > 80) ||
@@ -49,7 +49,7 @@ function safeSourceUrl(value) {
 }
 
 export function renderCatalogV11({ artifact, result, filters = {}, participantCompanyIds = [] }) {
-  if (artifact?.schemaVersion !== "1.1.0" || result?.status !== "ok" || !Array.isArray(result.items))
+  if (!new Set(["1.1.0", "1.2.0"]).has(artifact?.schemaVersion) || result?.status !== "ok" || !Array.isArray(result.items))
     return { status: "invalid_catalog_view", html: "" };
   const participantLinks = new Set(Array.isArray(participantCompanyIds)
     ? participantCompanyIds.filter(id => /^co-[a-f0-9]{20}$/.test(id)) : []);
@@ -65,6 +65,9 @@ export function renderCatalogV11({ artifact, result, filters = {}, participantCo
       ${source.description ? `<p>${escapeHtml(source.description)}</p>` : ""}
       <p>Выручка: ${escapeHtml(moneyLabel(enrichment.revenueRub))}${enrichment.revenueYear ? ` (${enrichment.revenueYear})` : ""}</p>
       <p>Прибыль: ${escapeHtml(moneyLabel(enrichment.profitRub))}${enrichment.profitYear ? ` (${enrichment.profitYear})` : ""}</p>
+      ${artifact.schemaVersion === "1.2.0" ? `<p>Уплаченные налоги: ${escapeHtml(moneyLabel(enrichment.taxesPaid?.amountRub ?? null))}${enrichment.taxesPaid?.period ? ` (${escapeHtml(enrichment.taxesPaid.period)})` : ""}</p>
+      <p>Сотрудники: ${enrichment.employeeCount?.count == null ? "Неизвестно" : escapeHtml(enrichment.employeeCount.count)}${enrichment.employeeCount?.period ? ` (${escapeHtml(enrichment.employeeCount.period)})` : ""}</p>
+      <p>Директор: ${source.director?.name ? escapeHtml(source.director.name) : "Неизвестно"}${source.director?.position ? ` · ${escapeHtml(source.director.position)}` : ""}</p>` : ""}
       ${participantLinks.has(company.id) ? `<p><a href="/catalogs/${encodeURIComponent(artifact.exhibitionId)}/participants/${encodeURIComponent(company.id)}">Карточка CRM и подготовка сделки</a></p>` : ""}
       ${safeHref ? `<a href="${escapeHtml(safeHref)}" rel="noopener noreferrer">Профиль выставки</a>` : ""}</article>`;
   }).join("");
@@ -155,6 +158,19 @@ export function createCatalogV11ParticipantLinkHandler({ repository, resolveTrus
     if (participant?.status !== 200 || participant.body?.companyId !== match[2] ||
         !/^build-[a-f0-9]{24}$/.test(participant.body?.buildId ?? ""))
       return reply(participant?.status === 404 ? 404 : 503, { error: "catalog_participant_unavailable" });
+    if (artifact.schemaVersion === "1.2.0") {
+      const company = artifact.companies.find(item => item.id === match[2]);
+      const enrichment = company.enrichment, director = company.source.director;
+      const html = `<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="robots" content="noindex,nofollow"><title>${escapeHtml(company.name)}</title><main>
+        <h1>${escapeHtml(company.name)}</h1><p>${escapeHtml(company.source.country)}${company.source.booth ? ` · Стенд: ${escapeHtml(company.source.booth)}` : ""}</p>
+        <p>Уплаченные налоги: ${escapeHtml(moneyLabel(enrichment.taxesPaid.amountRub))}${enrichment.taxesPaid.period ? ` (${escapeHtml(enrichment.taxesPaid.period)})` : ""}</p>
+        <p>Сотрудники: ${enrichment.employeeCount.count === null ? "Неизвестно" : escapeHtml(enrichment.employeeCount.count)}${enrichment.employeeCount.period ? ` (${escapeHtml(enrichment.employeeCount.period)})` : ""}</p>
+        <p>Директор: ${director.name ? escapeHtml(director.name) : "Неизвестно"}${director.position ? ` · ${escapeHtml(director.position)}` : ""}</p>
+        <p><a href="/catalogs/${encodeURIComponent(participant.body.buildId)}/participants/${encodeURIComponent(match[2])}">Карточка CRM и подготовка сделки</a></p></main></html>`;
+      return new Response(html, { status: 200, headers: { "content-type": "text/html; charset=utf-8",
+        "cache-control": "private, no-store", "x-content-type-options": "nosniff",
+        "content-security-policy": "default-src 'none'; base-uri 'none'; frame-ancestors 'none'" } });
+    }
     return new Response(null, { status: 303, headers: { location: `/catalogs/${participant.body.buildId}/participants/${match[2]}`,
       "cache-control": "private, no-store", "referrer-policy": "same-origin", "x-content-type-options": "nosniff" } });
   };
@@ -165,11 +181,11 @@ const searchError = (status, error) => new Response(JSON.stringify({ error }), {
   "x-content-type-options": "nosniff"
 } });
 
-function clientCatalogItem(company) {
+function clientCatalogItem(company, schemaVersion = "1.1.0") {
   const source = company.source ?? {};
   const enrichment = company.enrichment ?? {};
   const enriched = enrichment.status === "found";
-  return {
+  const item = {
     id: company.id,
     name: company.name,
     country: source.country,
@@ -185,11 +201,25 @@ function clientCatalogItem(company) {
     website: enriched ? enrichment.website : null,
     classification: company.qualification?.classification ?? "unknown"
   };
+  if (schemaVersion === "1.2.0") Object.assign(item, {
+    taxesPaidRub: enriched ? enrichment.taxesPaid.amountRub : null,
+    taxesPaidPeriod: enriched ? enrichment.taxesPaid.period : null,
+    taxesPaidProvenance: enriched ? enrichment.taxesPaid.provenance : null,
+    employeeCount: enriched ? enrichment.employeeCount.count : null,
+    employeePeriod: enriched ? enrichment.employeeCount.period : null,
+    employeeDefinition: enriched ? enrichment.employeeCount.definition : null,
+    employeeProvenance: enriched ? enrichment.employeeCount.provenance : null,
+    directorName: source.director.name,
+    directorPosition: source.director.position,
+    directorProvenance: source.director.provenance
+  });
+  return item;
 }
 
 // Structured app-owned read for the Agent capability. The browser page and
-// Agent search share queryCatalogV11; the projection intentionally excludes
-// registry internals, tax identifiers, duplicate source IDs and provenance.
+// Agent search share queryCatalogV11; the projection excludes registry internals,
+// tax identifiers and duplicate source IDs while retaining provenance for the
+// additive public-business-facts contract.
 export function createCatalogV11SearchHandler({ repository, resolveTrustedProfile }) {
   if (typeof repository?.getArtifact !== "function" || typeof resolveTrustedProfile !== "function")
     throw new TypeError("catalog v1.1 repository and trusted profile resolver required");
@@ -225,14 +255,18 @@ export function createCatalogV11SearchHandler({ repository, resolveTrustedProfil
     if (!artifact) return searchError(404, "catalog_not_found");
     const result = queryCatalogV11(artifact, filters);
     if (result.status !== "ok") return searchError(400, "invalid_query");
-    return new Response(JSON.stringify({ domainApiVersion: "1.0.0", artifactVersion: artifact.schemaVersion,
+    return new Response(JSON.stringify({ domainApiVersion: artifact.schemaVersion === "1.2.0" ? "1.1.0" : "1.0.0",
+      artifactVersion: artifact.schemaVersion,
       exhibitionId: artifact.exhibitionId, sourceRevision: artifact.sourceRevision, total: result.total,
-      limit, offset, items: result.items.slice(offset, offset + limit).map(clientCatalogItem) }), { status: 200, headers: {
+      limit, offset, items: result.items.slice(offset, offset + limit)
+        .map(company => clientCatalogItem(company, artifact.schemaVersion)) }), { status: 200, headers: {
       "content-type": "application/json; charset=utf-8", "cache-control": "private, no-store",
       "x-content-type-options": "nosniff"
     } });
   };
 }
+
+export const createCatalogV12CompatibleSearchHandler = createCatalogV11SearchHandler;
 
 const sha256 = value => createHash("sha256").update(value).digest("hex");
 const profileRefOk = value => typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value);
@@ -309,4 +343,96 @@ export function createCatalogV11D1Repository(db, now = () => new Date().toISOStr
     return artifact;
   }
   return { saveArtifact, getArtifact };
+}
+
+const validV12Artifact = artifact => {
+  const provenance = (value, sourceRevision) => value === null || exactKeys(value, ["provider", "fixtureRef"]) &&
+    typeof value.provider === "string" && !!value.provider.trim() &&
+    typeof value.fixtureRef === "string" && value.fixtureRef === sourceRevision;
+  if (!exactKeys(artifact, ["schemaVersion", "exhibitionId", "sourceRevision", "companies"]) ||
+      artifact.schemaVersion !== "1.2.0" || !/^[a-z0-9][a-z0-9-]{0,79}$/.test(artifact.exhibitionId ?? "") ||
+      typeof artifact.sourceRevision !== "string" || !artifact.sourceRevision || !Array.isArray(artifact.companies) ||
+      artifact.companies.length > 20_000) return false;
+  const baseArtifact = structuredClone(artifact);
+  baseArtifact.schemaVersion = "1.1.0";
+  for (const company of baseArtifact.companies) {
+    delete company.source?.director;
+    delete company.enrichment?.taxesPaid;
+    delete company.enrichment?.employeeCount;
+  }
+  if (!validV11Artifact(baseArtifact)) return false;
+  return artifact.companies.every(company => {
+    if (!company || !exactKeys(company, ["id", "name", "source", "enrichment", "registry", "qualification"]) ||
+        !/^co-[a-f0-9]{20}$/.test(company.id ?? "") || typeof company.name !== "string" || !company.name.trim()) return false;
+    const source = company.source, enrichment = company.enrichment;
+    if (!exactKeys(source, ["sourceRecordId", "country", "booth", "href", "category", "description", "segment", "duplicateSourceRecordIds", "director"]) ||
+        !exactKeys(source.director, ["name", "position", "provenance"]) ||
+        ![source.director.name, source.director.position].every(value => value === null || typeof value === "string" && value.trim() && value.length <= 160) ||
+        !provenance(source.director.provenance, artifact.sourceRevision) ||
+        ((source.director.name !== null || source.director.position !== null) !== (source.director.provenance !== null)) ||
+        !exactKeys(enrichment, ["status", "inn", "ogrn", "revenueRub", "revenueYear", "profitRub", "profitYear", "activity", "website", "provenance", "taxesPaid", "employeeCount"]) ||
+        !exactKeys(enrichment.taxesPaid, ["amountRub", "period", "provenance"]) ||
+        !(enrichment.taxesPaid.amountRub === null || Number.isSafeInteger(enrichment.taxesPaid.amountRub) && enrichment.taxesPaid.amountRub >= 0) ||
+        !(enrichment.taxesPaid.period === null || typeof enrichment.taxesPaid.period === "string" && /^\d{4}$/.test(enrichment.taxesPaid.period)) ||
+        !provenance(enrichment.taxesPaid.provenance, artifact.sourceRevision) ||
+        ((enrichment.taxesPaid.amountRub !== null) !== (enrichment.taxesPaid.provenance !== null)) ||
+        (enrichment.taxesPaid.amountRub === null && enrichment.taxesPaid.period !== null) ||
+        (enrichment.taxesPaid.amountRub !== null && enrichment.taxesPaid.period === null) ||
+        !exactKeys(enrichment.employeeCount, ["count", "period", "definition", "provenance"]) ||
+        !(enrichment.employeeCount.count === null || Number.isSafeInteger(enrichment.employeeCount.count) && enrichment.employeeCount.count >= 0) ||
+        !(enrichment.employeeCount.period === null || typeof enrichment.employeeCount.period === "string" && /^\d{4}$/.test(enrichment.employeeCount.period)) ||
+        ![null, "year_end", "annual_average", "unknown"].includes(enrichment.employeeCount.definition) ||
+        !provenance(enrichment.employeeCount.provenance, artifact.sourceRevision) ||
+        (enrichment.employeeCount.count === null) !== (enrichment.employeeCount.definition === null) ||
+        (enrichment.employeeCount.count === null) !== (enrichment.employeeCount.period === null) ||
+        (enrichment.employeeCount.count === null) !== (enrichment.employeeCount.provenance === null)) return false;
+    return typeof source.country === "string" && !!source.country.trim() &&
+      /^src-[a-z0-9-]{1,48}$/.test(source.sourceRecordId ?? "") &&
+      Array.isArray(source.duplicateSourceRecordIds) &&
+      company.registry && company.qualification &&
+      ["found", "not_found", "unavailable"].includes(enrichment.status) &&
+      exactKeys(enrichment.provenance, ["provider", "fixtureRef"]) &&
+      ["target", "near_target", "not_target", "unknown"].includes(company.qualification.classification);
+  }) && new Set(artifact.companies.map(company => company.id)).size === artifact.companies.length;
+};
+
+export function createCatalogV12D1Repository(db, now = () => new Date().toISOString()) {
+  if (!db?.prepare || typeof now !== "function") throw new TypeError("catalog v1.2 D1 binding required");
+  async function saveArtifact({ profileId, artifact }) {
+    if (!profileRefOk(profileId) || !validV12Artifact(artifact)) return { status: "invalid_artifact" };
+    const json = JSON.stringify(artifact), contentSha = sha256(json), updatedAt = now();
+    try {
+      const prior = await db.prepare(`SELECT content_sha FROM crm_catalog_v12_artifacts
+        WHERE profile_ref=? AND exhibition_id=?`).bind(profileId, artifact.exhibitionId).first();
+      if (prior?.content_sha === contentSha) return { status: "replay", exhibitionId: artifact.exhibitionId,
+        sourceRevision: artifact.sourceRevision };
+      await db.prepare(`INSERT INTO crm_catalog_v12_artifacts
+        (profile_ref,exhibition_id,source_revision,artifact_json,content_sha,updated_at)
+        VALUES(?,?,?,?,?,?) ON CONFLICT(profile_ref,exhibition_id) DO UPDATE SET
+        source_revision=excluded.source_revision,artifact_json=excluded.artifact_json,
+        content_sha=excluded.content_sha,updated_at=excluded.updated_at`)
+        .bind(profileId, artifact.exhibitionId, artifact.sourceRevision, json, contentSha, updatedAt).run();
+      return { status: "stored", exhibitionId: artifact.exhibitionId, sourceRevision: artifact.sourceRevision };
+    } catch { return { status: "storage_unavailable" }; }
+  }
+  async function getArtifact({ profileId, exhibitionId }) {
+    if (!profileRefOk(profileId) || !/^[a-z0-9][a-z0-9-]{0,79}$/.test(exhibitionId ?? "")) return null;
+    const row = await db.prepare(`SELECT artifact_json,content_sha FROM crm_catalog_v12_artifacts
+      WHERE profile_ref=? AND exhibition_id=?`).bind(profileId, exhibitionId).first();
+    if (!row) return null;
+    if (sha256(row.artifact_json) !== row.content_sha) throw new Error("stored catalog integrity check failed");
+    const artifact = JSON.parse(row.artifact_json);
+    if (!validV12Artifact(artifact) || artifact.exhibitionId !== exhibitionId)
+      throw new Error("stored catalog artifact is invalid");
+    return artifact;
+  }
+  return { saveArtifact, getArtifact };
+}
+
+export function createCatalogVersionedD1Repository({ v11, v12 }) {
+  if (typeof v11?.getArtifact !== "function" || typeof v12?.getArtifact !== "function")
+    throw new TypeError("versioned catalog repositories required");
+  return { async getArtifact(scope) {
+    return await v12.getArtifact(scope) ?? await v11.getArtifact(scope);
+  } };
 }

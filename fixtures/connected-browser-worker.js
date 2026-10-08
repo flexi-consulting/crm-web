@@ -1,8 +1,8 @@
 import { createCrmConnectedWorkerHandler } from "../src/connected-browser-worker.js";
 import { createCatalogBuildService } from "../src/catalog-build.js";
 import { createBuiltCatalogD1Repository } from "../src/built-catalog-d1.js";
-import { createCatalogV11D1Repository } from "../src/catalog-query-v11.js";
-import { projectLegacyExSnapshot, projectLegacyExSnapshotV11 } from "../src/legacy-ex-snapshot.js";
+import { createCatalogV11D1Repository, createCatalogV12D1Repository } from "../src/catalog-query-v11.js";
+import { projectLegacyExSnapshot, projectLegacyExSnapshotV11, projectLegacyExSnapshotV12 } from "../src/legacy-ex-snapshot.js";
 
 const issuer = "https://cp.example.invalid";
 let cpMode = "active", cpCalls = 0, foreignEgress = 0, clockOffset = 0;
@@ -137,10 +137,15 @@ export default {
       const sourceRows = [{ id: "SYNTH001", n: "Synthetic manufacturing", s: "S-01", t: 1, nt: 0,
         inn: "0000000001", ogrn: null, ru: 1, country: "Sample Federation",
         cat: "Synthetic manufacturing", b: "Synthetic source description", seg: "Synthetic segment",
-        rev: 250, ry: 2025, prof: 0, py: 2024, href: "https://example.invalid/synthetic-exhibitor" }];
+        rev: 250, ry: 2025, prof: 0, py: 2024, href: "https://example.invalid/synthetic-exhibitor",
+        dir: "Synthetic Director 001", dirpos: "Synthetic director role",
+        taxesPaidRub: 1250000, taxesPaidYear: 2024, taxesPaidProvider: "synthetic-registry",
+        employeeCount: 42, employeeYear: 2025, employeeDefinition: "year_end",
+        employeeCountProvider: "synthetic-registry" }];
       const legacyV1 = projectLegacyExSnapshot({ profileRef: "profile_A", eventKey: exhibitionId, entries: sourceRows });
       const legacyV11 = projectLegacyExSnapshotV11({ profileRef: "profile_A", eventKey: exhibitionId, entries: sourceRows });
-      if (legacyV1.status !== "projected" || legacyV11.status !== "projected")
+      const legacyV12 = projectLegacyExSnapshotV12({ profileRef: "profile_A", eventKey: exhibitionId, entries: sourceRows });
+      if (legacyV1.status !== "projected" || legacyV11.status !== "projected" || legacyV12.status !== "projected")
         throw new Error("synthetic legacy catalog projection failed");
       const linkedBuild = await repo.saveBuild({ profileRef: "profile_A", idempotencyKey: legacyV1.idempotencyKey,
         build: legacyV1.build, legacyRefs: legacyV1.legacyRefs });
@@ -150,8 +155,12 @@ export default {
       const v11 = createCatalogV11D1Repository(env.CRM_DB);
       const v11Saved = await v11.saveArtifact({ profileId: "profile_A", artifact: legacyV11.artifact });
       if (v11Saved.status !== "stored") throw new Error(`v11 seed failed: ${v11Saved.status}`);
+      const v12 = createCatalogV12D1Repository(env.CRM_DB);
+      const v12Saved = await v12.saveArtifact({ profileId: "profile_A", artifact: legacyV12.artifact });
+      if (v12Saved.status !== "stored") throw new Error(`v12 seed failed: ${v12Saved.status}`);
       return Response.json({ buildId: saved.buildId, companyId: item.id,
         v11ExhibitionId: exhibitionId,
+        v12CompanyId: legacyV12.artifact.companies[0].id,
         v11CompanyId: legacyV1.legacyRefs[0].companyId,
         exhibitionId: "demo-expo-001", companyName: item.name });
     }

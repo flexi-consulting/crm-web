@@ -4,34 +4,436 @@
   "title": "Profile-scoped exhibition catalog search result",
   "type": "object",
   "additionalProperties": false,
-  "required": ["domainApiVersion", "artifactVersion", "exhibitionId", "sourceRevision", "total", "limit", "offset", "items"],
+  "required": [
+    "domainApiVersion",
+    "artifactVersion",
+    "exhibitionId",
+    "sourceRevision",
+    "total",
+    "limit",
+    "offset",
+    "items"
+  ],
   "properties": {
-    "domainApiVersion": { "const": "1.0.0" },
-    "artifactVersion": { "const": "1.1.0" },
-    "exhibitionId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,79}$" },
-    "sourceRevision": { "type": "string", "minLength": 1 },
-    "total": { "type": "integer", "minimum": 0 },
-    "limit": { "type": "integer", "minimum": 1, "maximum": 100 },
-    "offset": { "type": "integer", "minimum": 0, "maximum": 20000 },
-    "items": { "type": "array", "maxItems": 100, "items": {
-      "type": "object", "additionalProperties": false,
-      "required": ["id", "name", "country", "booth", "category", "description", "segment", "revenueRub", "revenueYear", "profitRub", "profitYear", "activity", "website", "classification"],
-      "properties": {
-        "id": { "type": "string", "pattern": "^co-[a-f0-9]{20}$" },
-        "name": { "type": "string", "minLength": 1 },
-        "country": { "type": "string", "minLength": 1 },
-        "booth": { "type": ["string", "null"], "maxLength": 80 },
-        "category": { "type": ["string", "null"], "maxLength": 240 },
-        "description": { "type": ["string", "null"], "maxLength": 2000 },
-        "segment": { "type": ["string", "null"], "maxLength": 120 },
-        "revenueRub": { "type": ["integer", "null"], "minimum": 0 },
-        "revenueYear": { "type": ["integer", "null"], "minimum": 1900, "maximum": 2200 },
-        "profitRub": { "type": ["integer", "null"] },
-        "profitYear": { "type": ["integer", "null"], "minimum": 1900, "maximum": 2200 },
-        "activity": { "enum": ["manufacturer", "distributor", "service", "unknown"] },
-        "website": { "type": ["string", "null"], "format": "uri" },
-        "classification": { "enum": ["target", "near_target", "not_target", "unknown"] }
+    "domainApiVersion": {
+      "enum": [
+        "1.0.0",
+        "1.1.0"
+      ]
+    },
+    "artifactVersion": {
+      "enum": [
+        "1.1.0",
+        "1.2.0"
+      ]
+    },
+    "exhibitionId": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,79}$"
+    },
+    "sourceRevision": {
+      "type": "string",
+      "minLength": 1
+    },
+    "total": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100
+    },
+    "offset": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 20000
+    },
+    "items": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "name",
+          "country",
+          "booth",
+          "category",
+          "description",
+          "segment",
+          "revenueRub",
+          "revenueYear",
+          "profitRub",
+          "profitYear",
+          "activity",
+          "website",
+          "classification"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^co-[a-f0-9]{20}$"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "country": {
+            "type": "string",
+            "minLength": 1
+          },
+          "booth": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 80
+          },
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 240
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 2000
+          },
+          "segment": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 120
+          },
+          "revenueRub": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "revenueYear": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1900,
+            "maximum": 2200
+          },
+          "profitRub": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "profitYear": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1900,
+            "maximum": 2200
+          },
+          "activity": {
+            "enum": [
+              "manufacturer",
+              "distributor",
+              "service",
+              "unknown"
+            ]
+          },
+          "website": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uri"
+          },
+          "classification": {
+            "enum": [
+              "target",
+              "near_target",
+              "not_target",
+              "unknown"
+            ]
+          },
+          "taxesPaidRub": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "taxesPaidPeriod": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^\\d{4}$"
+          },
+          "taxesPaidProvenance": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/$defs/provenance"
+              }
+            ]
+          },
+          "employeeCount": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "employeePeriod": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^\\d{4}$"
+          },
+          "employeeDefinition": {
+            "enum": [
+              "year_end",
+              "annual_average",
+              "unknown",
+              null
+            ]
+          },
+          "employeeProvenance": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/$defs/provenance"
+              }
+            ]
+          },
+          "directorName": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 160
+          },
+          "directorPosition": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 160
+          },
+          "directorProvenance": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/$defs/provenance"
+              }
+            ]
+          }
+        }
       }
-    } }
-  }
+    }
+  },
+  "$defs": {
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "fixtureRef"
+      ],
+      "properties": {
+        "provider": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "fixtureRef": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "artifactVersion": { "const": "1.2.0" } }, "required": ["artifactVersion"] },
+      "then": { "properties": { "domainApiVersion": { "const": "1.1.0" } } },
+      "else": { "properties": { "domainApiVersion": { "const": "1.0.0" } } }
+    },
+    {
+      "if": {
+        "properties": {
+          "artifactVersion": {
+            "const": "1.2.0"
+          }
+        },
+        "required": [
+          "artifactVersion"
+        ]
+      },
+      "then": {
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "taxesPaidRub": {},
+                "taxesPaidPeriod": {},
+                "taxesPaidProvenance": {},
+                "employeeCount": {},
+                "employeePeriod": {},
+                "employeeDefinition": {},
+                "employeeProvenance": {},
+                "directorName": {},
+                "directorPosition": {},
+                "directorProvenance": {}
+              },
+              "required": [
+                "taxesPaidRub",
+                "taxesPaidPeriod",
+                "taxesPaidProvenance",
+                "employeeCount",
+                "employeePeriod",
+                "employeeDefinition",
+                "employeeProvenance",
+                "directorName",
+                "directorPosition",
+                "directorProvenance"
+              ],
+              "allOf": [
+                {
+                  "if": { "properties": { "taxesPaidRub": { "type": "integer" } }, "required": ["taxesPaidRub"] },
+                  "then": { "properties": { "taxesPaidPeriod": { "type": "string" }, "taxesPaidProvenance": { "$ref": "#/$defs/provenance" } }, "required": ["taxesPaidPeriod", "taxesPaidProvenance"] },
+                  "else": { "properties": { "taxesPaidPeriod": { "type": "null" }, "taxesPaidProvenance": { "type": "null" } } }
+                },
+                {
+                  "if": { "properties": { "employeeCount": { "type": "integer" } }, "required": ["employeeCount"] },
+                  "then": { "properties": { "employeePeriod": { "type": "string" }, "employeeDefinition": { "enum": ["year_end", "annual_average", "unknown"] }, "employeeProvenance": { "$ref": "#/$defs/provenance" } }, "required": ["employeePeriod", "employeeDefinition", "employeeProvenance"] },
+                  "else": { "properties": { "employeePeriod": { "type": "null" }, "employeeDefinition": { "type": "null" }, "employeeProvenance": { "type": "null" } } }
+                },
+                {
+                  "if": { "anyOf": [{ "properties": { "directorName": { "type": "string" } }, "required": ["directorName"] }, { "properties": { "directorPosition": { "type": "string" } }, "required": ["directorPosition"] }] },
+                  "then": { "properties": { "directorProvenance": { "$ref": "#/$defs/provenance" } }, "required": ["directorProvenance"] },
+                  "else": { "properties": { "directorProvenance": { "type": "null" } } }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "taxesPaidRub": {},
+                "taxesPaidPeriod": {},
+                "taxesPaidProvenance": {},
+                "employeeCount": {},
+                "employeePeriod": {},
+                "employeeDefinition": {},
+                "employeeProvenance": {},
+                "directorName": {},
+                "directorPosition": {},
+                "directorProvenance": {}
+              },
+              "not": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": { "taxesPaidRub": {} },
+                    "required": [
+                      "taxesPaidRub"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": { "taxesPaidPeriod": {} },
+                    "required": [
+                      "taxesPaidPeriod"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": { "taxesPaidProvenance": {} },
+                    "required": [
+                      "taxesPaidProvenance"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": { "employeeCount": {} },
+                    "required": [
+                      "employeeCount"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": { "employeePeriod": {} },
+                    "required": [
+                      "employeePeriod"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": { "employeeDefinition": {} },
+                    "required": [
+                      "employeeDefinition"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": { "employeeProvenance": {} },
+                    "required": [
+                      "employeeProvenance"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": { "directorName": {} },
+                    "required": [
+                      "directorName"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": { "directorPosition": {} },
+                    "required": [
+                      "directorPosition"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": { "directorProvenance": {} },
+                    "required": [
+                      "directorProvenance"
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
 }
