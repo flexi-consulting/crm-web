@@ -436,6 +436,20 @@ test("public sandbox catalog entry uses read-only profile and displays seeded co
       "catalog-only profile must request a separate create scope before preparing a deal");
     const invalidView = await call(worker.base, "/__sandbox-login?view=unrecognized");
     assert.equal(invalidView.status, 400);
+    const seededA = await call(worker.base, "/__sandbox-login?view=deal&seed=012345abcdef");
+    const seededAReplay = await call(worker.base, "/__sandbox-login?view=deal&seed=012345abcdef");
+    const seededB = await call(worker.base, "/__sandbox-login?view=deal&seed=012345abcdee");
+    for (const response of [seededA, seededAReplay, seededB]) assert.equal(response.status, 303);
+    assert.equal(seededA.headers.get("location"), seededAReplay.headers.get("location"),
+      "the same sandbox seed reuses its idempotent synthetic build");
+    assert.notEqual(seededA.headers.get("location"), seededB.headers.get("location"),
+      "a distinct sandbox seed gets a fresh participant for isolated deal workflows");
+    const seededCompanyA = seededA.headers.get("location").match(/\/participants\/(co-[a-f0-9]{20})\/deal$/)?.[1];
+    const seededCompanyB = seededB.headers.get("location").match(/\/participants\/(co-[a-f0-9]{20})\/deal$/)?.[1];
+    assert.ok(seededCompanyA && seededCompanyB && seededCompanyA !== seededCompanyB,
+      "a fresh deal seed must not collide with the prior participant's one-deal limit");
+    assert.equal((await call(worker.base, "/__sandbox-login?view=deal&seed=unsafe-seed")).status, 400);
+    assert.equal((await call(worker.base, "/__sandbox-login?view=catalog&seed=012345abcdef")).status, 400);
   } finally {
     if (worker) await stop(worker.child);
     rmSync(root, { recursive: true, force: true });
