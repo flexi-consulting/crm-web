@@ -45,44 +45,61 @@ let worker;
 let runner;
 
 try {
-  const migrations = ["0001_s04_domain.sql", "0002_built_catalog.sql", "0003_weeek_deal_identity.sql",
-    "0004_legacy_catalog_refs.sql", "0005_connected_browser_sessions.sql", "0006_connected_browser_mode.sql",
-    "0007_connected_browser_s04_commands.sql", "0008_cp_approval_intents.sql",
-    "0009_encrypt_connected_browser_secrets.sql", "0010_catalog_v11_artifacts.sql", "0011_catalog_v12_artifacts.sql"];
-  for (const migration of migrations) run(nodeBin, [wrangler, "d1", "execute", "CRM_DB", "--config", config,
-    "--local", "--persist-to", workDir, "--file", `migrations/${migration}`, "--yes", "--json"]);
-  run(nodeBin, [wrangler, "d1", "execute", "WEEEK_FIXTURE_DB", "--config", config, "--local",
-    "--persist-to", workDir, "--file", "test/fixtures/weeek-http-provider.sql", "--yes", "--json"]);
+  let site, eventId, session;
+  const publicOrigin = process.env.CRM_SANDBOX_PUBLIC_ORIGIN?.replace(/\/$/, "");
+  if (publicOrigin) {
+    const origin = new URL(publicOrigin);
+    assert.equal(origin.protocol, "https:");
+    assert.match(origin.hostname, /^[a-z0-9-]+\.skillset-apply\.workers\.dev$/,
+      "public probe must use the approved stable Workers.dev sandbox ingress");
+    site = origin.origin;
+    const login = await request(site, "/__sandbox-login?view=catalog");
+    assert.equal(login.status, 303);
+    const catalogLocation = new URL(login.headers.get("location"), site);
+    eventId = catalogLocation.pathname.split("/").at(-1);
+    session = cookie(login, "__Host-crm-connected-session");
+    assert.ok(session, "public synthetic login must return its profile-bound session cookie");
+  } else {
+    const migrations = ["0001_s04_domain.sql", "0002_built_catalog.sql", "0003_weeek_deal_identity.sql",
+      "0004_legacy_catalog_refs.sql", "0005_connected_browser_sessions.sql", "0006_connected_browser_mode.sql",
+      "0007_connected_browser_s04_commands.sql", "0008_cp_approval_intents.sql",
+      "0009_encrypt_connected_browser_secrets.sql", "0010_catalog_v11_artifacts.sql", "0011_catalog_v12_artifacts.sql"];
+    for (const migration of migrations) run(nodeBin, [wrangler, "d1", "execute", "CRM_DB", "--config", config,
+      "--local", "--persist-to", workDir, "--file", `migrations/${migration}`, "--yes", "--json"]);
+    run(nodeBin, [wrangler, "d1", "execute", "WEEEK_FIXTURE_DB", "--config", config, "--local",
+      "--persist-to", workDir, "--file", "test/fixtures/weeek-http-provider.sql", "--yes", "--json"]);
 
-  const workerPort = await port(), inspectorPort = await port();
-  worker = spawn(nodeBin, [wrangler, "dev", "--config", config, "--ip", "127.0.0.1", "--port",
-    String(workerPort), "--inspector-port", String(inspectorPort), "--persist-to", workDir, "--log-level", "error"],
-  { cwd: crmRoot, stdio: ["ignore", "pipe", "pipe"] });
-  let workerLogs = "";
-  worker.stdout.on("data", chunk => { workerLogs += chunk; });
-  worker.stderr.on("data", chunk => { workerLogs += chunk; });
-  const site = `http://127.0.0.1:${workerPort}`;
-  for (let attempt = 0; attempt < 100; attempt++) {
-    if (worker.exitCode !== null) throw new Error(`worker_stopped:${workerLogs}`);
-    try { if ((await fetch(`${site}/health`)).ok) break; } catch {}
-    await new Promise(resolve => setTimeout(resolve, 150));
-    if (attempt === 99) throw new Error(`worker_start_timeout:${workerLogs}`);
+    const workerPort = await port(), inspectorPort = await port();
+    worker = spawn(nodeBin, [wrangler, "dev", "--config", config, "--ip", "127.0.0.1", "--port",
+      String(workerPort), "--inspector-port", String(inspectorPort), "--persist-to", workDir, "--log-level", "error"],
+    { cwd: crmRoot, stdio: ["ignore", "pipe", "pipe"] });
+    let workerLogs = "";
+    worker.stdout.on("data", chunk => { workerLogs += chunk; });
+    worker.stderr.on("data", chunk => { workerLogs += chunk; });
+    site = `http://127.0.0.1:${workerPort}`;
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if (worker.exitCode !== null) throw new Error(`worker_stopped:${workerLogs}`);
+      try { if ((await fetch(`${site}/health`)).ok) break; } catch {}
+      await new Promise(resolve => setTimeout(resolve, 150));
+      if (attempt === 99) throw new Error(`worker_start_timeout:${workerLogs}`);
+    }
+
+    const seed = await (await request(site, "/__seed")).json();
+    eventId = seed.v11ExhibitionId;
+    const deepLink = await request(site, `/catalogs/${eventId}`);
+    assert.equal(deepLink.status, 303);
+    const startLocation = new URL(deepLink.headers.get("location"));
+    const start = await request(site, startLocation.pathname + startLocation.search);
+    assert.equal(start.status, 303);
+    const cpAuthorize = new URL(start.headers.get("location"));
+    const pending = cookie(start, "__Host-crm-connected-pending");
+    const callback = await request(site, `/auth/connected/callback?code=${"c".repeat(64)}` +
+      `&state=${cpAuthorize.searchParams.get("state")}&iss=${encodeURIComponent("https://cp.example.invalid")}`,
+    { headers: { cookie: pending } });
+    assert.equal(callback.status, 303);
+    session = cookie(callback, "__Host-crm-connected-session");
   }
 
-  const seed = await (await request(site, "/__seed")).json();
-  const eventId = seed.v11ExhibitionId;
-  const deepLink = await request(site, `/catalogs/${eventId}`);
-  assert.equal(deepLink.status, 303);
-  const startLocation = new URL(deepLink.headers.get("location"));
-  const start = await request(site, startLocation.pathname + startLocation.search);
-  assert.equal(start.status, 303);
-  const cpAuthorize = new URL(start.headers.get("location"));
-  const pending = cookie(start, "__Host-crm-connected-pending");
-  const callback = await request(site, `/auth/connected/callback?code=${"c".repeat(64)}` +
-    `&state=${cpAuthorize.searchParams.get("state")}&iss=${encodeURIComponent("https://cp.example.invalid")}`,
-  { headers: { cookie: pending } });
-  assert.equal(callback.status, 303);
-  const session = cookie(callback, "__Host-crm-connected-session");
   const page = await request(site, `/catalogs/${eventId}`, { headers: { cookie: session } });
   assert.equal(page.status, 200);
   const html = await page.text();
@@ -150,11 +167,13 @@ try {
   assert.equal(toolCall.result.items[0].taxesPaidRub, 1250000);
   assert.equal(toolCall.result.items[0].employeeCount, 42);
   assert.equal(toolCall.result.items[0].directorName, "Synthetic Director 001");
+  assert.equal(toolCall.result.items.length, 1);
   const surfaces = ["events.jsonl", "state.json", "result.json"].map(name => readFileSync(join(runRoot, name), "utf8"));
   assert.equal(surfaces.some(value => value.includes(sessionBinding)), false,
     "session credential must not appear in Agent Run evidence or MCP config");
   process.stdout.write(`${JSON.stringify({ outcome: "pass", runner: "FakeEngine over Agent Runner MCP bridge",
-    siteTransport: "local Wrangler Worker HTTP", profileId, toolName, artifactVersion: toolCall.result.artifactVersion,
+    siteTransport: publicOrigin ? "stable Workers.dev -> Quick Tunnel -> synthetic CRM Worker" : "local Wrangler Worker HTTP",
+    profileId, toolName, artifactVersion: toolCall.result.artifactVersion,
     facts: { taxesPaidRub: toolCall.result.items[0].taxesPaidRub,
       employeeCount: toolCall.result.items[0].employeeCount, directorName: toolCall.result.items[0].directorName },
     rendered: { tax: /Уплаченные налоги: 1,25 млн ₽ \(2024\)/.test(html),
