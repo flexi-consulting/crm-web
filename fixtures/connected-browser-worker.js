@@ -114,7 +114,13 @@ const cpFetch = async (url, options) => {
   if (url.endsWith("/exchange")) return new Response(JSON.stringify({ token: "b".repeat(64),
     expiresAt: now + 300 }), { status: 201 });
   state = await fixtureState();
-  if (url.endsWith("/introspect")) return new Response(JSON.stringify(state.mode === "revoked"
+  if (url.endsWith("/introspect")) {
+    if (options.headers?.authorization !== "Bearer local-test-service-key-12345678901234567890")
+      return Response.json({ error: "unauthorized" }, { status: 401 });
+    const body = JSON.parse(options.body);
+    if (body.audience !== "crm-web") return Response.json({ error: "invalid audience" }, { status: 400 });
+    if (body.token !== "b".repeat(64)) return Response.json({ active: false });
+    return new Response(JSON.stringify(state.mode === "revoked"
     ? { active: false } : { active: true, iss: issuer, aud: "crm-web", sub: "principal_A",
       profileId: "profile_A", sessionId: "session_A", nbf: now - 10, exp: now + 300,
       scopes: state.mode === "catalog_only" ? ["crm.catalog.read"] :
@@ -123,6 +129,7 @@ const cpFetch = async (url, options) => {
           ? ["crm.deals.create"] :
         state.mode === "deals_only" ? ["crm.deals.read"] :
           ["crm.catalog.read", "crm.deals.read"] }), { status: 200 });
+  }
   await bump("foreign_egress");
   throw new Error("unexpected_cp_path");
 };

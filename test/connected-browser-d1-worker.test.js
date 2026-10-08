@@ -455,3 +455,68 @@ test("public sandbox catalog entry uses read-only profile and displays seeded co
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("connected MCP Worker serves the pinned catalog tool through CP introspection and the canonical D1 handler", async () => {
+  const root = mkdtempSync(join(tmpdir(), "crm-connected-mcp-"));
+  let worker;
+  try {
+    migrate(root);
+    worker = await start(root);
+    const seeded = await (await call(worker.base, "/__seed")).json();
+    const headers = { accept: "application/json, text/event-stream", "content-type": "application/json",
+      authorization: `Bearer ${"b".repeat(64)}`, "mcp-protocol-version": "2025-06-18" };
+    const send = async body => call(worker.base, "/mcp", { method: "POST", headers, body: JSON.stringify(body) });
+    const initialized = await send({ jsonrpc: "2.0", id: 1, method: "initialize",
+      params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "runner-test", version: "1" } } });
+    assert.equal(initialized.status, 200);
+    assert.equal((await initialized.json()).result.protocolVersion, "2025-06-18");
+    const listing = await send({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
+    const tools = (await listing.json()).result.tools;
+    assert.deepEqual(tools.map(tool => tool.name), ["crm_exhibitions_catalog_search"]);
+    assert.equal(tools[0]._meta.capabilityVersion, "1.1.0");
+    const result = await send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: {
+      name: "crm_exhibitions_catalog_search",
+      arguments: { exhibitionId: seeded.v11ExhibitionId, limit: 5 },
+      _meta: { capabilityVersion: "1.1.0" }
+    } });
+    const content = await result.json();
+    assert.equal(result.status, 200);
+    assert.equal(content.result.isError, false);
+    assert.equal(content.result.structuredContent.artifactVersion, "1.2.0");
+    assert.equal(content.result.structuredContent.items[0].taxesPaidRub, 1250000);
+    assert.equal(content.result.structuredContent.items[0].employeeCount, 42);
+    assert.equal(content.result.structuredContent.items[0].directorName, "Synthetic Director 001");
+    assert.equal(result.headers.get("cache-control"), "no-store");
+    assert.equal(result.headers.get("mcp-session-id"), null, "Worker MCP stays stateless");
+
+    const unauthorized = await call(worker.base, "/mcp", { method: "POST",
+      headers: { accept: "application/json, text/event-stream", "content-type": "application/json",
+        "mcp-protocol-version": "2025-06-18" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 4, method: "tools/call", params: {
+        name: "crm_exhibitions_catalog_search", arguments: { exhibitionId: seeded.v11ExhibitionId },
+        _meta: { capabilityVersion: "1.1.0" }
+      } }) });
+    assert.equal((await unauthorized.json()).error.message, "AUTH_CONTEXT_UNAVAILABLE");
+
+    const cpCount = await (await call(worker.base, "/__cp-count")).json();
+    const forgedProfile = await send({ jsonrpc: "2.0", id: 5, method: "tools/call", params: {
+      name: "crm_exhibitions_catalog_search",
+      arguments: { exhibitionId: seeded.v11ExhibitionId, profileId: "profile_B" },
+      _meta: { capabilityVersion: "1.1.0" }
+    } });
+    assert.equal((await forgedProfile.json()).error.message, "INVALID_ARGUMENTS");
+    assert.equal((await (await call(worker.base, "/__cp-count")).json()).cpCalls, cpCount.cpCalls,
+      "forged profile args fail before CP identity resolution");
+
+    await call(worker.base, "/__cp-control?mode=deals_only");
+    const denied = await send({ jsonrpc: "2.0", id: 6, method: "tools/call", params: {
+      name: "crm_exhibitions_catalog_search", arguments: { exhibitionId: seeded.v11ExhibitionId },
+      _meta: { capabilityVersion: "1.1.0" }
+    } });
+    assert.equal((await denied.json()).error.message, "SCOPE_DENIED");
+    await call(worker.base, "/__cp-control?mode=active");
+  } finally {
+    if (worker) await stop(worker.child);
+    rmSync(root, { recursive: true, force: true });
+  }
+});

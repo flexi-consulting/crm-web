@@ -7,6 +7,8 @@ import { createBuiltCatalogD1Repository } from "./built-catalog-d1.js";
 import { createWeeekHttpTransport } from "./weeek-http-transport.js";
 import { createWeeekCorrelationProvider } from "./weeek-correlation-provider.js";
 import { createConnectedAppDealApproval } from "./connected-app-approval.js";
+import { createConnectedCrmReadBoundary } from "./connected-profile-session.js";
+import { createCrmConnectedMcpHandler } from "./connected-mcp.js";
 
 const unavailable = () => new Response(JSON.stringify({ error: "connected_browser_unavailable" }), {
   status: 503, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" }
@@ -23,7 +25,10 @@ export function createCrmConnectedWorkerHandler({ fetcher = fetch, now = () => D
   resolveWeeekToken, resolveWeeekStatusIds, resolveLeadStatusId,
   resolveTrustedReviewReceipt } = {}) {
   return async (request, env) => {
-    if (env?.CRM_CONNECTED_BROWSER_ENABLED !== "true") return notFound();
+    const pathname = new URL(request.url).pathname;
+    const mcpEnabled = env?.CRM_CONNECTED_MCP_ENABLED === "true";
+    const browserEnabled = env?.CRM_CONNECTED_BROWSER_ENABLED === "true";
+    if (pathname === "/mcp" ? !mcpEnabled : !browserEnabled) return notFound();
     try {
       const issuer = env.CRM_CONNECTED_CP_ISSUER;
       const publicOrigin = env.CRM_CONNECTED_PUBLIC_ORIGIN;
@@ -38,8 +43,6 @@ export function createCrmConnectedWorkerHandler({ fetcher = fetch, now = () => D
           prepareApproval: client.prepareApproval, consumeApproval: client.consumeApproval, now })({
           request: receivedRequest, identity, reviewId, revision, review });
       };
-      const store = createCrmBrowserD1Store(env.CRM_DB, {
-        encryptionKey: env.CRM_CONNECTED_BFF_ENCRYPTION_KEY, now });
       const transport = createWeeekHttpTransport({ fetchImpl: fetcher,
         resolveToken: async (profileId) => {
           if (typeof resolveWeeekToken !== "function") throw new Error("weeek_credential_binding_unavailable");
@@ -85,6 +88,16 @@ export function createCrmConnectedWorkerHandler({ fetcher = fetch, now = () => D
           resolveParticipantCompanyIds: ({ profileId, eventKey }) => builtCatalog.listLegacyParticipantCompanyIds({
             profileRef: profileId, eventKey }) })(received);
       };
+      if (pathname === "/mcp") {
+        const trustedRead = createConnectedCrmReadBoundary({
+          enabled: true, issuer, introspect: client.introspect,
+          handleScopedRequest: connectedRead,
+          now: () => Math.floor(now() / 1000)
+        });
+        return await createCrmConnectedMcpHandler({ enabled: mcpEnabled, handleRead: trustedRead })(request);
+      }
+      const store = createCrmBrowserD1Store(env.CRM_DB, {
+        encryptionKey: env.CRM_CONNECTED_BFF_ENCRYPTION_KEY, now });
       const browser = createCrmConnectedBrowserHandler({ enabled: true, issuer,
         allowedIssuerOrigins: [issuer], publicOrigin, redirectUri, defaultReturnPath, store,
         exchangeCode: client.exchangeCode, introspect: client.introspect,
