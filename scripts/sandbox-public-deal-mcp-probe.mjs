@@ -42,6 +42,7 @@ async function callTool(name, args, version = "1.0.0", options = {}) {
 async function setMode(mode) { await debug(`/__cp-control?mode=${encodeURIComponent(mode)}`); }
 
 try {
+  const initialCounts = await debug("/__cp-count");
   const initialized = await mcp("initialize", { protocolVersion: "2025-06-18", capabilities: {},
     clientInfo: { name: "crm-s04-public-mcp-probe", version: "1" } });
   assert.equal(initialized.result?.protocolVersion, "2025-06-18");
@@ -109,13 +110,16 @@ try {
   assert.equal(readback.result?.structuredContent?.dealId, reconciled.result.structuredContent.dealId);
 
   const counts = await debug("/__cp-count");
-  assert.equal(counts.weeekCreatePosts, 1, "replay and reconciliation must not create another deal");
-  assert.equal(counts.foreignEgress, 0, "synthetic CP and Weeek fixtures are the only egress targets");
+  assert.equal(counts.weeekCreatePosts - initialCounts.weeekCreatePosts, 1,
+    "this run must make one provider POST; replay and reconciliation must not create another deal");
+  assert.equal(counts.foreignEgress, initialCounts.foreignEgress,
+    "this run must not make requests outside the synthetic CP and Weeek fixtures");
   console.log(JSON.stringify({ result: "PASS", origin: base.origin, tools: names,
     profileScopeDenial: wrongScope.error.message, wrongProfile: wrongProfile.error.message,
     review: prepared.status, noCreateBeforeApproval: true, approvalPending: true,
-    lostReply: "unknown", reconciliation: "created_and_linked", providerCreatePosts: counts.weeekCreatePosts,
-    fixtureForeignEgress: counts.foreignEgress }));
+    lostReply: "unknown", reconciliation: "created_and_linked",
+    providerCreatePosts: counts.weeekCreatePosts - initialCounts.weeekCreatePosts,
+    fixtureForeignEgress: counts.foreignEgress - initialCounts.foreignEgress }));
 } finally {
   await setMode("active").catch(() => {});
 }
