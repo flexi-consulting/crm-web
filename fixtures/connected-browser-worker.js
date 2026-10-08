@@ -1,6 +1,7 @@
 import { createCrmConnectedWorkerHandler } from "../src/connected-browser-worker.js";
 import { createCatalogBuildService } from "../src/catalog-build.js";
 import { createBuiltCatalogD1Repository } from "../src/built-catalog-d1.js";
+import { createS04D1Repository } from "../src/s04-d1-repository.js";
 import { createCatalogV11D1Repository, createCatalogV12D1Repository } from "../src/catalog-query-v11.js";
 import { projectLegacyExSnapshot, projectLegacyExSnapshotV11, projectLegacyExSnapshotV12 } from "../src/legacy-ex-snapshot.js";
 
@@ -114,15 +115,23 @@ const cpFetch = async (url, options) => {
   if (url.endsWith("/exchange")) return new Response(JSON.stringify({ token: "b".repeat(64),
     expiresAt: now + 300 }), { status: 201 });
   state = await fixtureState();
-  if (url.endsWith("/introspect")) return new Response(JSON.stringify(state.mode === "revoked"
+  if (url.endsWith("/introspect")) {
+    if (options.headers?.authorization !== "Bearer local-test-service-key-12345678901234567890")
+      return Response.json({ error: "unauthorized" }, { status: 401 });
+    const body = JSON.parse(options.body);
+    if (body.audience !== "crm-web") return Response.json({ error: "invalid audience" }, { status: 400 });
+    if (body.token !== "b".repeat(64)) return Response.json({ active: false });
+    return new Response(JSON.stringify(state.mode === "revoked"
     ? { active: false } : { active: true, iss: issuer, aud: "crm-web", sub: "principal_A",
-      profileId: "profile_A", sessionId: "session_A", nbf: now - 10, exp: now + 300,
+      profileId: state.mode === "profile_B" ? "profile_B" : "profile_A", sessionId: "session_A", nbf: now - 10, exp: now + 300,
       scopes: state.mode === "catalog_only" ? ["crm.catalog.read"] :
         ["deal_create", "deal_create_no_approval", "deal_create_approved_fixture", "expired_unconsumed", "receipt_approved",
           "receipt_approved_response_lost"].includes(state.mode)
-          ? ["crm.deals.create"] :
+          ? ["crm.deals.create", "crm.deals.read"] :
         state.mode === "deals_only" ? ["crm.deals.read"] :
+        state.mode === "profile_B" ? ["crm.deals.create", "crm.deals.read"] :
           ["crm.catalog.read", "crm.deals.read"] }), { status: 200 });
+  }
   await bump("foreign_egress");
   throw new Error("unexpected_cp_path");
 };
@@ -168,6 +177,7 @@ const seedLegacyCatalog = async (db) => {
     artifact: legacyV12.artifact });
   if (!["stored", "replay"].includes(v12Saved.status)) throw new Error(`v1.2 seed failed: ${v12Saved.status}`);
   return { buildId: saved.buildId, companyId: item.id, v11ExhibitionId: exhibitionId,
+    v11LinkedBuildId: linkedBuild.buildId,
     v12CompanyId: legacyV12.artifact.companies[0].id, v11CompanyId: legacyV1.legacyRefs[0].companyId,
     exhibitionId: "demo-expo-001", companyName: item.name };
 };
@@ -185,6 +195,12 @@ export default {
     await crmDb.prepare("INSERT OR IGNORE INTO sandbox_cp_state (id) VALUES (1)").run();
     const url = new URL(request.url);
     if (url.pathname === "/health") return new Response("ok");
+    if (url.pathname.startsWith("/__")) {
+      const expected = env?.CRM_CONNECTED_SANDBOX_TEST_KEY;
+      if (typeof expected !== "string" || expected.length < 32 ||
+          request.headers.get("x-crm-sandbox-test-key") !== expected)
+        return new Response(null, { status: 404, headers: { "cache-control": "no-store" } });
+    }
     if (url.pathname === "/__sandbox-login" && request.method === "GET") {
       const view = url.searchParams.get("view") ?? "deal";
       if (!["deal", "catalog"].includes(view))
@@ -202,15 +218,28 @@ export default {
         let buildId = url.searchParams.get("build_id"), companyId = url.searchParams.get("company_id");
         if (!buildId && !companyId) {
           const idempotencyKey = seed ? `connected-worker-seed-${seed}` : "connected-worker-seed";
-          const seedBuildService = seed ? createCatalogBuildService({ sourceAdapter: {
-            async load(exhibitionId) { return { sourceRevision: `fixture-sandbox-${seed}-r1`, records: [
-              { sourceRecordId: `src-sbx-${seed}`, name: `Synthetic Sandbox Participant ${seed}`,
+          const exhibitionId = "demo-expo-001";
+          const sourceId = seed ? `src-sbx-${seed}` : "src-demo-001";
+          const baseEnrichment = { status: "found", inn: "0000000001", ogrn: "0000000000001",
+            revenueRub: 500000000, activity: "manufacturer", website: "https://example.invalid/machine-works",
+            provenance: { provider: "synthetic-enrichment", fixtureRef: `enrich-sbx-${seed ?? "default"}` } };
+          const baseRegistry = { status: "ok", source: "synthetic-registry",
+            fixtureRef: `registry-sbx-${seed ?? "default"}` };
+          const seedBuildService = seed ? createCatalogBuildService({
+            sourceAdapter: { async load() { return { sourceRevision: `fixture-sandbox-${seed}-r1`, records: [
+              { sourceRecordId: sourceId, name: `Synthetic Sandbox Participant ${seed}`,
                 country: "RU", booth: "S-01" }
-            ] }; }
-          } }) : createCatalogBuildService();
+            ] }; } },
+            sources: { [exhibitionId]: { sourceRevision: `fixture-sandbox-${seed}-r1`, records: [
+              { sourceRecordId: sourceId, name: `Synthetic Sandbox Participant ${seed}`,
+                country: "RU", booth: "S-01" }
+            ] } },
+            enrichmentAdapter: { async enrich() { return structuredClone(baseEnrichment); } },
+            registryAdapter: { async check() { return structuredClone(baseRegistry); } }
+          }) : createCatalogBuildService();
           const generated = await seedBuildService.build({ profileId: "profile_A",
             idempotencyKey,
-            exhibitionId: "demo-expo-001" });
+            exhibitionId });
           const repo = createBuiltCatalogD1Repository(env.CRM_DB);
           const saved = await repo.saveBuild({ profileRef: "profile_A",
             idempotencyKey, build: generated.body });
@@ -219,24 +248,31 @@ export default {
           const listing = await repo.readParticipants({ profileRef: "profile_A", buildId: saved.buildId });
           buildId = saved.buildId;
           companyId = listing.body?.items?.[0]?.id;
-          if (companyId) await repo.ensurePrelead({ profileRef: "profile_A", buildId, companyId });
+          if (companyId) {
+            const prelead = await repo.ensurePrelead({ profileRef: "profile_A", buildId, companyId });
+            if (![200, 201].includes(prelead.status)) return Response.json({ error: "synthetic_prelead_unavailable",
+              detail: prelead.body?.error ?? "prelead_status_invalid" }, { status: 503 });
+          }
         }
         if (!/^build-[a-f0-9]{24}$/.test(buildId ?? "") || !/^co-[a-f0-9]{20}$/.test(companyId ?? ""))
           return Response.json({ error: "synthetic_catalog_required" }, { status: 400 });
         await setFixtureMode("deal_create");
         returnPath = `/catalogs/${buildId}/participants/${companyId}/deal`;
       }
-      const start = await connected(new Request(`https://crm.example.invalid/auth/connected/start?${
+      const publicOrigin = env.CRM_CONNECTED_PUBLIC_ORIGIN;
+      const start = await connected(new Request(`${publicOrigin}/auth/connected/start?${
         new URLSearchParams({ from: loginMode, returnTo: returnPath })}`), env);
-      if (start.status !== 303) return Response.json({ error: "synthetic_login_unavailable" }, { status: 503 });
+      if (start.status !== 303) return Response.json({ error: "synthetic_login_unavailable",
+        stage: "start", status: start.status, detail: await start.clone().text() }, { status: 503 });
       const target = new URL(start.headers.get("location"));
       const pending = start.headers.getSetCookie().find((value) => value.startsWith("__Host-crm-connected-pending="))
         ?.split(";", 1)[0];
       const state = target.searchParams.get("state");
       if (!pending || !state) return Response.json({ error: "synthetic_login_unavailable" }, { status: 503 });
-      const callback = await connected(new Request(`https://crm.example.invalid/auth/connected/callback?${
+      const callback = await connected(new Request(`${publicOrigin}/auth/connected/callback?${
         new URLSearchParams({ code: "c".repeat(64), state, iss: issuer })}`, { headers: { cookie: pending } }), env);
-      if (callback.status !== 303) return Response.json({ error: "synthetic_login_unavailable" }, { status: 503 });
+      if (callback.status !== 303) return Response.json({ error: "synthetic_login_unavailable",
+        stage: "callback", status: callback.status, detail: await callback.clone().text() }, { status: 503 });
       const session = callback.headers.getSetCookie().find((value) => value.startsWith("__Host-crm-connected-session="));
       if (!session) return Response.json({ error: "synthetic_login_unavailable" }, { status: 503 });
       return new Response(null, { status: 303, headers: { location: returnPath, "set-cookie": session,
@@ -249,6 +285,26 @@ export default {
     }
     if (url.pathname === "/__seed") {
       return Response.json(await seedLegacyCatalog(env.CRM_DB));
+    }
+    if (url.pathname === "/__deal-diagnostics") {
+      const buildId = url.searchParams.get("buildId"), companyId = url.searchParams.get("companyId");
+      if (!/^build-[a-f0-9]{24}$/.test(buildId ?? "") || !/^co-[a-f0-9]{20}$/.test(companyId ?? ""))
+        return Response.json({ error: "invalid_diagnostic_identity" }, { status: 400 });
+      const repository = createBuiltCatalogD1Repository(env.CRM_DB);
+      const selected = await repository.readParticipants({ profileRef: "profile_A", buildId, companyId });
+      const prelead = selected.status === 200
+        ? await repository.ensurePrelead({ profileRef: "profile_A", buildId, companyId }) : null;
+      const resolved = selected.status === 200
+        ? await repository.resolve({ profileId: "profile_A", exhibitionId: selected.body.exhibitionId,
+          companyId, buildId }) : null;
+      const context = selected.status === 200
+        ? await createS04D1Repository(env.CRM_DB).getPreleadContext({ profileRef: "profile_A",
+          eventId: selected.body.exhibitionId, companyId }) : null;
+      return Response.json({ selectedStatus: selected.status, selectedError: selected.body?.error ?? null,
+        preleadStatus: prelead?.status ?? null, preleadError: prelead?.body?.error ?? null,
+        resolved: Boolean(resolved), contextFound: Boolean(context),
+        selectedExhibitionId: selected.body?.exhibitionId ?? null,
+        selectedCompanyId: selected.body?.items?.[0]?.id ?? null });
     }
     if (url.pathname === "/__cp-control") {
       const state = await setFixtureMode(url.searchParams.get("mode") ?? "active");
@@ -270,8 +326,8 @@ export default {
     }
     if (url.pathname === "/__missing-encryption-key") {
       const withoutEncryptionKey = { ...env, CRM_CONNECTED_BFF_ENCRYPTION_KEY: undefined };
-      return connected(new Request("https://crm.example.invalid/catalogs/build-aaaaaaaaaaaaaaaaaaaaaaaa", request),
-        withoutEncryptionKey);
+      const internalUrl = new URL("/catalogs/build-aaaaaaaaaaaaaaaaaaaaaaaa", env.CRM_CONNECTED_PUBLIC_ORIGIN);
+      return connected(new Request(internalUrl, request), withoutEncryptionKey);
     }
     if (url.pathname === "/__clock-offset") {
       clockOffset = Number(url.searchParams.get("milliseconds") ?? 0);
@@ -286,6 +342,10 @@ export default {
         .bind(Math.floor(Date.now() / 1000) - 1, "profile_A").run();
       return Response.json({ expired: true });
     }
-    return connected(new Request(`https://crm.example.invalid${url.pathname}${url.search}`, request), env);
+    // Preserve the configured public origin for the real BFF origin check.
+    // Rewriting every request to a fixture hostname made deployed browser routes
+    // fail with `invalid_origin` after the synthetic login succeeded.
+    const internalUrl = new URL(`${url.pathname}${url.search}`, env.CRM_CONNECTED_PUBLIC_ORIGIN);
+    return connected(new Request(internalUrl, request), env);
   }
 };

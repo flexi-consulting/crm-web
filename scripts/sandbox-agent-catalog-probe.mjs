@@ -13,6 +13,11 @@ import { createServer as createPortServer } from "node:net";
 const crmRoot = resolve(new URL("..", import.meta.url).pathname);
 const runnerRoot = resolve(process.env.AI_AGENT_RUNNER_ROOT ?? "");
 if (!process.env.AI_AGENT_RUNNER_ROOT) throw new Error("AI_AGENT_RUNNER_ROOT must point to an isolated Agent Runner checkout");
+const publicOrigin = process.env.CRM_SANDBOX_PUBLIC_ORIGIN?.replace(/\/$/, "");
+const publicDebugKey = process.env.CRM_CONNECTED_SANDBOX_TEST_KEY;
+const localDebugKey = "local-crm-connected-sandbox-debug-key-20261008";
+if (publicOrigin && (!publicDebugKey || publicDebugKey.length < 32))
+  throw new Error("CRM_SANDBOX_PUBLIC_ORIGIN requires CRM_CONNECTED_SANDBOX_TEST_KEY from the sandbox secret store");
 const nodeBin = process.execPath;
 const wrangler = join(crmRoot, "node_modules/wrangler/bin/wrangler.js");
 const config = "test/wrangler.connected-browser-local.toml";
@@ -35,7 +40,17 @@ const run = (command, args, options = {}) => {
 };
 const cookie = (response, name) => response.headers.getSetCookie().map(part => part.split(";")[0])
   .find(part => part.startsWith(`${name}=`));
-const request = (base, path, options = {}) => fetch(`${base}${path}`, { redirect: "manual", ...options });
+const request = (base, path, options = {}) => {
+  const target = new URL(path, base);
+  if (target.pathname.startsWith("/__")) {
+    const expectedOrigin = publicOrigin ? new URL(publicOrigin).origin : new URL(base).origin;
+    assert.equal(target.origin, expectedOrigin, "fixture test key must not be sent outside the selected sandbox origin");
+    const headers = new Headers(options.headers);
+    headers.set("x-crm-sandbox-test-key", publicOrigin ? publicDebugKey : localDebugKey);
+    options = { ...options, headers };
+  }
+  return fetch(target, { redirect: "manual", ...options });
+};
 const readMcpEvidence = (runRoot) => readFileSync(join(runRoot, "events.jsonl"), "utf8")
   .trim().split("\n").map(JSON.parse)
   .filter(event => event.type === "log" && event.payload?.stream === "stdout" &&
@@ -46,7 +61,6 @@ let runner;
 
 try {
   let site, eventId, session;
-  const publicOrigin = process.env.CRM_SANDBOX_PUBLIC_ORIGIN?.replace(/\/$/, "");
   if (publicOrigin) {
     const origin = new URL(publicOrigin);
     assert.equal(origin.protocol, "https:");

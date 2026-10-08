@@ -140,9 +140,16 @@ test("S-01 v1.1 metadata schema preserves synthetic legacy filter fields with ex
   assert.equal(view.html.includes("Карточка CRM и подготовка сделки"), false,
     "do not show an S-04 path without a current imported participant binding");
   const linkedView = renderCatalogV11({ artifact: queryArtifact, result: filtered,
-    participantCompanyIds: [rows.find(row => row.name === "Revenue Upper Boundary").id] });
+    participantCompanyIds: [rows.find(row => row.name === "Revenue Upper Boundary").id],
+    participantBuildId: `build-${"c".repeat(24)}`, telegramBotUsername: "flexi_leads_bot" });
   assert.match(linkedView.html, /Карточка CRM и подготовка сделки/);
   assert.match(linkedView.html, /\/catalogs\/synthetic-current-source-shape\/participants\/co-2123456789abcdef0123/);
+  assert.ok(linkedView.html.includes(`https://t.me/flexi_leads_bot?start=crm1_build-${"c".repeat(24)}_co-2123456789abcdef0123`));
+  assert.ok(!linkedView.html.includes("profileId"), "deep link carries no profile identity");
+  const noTelegramLink = renderCatalogV11({ artifact: queryArtifact, result: filtered,
+    participantCompanyIds: [rows.find(row => row.name === "Revenue Upper Boundary").id],
+    participantBuildId: `build-${"c".repeat(24)}`, telegramBotUsername: "<img src=x>" });
+  assert.equal(noTelegramLink.html.includes("https://t.me/"), false, "invalid test bot name cannot create a link");
   const countryView = renderCatalogV11({ artifact: queryArtifact,
     result: queryCatalogV11(queryArtifact, { country: "RU" }), filters: { country: "RU" } });
   assert.match(countryView.html, /<option value="RU" selected>/);

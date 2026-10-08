@@ -48,11 +48,21 @@ function safeSourceUrl(value) {
   } catch { return null; }
 }
 
-export function renderCatalogV11({ artifact, result, filters = {}, participantCompanyIds = [] }) {
+export function renderCatalogV11({ artifact, result, filters = {}, participantCompanyIds = [],
+  participantBuildId = null, telegramBotUsername = null }) {
   if (!new Set(["1.1.0", "1.2.0"]).has(artifact?.schemaVersion) || result?.status !== "ok" || !Array.isArray(result.items))
     return { status: "invalid_catalog_view", html: "" };
   const participantLinks = new Set(Array.isArray(participantCompanyIds)
     ? participantCompanyIds.filter(id => /^co-[a-f0-9]{20}$/.test(id)) : []);
+  const telegramUsername = typeof telegramBotUsername === "string" && /^[A-Za-z0-9_]{5,32}$/.test(telegramBotUsername)
+    ? telegramBotUsername : null;
+  const telegramDealLink = companyId => {
+    if (!telegramUsername || !/^build-[a-f0-9]{24}$/.test(participantBuildId ?? "") ||
+        !participantLinks.has(companyId)) return "";
+    const payload = `crm1_${participantBuildId}_${companyId}`;
+    if (payload.length > 64) return "";
+    return `<a href="https://t.me/${telegramUsername}?start=${payload}" rel="noopener noreferrer">Подготовить сделку в CRM Telegram</a>`;
+  };
   const options = (name, values, selected, labels = {}) => `<label>${name}<select name="${name}"><option value="">Все</option>${values.map(value =>
     `<option value="${escapeHtml(value)}"${selected === value ? " selected" : ""}>${escapeHtml(labels[value] ?? value)}</option>`).join("")}</select></label>`;
   const countries = [...new Set(artifact.companies.map(company => company.source?.country).filter(Boolean))]
@@ -69,6 +79,7 @@ export function renderCatalogV11({ artifact, result, filters = {}, participantCo
       <p>Сотрудники: ${enrichment.employeeCount?.count == null ? "Неизвестно" : escapeHtml(enrichment.employeeCount.count)}${enrichment.employeeCount?.period ? ` (${escapeHtml(enrichment.employeeCount.period)})` : ""}</p>
       <p>Директор: ${source.director?.name ? escapeHtml(source.director.name) : "Неизвестно"}${source.director?.position ? ` · ${escapeHtml(source.director.position)}` : ""}</p>` : ""}
       ${participantLinks.has(company.id) ? `<p><a href="/catalogs/${encodeURIComponent(artifact.exhibitionId)}/participants/${encodeURIComponent(company.id)}">Карточка CRM и подготовка сделки</a></p>` : ""}
+      ${telegramDealLink(company.id)}
       ${safeHref ? `<a href="${escapeHtml(safeHref)}" rel="noopener noreferrer">Профиль выставки</a>` : ""}</article>`;
   }).join("");
   const html = `<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="robots" content="noindex,nofollow"><title>Каталог ${escapeHtml(artifact.exhibitionId)}</title><main>
@@ -84,7 +95,8 @@ const reply = (status, body) => new Response(JSON.stringify(body), { status, hea
   "x-content-type-options": "nosniff"
 } });
 
-export function createCatalogV11ReadHandler({ repository, resolveTrustedProfile, resolveParticipantCompanyIds }) {
+export function createCatalogV11ReadHandler({ repository, resolveTrustedProfile, resolveParticipantCompanyIds,
+  telegramBotUsername = null }) {
   if (typeof repository?.getArtifact !== "function" || typeof resolveTrustedProfile !== "function")
     throw new TypeError("catalog v1.1 repository and trusted profile resolver required");
   return async function handle(request) {
@@ -113,14 +125,17 @@ export function createCatalogV11ReadHandler({ repository, resolveTrustedProfile,
     if (!artifact) return reply(404, { error: "catalog_not_found" });
     const result = queryCatalogV11(artifact, filters);
     if (result.status !== "ok") return reply(400, { error: "invalid_query" });
-    let participantCompanyIds = [];
+    let participantCompanyIds = [], participantBuildId = null;
     if (typeof resolveParticipantCompanyIds === "function") {
       try {
         const resolved = await resolveParticipantCompanyIds({ profileId: context.profileId, eventKey: match[1] });
-        if (resolved?.status === "ok" && Array.isArray(resolved.companyIds)) participantCompanyIds = resolved.companyIds;
+        if (resolved?.status === "ok" && Array.isArray(resolved.companyIds)) {
+          participantCompanyIds = resolved.companyIds;
+          participantBuildId = resolved.buildId ?? null;
+        }
       } catch { /* Catalog reads stay available while an optional action binding is unavailable. */ }
     }
-    const view = renderCatalogV11({ artifact, result, filters, participantCompanyIds });
+    const view = renderCatalogV11({ artifact, result, filters, participantCompanyIds, participantBuildId, telegramBotUsername });
     if (view.status !== "ok") return reply(503, { error: "catalog_unavailable" });
     return new Response(view.html, { status: 200, headers: {
       "content-type": "text/html; charset=utf-8", "cache-control": "private, no-store",

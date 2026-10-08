@@ -57,7 +57,31 @@ function migrate(root) {
 }
 const cookie = (response, name) => response.headers.getSetCookie()
   .map((part) => part.split(";")[0]).find((part) => part.startsWith(`${name}=`));
-const call = (base, path, options = {}) => fetch(`${base}${path}`, { redirect: "manual", ...options });
+const call = (base, path, options = {}) => {
+  const headers = new Headers(options.headers);
+  if (path.startsWith("/__")) headers.set("x-crm-sandbox-test-key", "local-crm-connected-sandbox-debug-key-20261008");
+  return fetch(`${base}${path}`, { redirect: "manual", ...options, headers });
+};
+
+test("synthetic fixture controls and encrypted browser storage are not public", async () => {
+  const root = mkdtempSync(join(tmpdir(), "crm-connected-browser-debug-"));
+  let worker;
+  try {
+    migrate(root);
+    worker = await start(root);
+    for (const path of ["/__browser-storage", "/__cp-count", "/__cp-control?mode=outage",
+      "/__sandbox-login?view=deal", "/__sandbox-approve"]) {
+      const response = await fetch(`${worker.base}${path}`);
+      assert.equal(response.status, 404, `${path} must fail closed without the sandbox test key`);
+    }
+    assert.deepEqual(await (await call(worker.base, "/__cp-count")).json(), {
+      cpCalls: 0, foreignEgress: 0, approvalPrepareCalls: 0, approvalConsumeCalls: 0, weeekCreatePosts: 0
+    }, "authorized local fixture diagnostics remain available to isolated tests");
+  } finally {
+    await stop(worker?.child);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("Worker Fetch uses atomic D1 browser handoff and real profile-scoped catalog after restart", async () => {
   const root = mkdtempSync(join(tmpdir(), "crm-connected-browser-"));
@@ -72,7 +96,7 @@ test("Worker Fetch uses atomic D1 browser handoff and real profile-scoped catalo
       cpCalls: 0, foreignEgress: 0, approvalPrepareCalls: 0, approvalConsumeCalls: 0, weeekCreatePosts: 0
     }, "missing encryption key fails closed before external requests or writes");
     const seeded = await (await call(worker.base, "/__seed")).json();
-    const { buildId, v11ExhibitionId, v11CompanyId, v12CompanyId } = seeded;
+    const { buildId, v11ExhibitionId, v11LinkedBuildId, v11CompanyId, v12CompanyId } = seeded;
     assert.equal(v12CompanyId, v11CompanyId, "versioned catalog preserves participant identity");
     const deepLink = await call(worker.base, `/catalogs/${buildId}`);
     assert.equal(deepLink.status, 303);
@@ -133,6 +157,9 @@ test("Worker Fetch uses atomic D1 browser handoff and real profile-scoped catalo
     assert.match(v11Html, /Уплаченные налоги: 1,25 млн ₽ \(2024\)/);
     assert.match(v11Html, /Сотрудники: 42 \(2025\)/);
     assert.match(v11Html, /Директор: Synthetic Director 001 · Synthetic director role/);
+    assert.ok(v11Html.includes(`https://t.me/flexi_leads_bot?start=crm1_${v11LinkedBuildId}_${v11CompanyId}`),
+      "the profile-scoped catalog emits a stable Telegram participant reference for the linked legacy build");
+    assert.equal(v11Html.includes("profile_A"), false, "profile identity is not serialized into the Telegram link");
     const catalogSearch = await call(worker.base, `/api/v1/catalogs/${v11ExhibitionId}/entries?limit=10`,
       { headers: { cookie: v11Session } });
     assert.equal(catalogSearch.status, 200, await catalogSearch.clone().text());
@@ -450,6 +477,149 @@ test("public sandbox catalog entry uses read-only profile and displays seeded co
       "a fresh deal seed must not collide with the prior participant's one-deal limit");
     assert.equal((await call(worker.base, "/__sandbox-login?view=deal&seed=unsafe-seed")).status, 400);
     assert.equal((await call(worker.base, "/__sandbox-login?view=catalog&seed=012345abcdef")).status, 400);
+  } finally {
+    if (worker) await stop(worker.child);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("connected MCP Worker serves the pinned catalog tool through CP introspection and the canonical D1 handler", async () => {
+  const root = mkdtempSync(join(tmpdir(), "crm-connected-mcp-"));
+  let worker;
+  try {
+    migrate(root);
+    worker = await start(root);
+    const seeded = await (await call(worker.base, "/__seed")).json();
+    const headers = { accept: "application/json, text/event-stream", "content-type": "application/json",
+      authorization: `Bearer ${"b".repeat(64)}`, "mcp-protocol-version": "2025-06-18" };
+    const send = async body => call(worker.base, "/mcp", { method: "POST", headers, body: JSON.stringify(body) });
+    const initialized = await send({ jsonrpc: "2.0", id: 1, method: "initialize",
+      params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "runner-test", version: "1" } } });
+    assert.equal(initialized.status, 200);
+    assert.equal((await initialized.json()).result.protocolVersion, "2025-06-18");
+    const listing = await send({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
+    const tools = (await listing.json()).result.tools;
+    assert.deepEqual(tools.map(tool => tool.name), ["crm_exhibitions_catalog_search",
+      "crm_deal_prepare_from_participant", "crm_deal_create_from_participant",
+      "crm_deal_get_operation", "crm_deal_reconcile_operation"]);
+    assert.equal(tools[0]._meta.capabilityVersion, "1.1.0");
+    const result = await send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: {
+      name: "crm_exhibitions_catalog_search",
+      arguments: { exhibitionId: seeded.v11ExhibitionId, limit: 5, classification: "target",
+        country: "Sample Federation", revenueBand: "100-1500", profitBand: "0-30" },
+      _meta: { capabilityVersion: "1.1.0" }
+    } });
+    const content = await result.json();
+    assert.equal(result.status, 200);
+    assert.equal(content.result.isError, false);
+    assert.equal(content.result.structuredContent.artifactVersion, "1.2.0");
+    assert.equal(content.result.structuredContent.items[0].taxesPaidRub, 1250000);
+    assert.equal(content.result.structuredContent.items[0].employeeCount, 42);
+    assert.equal(content.result.structuredContent.items[0].directorName, "Synthetic Director 001");
+    assert.equal(result.headers.get("cache-control"), "no-store");
+    assert.equal(result.headers.get("mcp-session-id"), null, "Worker MCP stays stateless");
+
+    const unauthorized = await call(worker.base, "/mcp", { method: "POST",
+      headers: { accept: "application/json, text/event-stream", "content-type": "application/json",
+        "mcp-protocol-version": "2025-06-18" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 4, method: "tools/call", params: {
+        name: "crm_exhibitions_catalog_search", arguments: { exhibitionId: seeded.v11ExhibitionId },
+        _meta: { capabilityVersion: "1.1.0" }
+      } }) });
+    assert.equal((await unauthorized.json()).error.message, "AUTH_CONTEXT_UNAVAILABLE");
+
+    const cpCount = await (await call(worker.base, "/__cp-count")).json();
+    const forgedProfile = await send({ jsonrpc: "2.0", id: 5, method: "tools/call", params: {
+      name: "crm_exhibitions_catalog_search",
+      arguments: { exhibitionId: seeded.v11ExhibitionId, profileId: "profile_B" },
+      _meta: { capabilityVersion: "1.1.0" }
+    } });
+    assert.equal((await forgedProfile.json()).error.message, "INVALID_ARGUMENTS");
+    assert.equal((await (await call(worker.base, "/__cp-count")).json()).cpCalls, cpCount.cpCalls,
+      "forged profile args fail before CP identity resolution");
+
+    await call(worker.base, "/__cp-control?mode=deals_only");
+    const denied = await send({ jsonrpc: "2.0", id: 6, method: "tools/call", params: {
+      name: "crm_exhibitions_catalog_search", arguments: { exhibitionId: seeded.v11ExhibitionId },
+      _meta: { capabilityVersion: "1.1.0" }
+    } });
+    assert.equal((await denied.json()).error.message, "SCOPE_DENIED");
+    await call(worker.base, "/__cp-control?mode=active");
+  } finally {
+    if (worker) await stop(worker.child);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("connected MCP S-04 routes profile-bound deal methods through canonical handlers and requires CP approval", async () => {
+  const root = mkdtempSync(join(tmpdir(), "crm-connected-mcp-s04-"));
+  let worker;
+  try {
+    migrate(root);
+    worker = await start(root);
+    const seed = await call(worker.base, "/__sandbox-login?view=deal&seed=012345abcdef");
+    assert.equal(seed.status, 303);
+    const participantUrl = new URL(seed.headers.get("location"), worker.base);
+    const [, buildId, companyId] = participantUrl.pathname.match(/^\/catalogs\/(build-[a-f0-9]{24})\/participants\/(co-[a-f0-9]{20})\/deal$/) ?? [];
+    assert.ok(buildId && companyId, participantUrl.pathname);
+    const diagnostic = await (await call(worker.base,
+      `/__deal-diagnostics?buildId=${buildId}&companyId=${companyId}`)).json();
+    assert.deepEqual(diagnostic, { selectedStatus: 200, selectedError: null, preleadStatus: 200,
+      preleadError: null, resolved: true, contextFound: true, selectedExhibitionId: "demo-expo-001",
+      selectedCompanyId: companyId });
+
+    const headers = { accept: "application/json, text/event-stream", "content-type": "application/json",
+      authorization: `Bearer ${"b".repeat(64)}`, "mcp-protocol-version": "2025-06-18" };
+    const send = (id, name, args, version = "1.0.0") => call(worker.base, "/mcp", { method: "POST", headers,
+      body: JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: {
+        name, arguments: args, _meta: { capabilityVersion: version } } }) });
+    const args = { buildId, companyId, exhibitionId: "demo-expo-001", title: "Synthetic sandbox deal",
+      companyInn: "0000000001", contactName: "Synthetic Contact", dealComment: "Synthetic MCP review." };
+
+    const forgedProfile = await send(1, "crm_deal_prepare_from_participant", { ...args, profileId: "profile_B" });
+    assert.equal((await forgedProfile.json()).error.message, "INVALID_ARGUMENTS");
+    await call(worker.base, "/__cp-control?mode=deals_only");
+    const denied = await send(2, "crm_deal_prepare_from_participant", args);
+    assert.equal((await denied.json()).error.message, "SCOPE_DENIED");
+    await call(worker.base, "/__cp-control?mode=profile_B");
+    const foreign = await send(3, "crm_deal_prepare_from_participant", args);
+    assert.equal((await foreign.json()).error.message, "NOT_FOUND");
+    await call(worker.base, "/__cp-control?mode=deal_create");
+
+    const preparedResponse = await send(4, "crm_deal_prepare_from_participant", args);
+    const preparedBody = await preparedResponse.json();
+    assert.ok(preparedBody.result, JSON.stringify(preparedBody));
+    const prepared = preparedBody.result.structuredContent;
+    assert.equal(prepared.status, "prepared");
+    assert.equal(prepared.details.companyId, companyId);
+    const beforeApproval = await (await call(worker.base, "/__cp-count")).json();
+    assert.equal(beforeApproval.weeekCreatePosts, 0);
+
+    const confirmArgs = { reviewId: prepared.reviewId, revision: prepared.revision };
+    const approvalRequired = await send(5, "crm_deal_create_from_participant", confirmArgs);
+    const pending = (await approvalRequired.json()).result;
+    assert.equal(pending.isError, false);
+    assert.equal(pending._meta.outcome, "pending");
+    assert.equal(pending.structuredContent.error, "human_approval_required");
+    assert.match(pending.structuredContent.approvalUrl, /^https:\/\/cp\.example\.invalid\/v1\/connected-app-approvals\/review\?intent=/);
+    assert.equal((await (await call(worker.base, "/__cp-count")).json()).weeekCreatePosts, 0);
+
+    await call(worker.base, "/__sandbox-approve");
+    const accepted = await send(6, "crm_deal_create_from_participant", confirmArgs);
+    const unknown = (await accepted.json()).result;
+    assert.equal(unknown.isError, false);
+    assert.equal(unknown._meta.outcome, "pending");
+    assert.equal(unknown.structuredContent.status, "unknown");
+    const operationId = prepared.operationId;
+    const reconciledResponse = await send(7, "crm_deal_reconcile_operation", { operationId });
+    const reconciled = (await reconciledResponse.json()).result.structuredContent;
+    assert.equal(reconciled.status, "created");
+    assert.equal(reconciled.linkStatus, "linked");
+    const final = await send(8, "crm_deal_get_operation", { operationId });
+    assert.equal((await final.json()).result.structuredContent.dealId, reconciled.dealId);
+    const counts = await (await call(worker.base, "/__cp-count")).json();
+    assert.equal(counts.weeekCreatePosts, 1, "unknown provider response is reconciled without a second create");
+    assert.equal(counts.foreignEgress, 0);
   } finally {
     if (worker) await stop(worker.child);
     rmSync(root, { recursive: true, force: true });

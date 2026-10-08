@@ -35,7 +35,11 @@ const port = async () => {
   await new Promise(resolveClose => server.close(resolveClose));
   return value;
 };
-const request = (base, path, options = {}) => fetch(`${base}${path}`, { redirect: "manual", ...options });
+const request = (base, path, options = {}) => {
+  const headers = new Headers(options.headers);
+  if (path.startsWith("/__")) headers.set("x-crm-sandbox-test-key", "local-crm-connected-sandbox-debug-key-20261008");
+  return fetch(`${base}${path}`, { redirect: "manual", ...options, headers });
+};
 const readMcpEvidence = (runRoot) => readFileSync(join(runRoot, "events.jsonl"), "utf8")
   .trim().split("\n").map(JSON.parse)
   .filter(event => event.type === "log" && event.payload?.stream === "stdout" &&

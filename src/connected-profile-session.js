@@ -17,6 +17,14 @@ const READ_ROUTES = [
   { pattern: /^\/api\/v1\/deal-reviews\/review-[0-9a-f-]{36}$/, scopes: ["crm.deals.read", "crm.deals.create"] },
   { pattern: /^\/api\/v1\/deal-operations\/op-[0-9a-f-]{36}$/, scopes: ["crm.deals.read", "crm.deals.create"] }
 ];
+const MCP_ROUTES = [
+  { method: "GET", pattern: /^\/api\/v1\/catalogs\/[a-z0-9][a-z0-9-]{0,79}\/entries$/,
+    scopes: ["crm.catalog.read"], queryKeys: ["query", "limit", "offset", "classification", "country", "revenueBand", "profitBand"] },
+  { method: "POST", pattern: /^\/api\/v1\/deal-reviews$/, scopes: ["crm.deals.create"] },
+  { method: "POST", pattern: /^\/api\/v1\/deal-reviews\/review-[0-9a-f-]{36}\/confirm$/, scopes: ["crm.deals.create"] },
+  { method: "GET", pattern: /^\/api\/v1\/deal-operations\/op-[0-9a-f-]{36}$/, scopes: ["crm.deals.read", "crm.deals.create"] },
+  { method: "POST", pattern: /^\/api\/v1\/deal-operations\/op-[0-9a-f-]{36}\/reconcile$/, scopes: ["crm.deals.create"] }
+];
 const json = (status, error) => new Response(JSON.stringify({ error }), { status,
   headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
 
@@ -69,6 +77,38 @@ export function createConnectedCrmReadBoundary({ enabled = false, issuer, intros
             "crm.deals.create.synthetic", "crm.deals.operations.read.synthetic"] : []);
     return handleScopedRequest(request, { profileId: identity.profileId, scopes,
       principalId: identity.principalId, sessionId: identity.sessionId });
+  };
+}
+
+/** Authenticated allowlist for Agent MCP calls into the canonical app handlers. */
+export function createConnectedCrmMcpCallBoundary({ enabled = false, issuer, introspect,
+  handleScopedRequest, now = () => Math.floor(Date.now() / 1000) } = {}) {
+  return async (request) => {
+    if (!enabled) return json(404, "not_found");
+    if (typeof introspect !== "function" || typeof handleScopedRequest !== "function" ||
+        typeof issuer !== "string" || !issuer.startsWith("https://"))
+      return json(503, "connected_identity_unavailable");
+    let url;
+    try { url = new URL(request.url); } catch { return json(400, "invalid_url"); }
+    const route = MCP_ROUTES.find((entry) => entry.pattern.test(url.pathname));
+    if (!route) return json(404, "not_found");
+    if (request.method !== route.method) return json(405, "method_not_allowed");
+    if (["profileId", "userId", "token", "access_token"].some((key) => url.searchParams.has(key)) ||
+        [...url.searchParams.keys()].some((key) => !route.queryKeys?.includes(key)))
+      return json(400, "untrusted_identity_input");
+    const authorization = request.headers.get("authorization");
+    const match = /^Bearer ([A-Za-z0-9._~+/-]{16,512})$/.exec(authorization ?? "");
+    if (!match) return json(401, "connected_session_required");
+    let result;
+    try { result = await introspect({ token: match[1], audience: AUDIENCE }); }
+    catch { return json(503, "connected_identity_unavailable"); }
+    if (result?.active === false && Object.keys(result).length === 1)
+      return json(401, "connected_session_inactive");
+    const identity = activeIdentity(result, issuer, now());
+    if (!identity) return json(503, "connected_identity_invalid");
+    if (!route.scopes.some((scope) => identity.scopes.includes(scope)))
+      return json(403, "required_scope_missing");
+    return handleScopedRequest(request, identity);
   };
 }
 
