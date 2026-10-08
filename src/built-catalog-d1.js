@@ -152,7 +152,8 @@ export function createBuiltCatalogD1Repository(db, now = () => new Date().toISOS
       const rows = await db.prepare(`SELECT DISTINCT company_id FROM s02_legacy_participant_refs
         WHERE profile_ref = ? AND event_key = ? AND build_id = ? ORDER BY company_id`)
         .bind(profileRef, eventKey, latest.build_id).all();
-      return { status: "ok", companyIds: (rows.results ?? []).map(row => row.company_id) };
+      return { status: "ok", buildId: latest.build_id,
+        companyIds: (rows.results ?? []).map(row => row.company_id) };
     } catch { return { status: "unavailable", companyIds: [] }; }
   }
 

@@ -96,7 +96,7 @@ test("Worker Fetch uses atomic D1 browser handoff and real profile-scoped catalo
       cpCalls: 0, foreignEgress: 0, approvalPrepareCalls: 0, approvalConsumeCalls: 0, weeekCreatePosts: 0
     }, "missing encryption key fails closed before external requests or writes");
     const seeded = await (await call(worker.base, "/__seed")).json();
-    const { buildId, v11ExhibitionId, v11CompanyId, v12CompanyId } = seeded;
+    const { buildId, v11ExhibitionId, v11LinkedBuildId, v11CompanyId, v12CompanyId } = seeded;
     assert.equal(v12CompanyId, v11CompanyId, "versioned catalog preserves participant identity");
     const deepLink = await call(worker.base, `/catalogs/${buildId}`);
     assert.equal(deepLink.status, 303);
@@ -157,6 +157,9 @@ test("Worker Fetch uses atomic D1 browser handoff and real profile-scoped catalo
     assert.match(v11Html, /Уплаченные налоги: 1,25 млн ₽ \(2024\)/);
     assert.match(v11Html, /Сотрудники: 42 \(2025\)/);
     assert.match(v11Html, /Директор: Synthetic Director 001 · Synthetic director role/);
+    assert.ok(v11Html.includes(`https://t.me/flexi_leads_bot?start=crm1_${v11LinkedBuildId}_${v11CompanyId}`),
+      "the profile-scoped catalog emits a stable Telegram participant reference for the linked legacy build");
+    assert.equal(v11Html.includes("profile_A"), false, "profile identity is not serialized into the Telegram link");
     const catalogSearch = await call(worker.base, `/api/v1/catalogs/${v11ExhibitionId}/entries?limit=10`,
       { headers: { cookie: v11Session } });
     assert.equal(catalogSearch.status, 200, await catalogSearch.clone().text());

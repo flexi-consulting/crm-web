@@ -177,6 +177,7 @@ const seedLegacyCatalog = async (db) => {
     artifact: legacyV12.artifact });
   if (!["stored", "replay"].includes(v12Saved.status)) throw new Error(`v1.2 seed failed: ${v12Saved.status}`);
   return { buildId: saved.buildId, companyId: item.id, v11ExhibitionId: exhibitionId,
+    v11LinkedBuildId: linkedBuild.buildId,
     v12CompanyId: legacyV12.artifact.companies[0].id, v11CompanyId: legacyV1.legacyRefs[0].companyId,
     exhibitionId: "demo-expo-001", companyName: item.name };
 };

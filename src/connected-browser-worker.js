@@ -87,6 +87,7 @@ export function createCrmConnectedWorkerHandler({ fetcher = fetch, now = () => D
         if (catalogSearch) return createCatalogV11SearchHandler({ repository: catalog,
           resolveTrustedProfile })(received);
         return createCatalogV11ReadHandler({ repository: catalog, resolveTrustedProfile,
+          telegramBotUsername: env.CRM_CONNECTED_TEST_TELEGRAM_BOT_USERNAME,
           resolveParticipantCompanyIds: ({ profileId, eventKey }) => builtCatalog.listLegacyParticipantCompanyIds({
             profileRef: profileId, eventKey }) })(received);
       };
