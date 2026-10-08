@@ -5,6 +5,9 @@ compatibility_flags = ["nodejs_compat"]
 workers_dev = true
 preview_urls = false
 
+# Provision CRM_CONNECTED_SANDBOX_TEST_KEY as a Wrangler secret. Public fixture
+# control, seeding, login, approval and diagnostics routes fail closed without it.
+
 [vars]
 CRM_CONNECTED_BROWSER_ENABLED = "true"
 CRM_CONNECTED_MCP_ENABLED = "true"

@@ -192,6 +192,12 @@ export default {
     await crmDb.prepare("INSERT OR IGNORE INTO sandbox_cp_state (id) VALUES (1)").run();
     const url = new URL(request.url);
     if (url.pathname === "/health") return new Response("ok");
+    if (url.pathname.startsWith("/__")) {
+      const expected = env?.CRM_CONNECTED_SANDBOX_TEST_KEY;
+      if (typeof expected !== "string" || expected.length < 32 ||
+          request.headers.get("x-crm-sandbox-test-key") !== expected)
+        return new Response(null, { status: 404, headers: { "cache-control": "no-store" } });
+    }
     if (url.pathname === "/__sandbox-login" && request.method === "GET") {
       const view = url.searchParams.get("view") ?? "deal";
       if (!["deal", "catalog"].includes(view))

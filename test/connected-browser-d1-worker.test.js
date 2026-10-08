@@ -57,7 +57,31 @@ function migrate(root) {
 }
 const cookie = (response, name) => response.headers.getSetCookie()
   .map((part) => part.split(";")[0]).find((part) => part.startsWith(`${name}=`));
-const call = (base, path, options = {}) => fetch(`${base}${path}`, { redirect: "manual", ...options });
+const call = (base, path, options = {}) => {
+  const headers = new Headers(options.headers);
+  if (path.startsWith("/__")) headers.set("x-crm-sandbox-test-key", "local-crm-connected-sandbox-debug-key-20261008");
+  return fetch(`${base}${path}`, { redirect: "manual", ...options, headers });
+};
+
+test("synthetic fixture controls and encrypted browser storage are not public", async () => {
+  const root = mkdtempSync(join(tmpdir(), "crm-connected-browser-debug-"));
+  let worker;
+  try {
+    migrate(root);
+    worker = await start(root);
+    for (const path of ["/__browser-storage", "/__cp-count", "/__cp-control?mode=outage",
+      "/__sandbox-login?view=deal", "/__sandbox-approve"]) {
+      const response = await fetch(`${worker.base}${path}`);
+      assert.equal(response.status, 404, `${path} must fail closed without the sandbox test key`);
+    }
+    assert.deepEqual(await (await call(worker.base, "/__cp-count")).json(), {
+      cpCalls: 0, foreignEgress: 0, approvalPrepareCalls: 0, approvalConsumeCalls: 0, weeekCreatePosts: 0
+    }, "authorized local fixture diagnostics remain available to isolated tests");
+  } finally {
+    await stop(worker?.child);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("Worker Fetch uses atomic D1 browser handoff and real profile-scoped catalog after restart", async () => {
   const root = mkdtempSync(join(tmpdir(), "crm-connected-browser-"));

@@ -1,5 +1,7 @@
 const origin = process.env.CRM_MCP_SANDBOX_ORIGIN;
 if (!origin) throw new Error("CRM_MCP_SANDBOX_ORIGIN must point to the isolated synthetic CRM Worker");
+const debugKey = process.env.CRM_CONNECTED_SANDBOX_TEST_KEY;
+if (!debugKey || debugKey.length < 32) throw new Error("CRM_CONNECTED_SANDBOX_TEST_KEY must be supplied from the sandbox secret store");
 const base = new URL(origin);
 if (base.protocol !== "https:" || !base.hostname.endsWith(".workers.dev"))
   throw new Error("CRM_MCP_SANDBOX_ORIGIN must be an HTTPS workers.dev URL");
@@ -13,6 +15,7 @@ async function json(path, init) {
 
 const headers = { accept: "application/json, text/event-stream", "content-type": "application/json",
   authorization: `Bearer ${"b".repeat(64)}`, "mcp-protocol-version": "2025-06-18" };
+const debugHeaders = { "x-crm-sandbox-test-key": debugKey };
 const send = body => json("/mcp", { method: "POST", headers, body: JSON.stringify(body) });
 for (const protocolVersion of [null, "2025-03-26"]) {
   const requestHeaders = { accept: "application/json, text/event-stream", "content-type": "application/json" };
@@ -21,7 +24,7 @@ for (const protocolVersion of [null, "2025-03-26"]) {
     body: JSON.stringify({ jsonrpc: "2.0", id: 90, method: "tools/list", params: {} }) });
   if (rejected.status !== 400) throw new Error(`unsupported protocol header accepted: ${protocolVersion}`);
 }
-const seed = await json("/__seed");
+const seed = await json("/__seed", { headers: debugHeaders });
 const initialized = await send({ jsonrpc: "2.0", id: 1, method: "initialize",
   params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "crm-public-sandbox-probe", version: "1" } } });
 if (initialized.result?.protocolVersion !== "2025-06-18") throw new Error("MCP initialization contract mismatch");
@@ -37,7 +40,7 @@ const item = invoked.result?.structuredContent?.items?.[0];
 if (invoked.result?.isError || item?.taxesPaidRub !== 1250000 || item?.employeeCount !== 42 ||
     item?.directorName !== "Synthetic Director 001") throw new Error(`synthetic catalog tool output mismatch: ${JSON.stringify(invoked)}`);
 
-await json("/__cp-control?mode=deals_only");
+await json("/__cp-control?mode=deals_only", { headers: debugHeaders });
 let denied;
 try {
   denied = await send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: {
@@ -45,10 +48,10 @@ try {
     _meta: { capabilityVersion: tool._meta.capabilityVersion }
   } });
 } finally {
-  await json("/__cp-control?mode=active");
+  await json("/__cp-control?mode=active", { headers: debugHeaders });
 }
 if (denied.error?.message !== "SCOPE_DENIED") throw new Error("scope denial did not fail closed");
-const egress = await json("/__cp-count");
+const egress = await json("/__cp-count", { headers: debugHeaders });
 if (egress.foreignEgress !== 0) throw new Error("synthetic fixture attempted an external dependency call");
 
 console.log(JSON.stringify({ result: "PASS", origin: base.origin, tool: tool.name,

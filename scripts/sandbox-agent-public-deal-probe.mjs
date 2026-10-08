@@ -11,9 +11,11 @@ const root = resolve(new URL("..", import.meta.url).pathname);
 const runnerRoot = resolve(process.env.AI_AGENT_RUNNER_ROOT ?? "");
 const publicOrigin = (process.env.CRM_SANDBOX_PUBLIC_ORIGIN ?? "").replace(/\/$/, "");
 const diagnosticsOrigin = (process.env.CRM_SANDBOX_DIAGNOSTICS_ORIGIN ?? "").replace(/\/$/, "");
+const debugKey = process.env.CRM_CONNECTED_SANDBOX_TEST_KEY;
 if (!process.env.AI_AGENT_RUNNER_ROOT) throw new Error("AI_AGENT_RUNNER_ROOT must point to an isolated Agent Runner checkout");
 if (!publicOrigin) throw new Error("CRM_SANDBOX_PUBLIC_ORIGIN must point to the stable synthetic sandbox ingress");
 if (!diagnosticsOrigin) throw new Error("CRM_SANDBOX_DIAGNOSTICS_ORIGIN must point to the local synthetic Worker loopback only");
+if (!debugKey || debugKey.length < 32) throw new Error("CRM_CONNECTED_SANDBOX_TEST_KEY must be supplied from the sandbox secret store");
 const origin = new URL(publicOrigin);
 assert.equal(origin.protocol, "https:");
 assert.match(origin.hostname, /^[a-z0-9-]+\.skillset-apply\.workers\.dev$/);
@@ -45,8 +47,13 @@ const bindingRef = `cred:crm-public-deal-${randomBytes(6).toString("hex")}`;
 const workDir = mkdtempSync(join(tmpdir(), "crm-agent-public-deal-"));
 const cookieFor = response => response.headers.getSetCookie().map(value => value.split(";", 1)[0])
   .find(value => value.startsWith("__Host-crm-connected-session="));
-const request = (path, options = {}) => fetch(`${publicOrigin}${path}`, { redirect: "manual", ...options });
-const diagnostics = path => fetch(`${diagnosticsOrigin}${path}`, { redirect: "manual" });
+const withDebugKey = (path, options = {}) => {
+  const headers = new Headers(options.headers);
+  if (path.startsWith("/__")) headers.set("x-crm-sandbox-test-key", debugKey);
+  return { ...options, headers };
+};
+const request = (path, options = {}) => fetch(`${publicOrigin}${path}`, { redirect: "manual", ...withDebugKey(path, options) });
+const diagnostics = path => fetch(`${diagnosticsOrigin}${path}`, withDebugKey(path, { redirect: "manual" }));
 const evidenceFor = runRoot => readFileSync(join(runRoot, "events.jsonl"), "utf8").trim().split("\n").map(JSON.parse)
   .filter(event => event.type === "log" && event.payload?.stream === "stdout" &&
     event.payload.message.startsWith("mcp-evidence: "))
