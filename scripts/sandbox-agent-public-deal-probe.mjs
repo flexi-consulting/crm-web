@@ -27,9 +27,18 @@ assert.equal(diagnosticsUrl.search, "");
 assert.equal(diagnosticsUrl.hash, "");
 
 const profileId = "profile_A";
-const prepareTool = "crm_deal_prepare_from_participant";
-const confirmTool = "crm_deal_create_from_participant";
-const reconcileTool = "crm_deal_reconcile_operation";
+const capabilityDescriptor = JSON.parse(readFileSync(join(root, "capabilities/s04-deals.v1.json"), "utf8"));
+const toolForOperation = operation => {
+  const tool = capabilityDescriptor.tools.find(item => item.operation === operation);
+  assert.ok(tool, `S-04 descriptor must define the ${operation} operation`);
+  return tool;
+};
+const prepare = toolForOperation("prepare");
+const confirm = toolForOperation("confirm");
+const reconcile = toolForOperation("reconcile");
+const prepareTool = prepare.name;
+const confirmTool = confirm.name;
+const reconcileTool = reconcile.name;
 const toolNames = [prepareTool, confirmTool, reconcileTool];
 const serverId = "crm-web-s04-sandbox";
 const bindingRef = `cred:crm-public-deal-${randomBytes(6).toString("hex")}`;
@@ -70,36 +79,39 @@ try {
     import(pathToFileURL(join(runnerRoot, "dist/contracts/run-spec.js")).href)
   ]);
   const registry = new CapabilityRegistry();
-  for (const name of toolNames) registry.register({ capabilityId: name, capabilityVersion: 1,
-    requiredScopes: ["crm.deals.create"], requiredArguments: name === prepareTool
-      ? ["buildId", "companyId", "exhibitionId", "title", "companyInn", "contactName", "dealComment"]
-      : name === confirmTool ? ["reviewId", "revision"] : ["operationId"],
-    effect: name === reconcileTool ? "read" : "write",
-    description: "Profile-bound reviewed deal workflow through the connected CRM app",
+  for (const tool of [prepare, confirm, reconcile]) registry.register({ capabilityId: tool.name,
+    capabilityVersion: capabilityDescriptor.version, requiredScopes: [tool.scope],
+    requiredArguments: JSON.parse(readFileSync(join(root, tool.inputSchemaRef), "utf8")).required ?? [],
+    effect: ["get", "reconcile"].includes(tool.operation) ? "read" : "write",
+    description: `${capabilityDescriptor.description} (${tool.operation})`,
     async invoke(invocation, context) {
       if (invocation.caller.profileId !== profileId || context.bindingValue !== session)
         return { kind: "blocked", reason: "synthetic profile/session binding mismatch" };
       const args = invocation.arguments;
-      const path = name === prepareTool ? "/api/v1/deal-reviews"
-        : name === confirmTool ? `/api/v1/deal-reviews/${encodeURIComponent(String(args.reviewId))}/confirm`
-          : `/api/v1/deal-operations/${encodeURIComponent(String(args.operationId))}/reconcile`;
-      const response = await request(path, { method: "POST",
+      const [method, bindingPath] = tool.httpBinding.split(" ", 2);
+      const path = bindingPath.replace(/\{([A-Za-z][A-Za-z0-9]*)\}/g, (_match, key) => {
+        assert.ok(Object.hasOwn(args, key), `${tool.name} requires route argument ${key}`);
+        return encodeURIComponent(String(args[key]));
+      });
+      const body = tool.operation === "prepare" ? args
+        : tool.operation === "confirm" ? { revision: args.revision } : {};
+      const response = await request(path, { method,
         headers: { cookie: context.bindingValue, origin: "https://crm.example.invalid",
           "x-csrf-token": csrf, "content-type": "application/json" },
-        body: JSON.stringify(name === prepareTool ? args : name === confirmTool ? { revision: args.revision } : {}) });
+        ...(method === "GET" ? {} : { body: JSON.stringify(body) }) });
       let result;
       try { result = await response.json(); } catch { return { kind: "technical_error", code: "CRM_INVALID_RESPONSE" }; }
-      if (name === confirmTool && response.status === 202)
+      if (tool.operation === "confirm" && response.status === 202)
         return { kind: "blocked", reason: "PROVIDER_OUTCOME_UNKNOWN" };
       if (!response.ok) return { kind: "blocked", reason: String(result.error ?? `CRM_HTTP_${response.status}`) };
-      if (name === confirmTool && result.status === "unknown")
+      if (tool.operation === "confirm" && result.status === "unknown")
         return { kind: "blocked", reason: "PROVIDER_OUTCOME_UNKNOWN" };
       const outcome = { kind: "completed", result };
-      if (name !== reconcileTool) outcome.effectReceipt = { receiptId: name === prepareTool
+      if (!["get", "reconcile"].includes(tool.operation)) outcome.effectReceipt = { receiptId: tool.operation === "prepare"
           ? result.reviewId : result.dealId ?? result.operationId,
-        capabilityId: name, capabilityVersion: 1, operationId: invocation.caller.operationId,
+        capabilityId: tool.name, capabilityVersion: capabilityDescriptor.version, operationId: invocation.caller.operationId,
         bindingRef: invocation.binding.ref, at: new Date().toISOString(),
-        ...(name === confirmTool && result.dealId ? { externalRef: result.dealId } : {}) };
+        ...(tool.operation === "confirm" && result.dealId ? { externalRef: result.dealId } : {}) };
       return outcome;
     } });
 
@@ -118,7 +130,7 @@ try {
       userTaskId: `task-${randomBytes(6).toString("hex")}`, profileId,
       conversationId: `conv-${randomBytes(6).toString("hex")}`, ownerGeneration: 1,
       engine: { name: "fake", adapterVersion: "1" }, cwd, envAllowlist: [], limits: { timeoutMs: 60_000 },
-      credentialBindings: [{ ref: bindingRef, scope: "crm.deals.create" }],
+      credentialBindings: [{ ref: bindingRef, scope: [prepare, confirm, reconcile].find(tool => tool.name === name).scope }],
       mcp: { servers: [{ serverId, transport: "stdio", command: process.execPath,
         args: [facade], envAllowlist: allowedEnv, bindingRef, allowedTools: toolNames }] },
       input: { inlinePrompt: JSON.stringify({ calls: [{ tool: name, arguments: args }], denied: [] }) } };
