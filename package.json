@@ -11,7 +11,8 @@
     "test:sandbox-public-mcp": "node scripts/sandbox-public-mcp-probe.mjs",
     "test:sandbox-public-deal-mcp": "node scripts/sandbox-public-deal-mcp-probe.mjs",
     "test:sandbox-agent-s04": "node scripts/sandbox-agent-s04-probe.mjs",
-    "test:sandbox-agent-public-deal": "node scripts/sandbox-agent-public-deal-probe.mjs"
+    "test:sandbox-agent-public-deal": "node scripts/sandbox-agent-public-deal-probe.mjs",
+    "test:sandbox-agent-public-mcp-catalog": "node scripts/sandbox-agent-public-mcp-catalog-probe.mjs"
   },
   "devDependencies": {
     "ajv": "^8.17.1",
