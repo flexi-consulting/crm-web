@@ -24,7 +24,7 @@ const tool = { name: toolName,
   _meta: { capabilityId: descriptor.capabilityId, capabilityVersion: descriptor.version } };
 const send = message => process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", ...message })}\n`);
 const textResult = outcome => ({ content: [{ type: "text", text: JSON.stringify({ outcome }) }],
-  structuredContent: { outcome } });
+  structuredContent: { outcome }, ...(outcome.kind === "completed" ? {} : { isError: true }) });
 let buffer = "";
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", chunk => {
