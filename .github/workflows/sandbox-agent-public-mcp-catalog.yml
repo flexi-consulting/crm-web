@@ -1,0 +1,39 @@
+name: Sandbox Agent MCP catalog probe
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/sandbox-agent-public-mcp-catalog.yml
+      - scripts/sandbox-agent-public-mcp-catalog-probe.mjs
+      - fixtures/catalog-search-runner-mcp.mjs
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sandbox-agent-mcp-catalog:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: trained-assist/ai-agent-runner
+          ref: e2c99b5093265ce377bd1c4bbe237967a7646d7d
+          path: .runner
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            .runner/package-lock.json
+      - run: npm ci
+        working-directory: .runner
+      - run: npm run build
+        working-directory: .runner
+      - run: npm ci
+      - name: Invoke the synthetic catalog MCP through Agent Runner
+        run: npm run test:sandbox-agent-public-mcp-catalog
+        env:
+          AI_AGENT_RUNNER_ROOT: ${{ github.workspace }}/.runner
