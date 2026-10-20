@@ -15,7 +15,8 @@
     "test:sandbox-agent-public-mcp-catalog": "node scripts/sandbox-agent-public-mcp-catalog-probe.mjs",
     "verify:exhibition-telegram-catalogs": "node scripts/verify-exhibition-telegram-catalogs.mjs",
     "patch:exhibition-workers": "node scripts/patch-workers-exhibition-deal.mjs",
-    "apply:exhibition-worker-bindings": "node scripts/apply-exhibition-worker-bindings.mjs"
+    "apply:exhibition-worker-bindings": "node scripts/apply-exhibition-worker-bindings.mjs",
+    "update:exhibition-chat-bindings": "node scripts/update-exhibition-chat-bindings.mjs"
   },
   "devDependencies": {
     "ajv": "^8.17.1",
