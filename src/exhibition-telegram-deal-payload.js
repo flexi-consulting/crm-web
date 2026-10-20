@@ -113,6 +113,16 @@ export function exhibitionDealCompanyId(company) {
   return parts ? parts.suffix : "";
 }
 
+// The company id the bot writes the deal marker under. The bot resolves the
+// company in the published catalog JSON and uses the id that catalog publishes,
+// so the marker lands in the same pre-lead record as the notes and the
+// rejection state of the catalog page. The payload id is the fallback for a
+// catalog that publishes no id.
+export function exhibitionMarkerCompanyId(company) {
+  const source = company && typeof company === "object" ? company : {};
+  return clean(source.id) || exhibitionDealCompanyId(source);
+}
+
 // The two prelead keys the notes path and the Telegram deal path address for one
 // company. They are equal only when the catalog addresses a company by the same id
 // in both paths.
@@ -120,14 +130,16 @@ export function exhibitionPreleadIdPaths({ eventKey, company } = {}) {
   const source = company && typeof company === "object" ? company : {};
   const dealCompanyId = exhibitionDealCompanyId(source);
   const notesCompanyId = clean(source.id);
-  const dealPreleadId = exhibitionSitePreleadId(eventKey, dealCompanyId);
+  const markerCompanyId = exhibitionMarkerCompanyId(source);
+  const dealPreleadId = exhibitionSitePreleadId(eventKey, markerCompanyId);
   const notesPreleadId = exhibitionSitePreleadId(eventKey, notesCompanyId);
   return {
     dealCompanyId,
     notesCompanyId,
+    markerCompanyId,
     dealPreleadId,
     notesPreleadId,
-    same: Boolean(dealCompanyId) && Boolean(notesCompanyId) &&
+    same: Boolean(markerCompanyId) && Boolean(notesCompanyId) &&
       dealPreleadId === notesPreleadId
   };
 }

@@ -34,6 +34,19 @@ open findings are in
 [`docs/EXHIBITION-TELEGRAM-DEAL-CATALOG.md`](docs/EXHIBITION-TELEGRAM-DEAL-CATALOG.md).
 The probe is not a published capability and creates no deal, note or rejection.
 
+The catalog button is a deep link to `@cmr_management_bot`, the bot of the
+`trained-assist-tg-bot-sales` worker. That worker owns no Weeek credentials, so the
+deal is created by the `flexi-telegram-deal-bot` worker over a private HTTP bridge
+(`POST /api/exhibition/deal`, gated by the shared secret `EXHIBITION_DEAL_API_KEY`).
+The injected code is kept in this repository and inlined into the worker bundles at
+deploy time: `src/exhibition-deal-bridge.js` holds the shared contract,
+`src/worker-patches/` the two worker specific parts, and
+`scripts/patch-workers-exhibition-deal.mjs` and
+`scripts/apply-exhibition-worker-bindings.mjs` build and deploy them. The bridge
+endpoint answers a dry run without writing anything. The bridge and its deployment
+are documented in
+[`docs/EXHIBITION-TELEGRAM-DEAL-CATALOG.md`](docs/EXHIBITION-TELEGRAM-DEAL-CATALOG.md#deal-intake-bridge).
+
 ## Connected profile session read adapter
 
 An opt-in Fetch browser BFF for the same read routes is in
