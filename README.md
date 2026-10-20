@@ -21,6 +21,18 @@ The [private note recovery dry run](docs/LEGACY-NOTES-DRY-RUN.md) validates sour
 
 The [exact current catalog candidate list](docs/LEGACY-CURRENT-CANDIDATES.md) checks old HTML bytes and row provenance for 59 private notes while leaving the new trusted profile owner unresolved.
 
+## Exhibition Telegram deal catalog
+
+The published exhibition catalogs reach the legacy Telegram deal bot through one
+worker binding, `TELEGRAM_DEAL_EVENT_URLS_JSON`, which maps an exhibition event key
+to the published JSON of that exhibition. `src/exhibition-telegram-deal-payload.js`
+mirrors the bot's start payload grammar and company resolution offline, and
+`scripts/verify-exhibition-telegram-catalogs.mjs` replays that mirror against the
+live published catalog with read-only `GET` requests. The binding update procedure,
+the verification result and the open findings are in
+[`docs/EXHIBITION-TELEGRAM-DEAL-CATALOG.md`](docs/EXHIBITION-TELEGRAM-DEAL-CATALOG.md).
+The probe is not a published capability and creates no deal, note or rejection.
+
 ## Connected profile session read adapter
 
 An opt-in Fetch browser BFF for the same read routes is in
