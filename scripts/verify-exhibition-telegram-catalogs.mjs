@@ -11,12 +11,15 @@
 //   EXHIBITION_CATALOG_ORIGIN            catalog origin (default: the published review catalog)
 //   TELEGRAM_DEAL_EVENT_URLS_JSON        live worker binding value, as JSON text
 //   TELEGRAM_DEAL_EVENT_URLS_JSON_FILE   path to a file holding the live binding value
+//   VERIFY_STRICT_PRELEAD_IDS            1 fails the probe when the notes path and the
+//                                        deal path address different prelead keys
 //
 // Exit code 1 means at least one check failed.
 
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
-import { exhibitionCompaniesUrlByEvent, parseExhibitionDealPayload,
+import { exhibitionCompaniesUrlByEvent, exhibitionDealCompanyId,
+  exhibitionPreleadIdPaths, exhibitionSitePreleadId, parseExhibitionDealPayload,
   resolveExhibitionDealCompany,
   validatePublishedExhibitionCatalog } from "../src/exhibition-telegram-deal-payload.js";
 
@@ -77,7 +80,8 @@ for (const [eventKey, url] of Object.entries(mapping)) {
   const key = String(eventKey).toLowerCase();
   const row = { eventKey: key, url, status: null, contentType: "", companyCount: 0,
     cardCount: cards.get(key)?.companies?.length ?? null, problems: [], resolved: 0,
-    unresolved: 0, bindingResolved: null };
+    unresolved: 0, bindingResolved: null, preleadDivergence: 0, preleadPaths: [],
+    notesPath: null };
 
   const response = await getText(url);
   row.status = response.status;
@@ -123,6 +127,9 @@ for (const [eventKey, url] of Object.entries(mapping)) {
   // The catalog page links a company with `<eventKey>_deal_c<catalog index>`, so the
   // replay starts from the published payload instead of the enriched subset position.
   for (const company of catalog.companies) {
+    const paths = exhibitionPreleadIdPaths({ eventKey: key, company });
+    row.preleadPaths.push({ id: cleanId(company), ...paths });
+    if (!paths.same) row.preleadDivergence += 1;
     const published = String(company.deal_payload ?? company.telegramPayload ??
       company.telegram_payload ?? "").trim();
     if (!published) {
@@ -160,12 +167,50 @@ for (const [eventKey, url] of Object.entries(mapping)) {
     }
   }
 
+  // Read-only probe of the published notes endpoint. The catalog page posts a note or
+  // a rejection for a company under its internal id, the bot answers with the prelead
+  // key of that id, and the Telegram deal path writes its marker under the payload id.
+  const probeCompany = catalog.companies[0];
+  if (probeCompany) {
+    const companyId = cleanId(probeCompany);
+    const notesUrl = `${origin}/api/notes?eventKey=${encodeURIComponent(key)}` +
+      `&companyId=${encodeURIComponent(companyId)}`;
+    const notesResponse = await getText(notesUrl);
+    row.notesPath = { url: notesUrl, status: notesResponse.status, companyId,
+      preleadId: null, dealPreleadId: exhibitionSitePreleadId(key, exhibitionDealCompanyId(probeCompany)),
+      matchesDealPreleadId: null };
+    if (notesResponse.status === 200) {
+      try {
+        const notes = JSON.parse(notesResponse.text);
+        row.notesPath.preleadId = notes.preleadId ?? null;
+        row.notesPath.matchesDealPreleadId = row.notesPath.preleadId ===
+          row.notesPath.dealPreleadId;
+      } catch {
+        row.notesPath.error = "not_json";
+      }
+    }
+  }
+
   rows.push(row);
+}
+
+// The prelead id divergence is a known open finding of the published catalog, so it is
+// reported by default and only fails the probe when it is asked for explicitly.
+const strictPreleadIds = ["1", "true", "yes"].includes(
+  String(process.env.VERIFY_STRICT_PRELEAD_IDS ?? "").toLowerCase());
+if (strictPreleadIds) {
+  for (const row of rows) {
+    if (row.preleadDivergence > 0) {
+      note(`${row.eventKey}: ${row.preleadDivergence} companies address a different prelead in the notes path and in the deal path`);
+    }
+  }
 }
 
 const report = {
   origin, mappingUrl, cardsUrl,
   liveBindingChecked: liveBinding !== null,
+  strictPreleadIds,
+  preleadDivergenceTotal: rows.reduce((sum, row) => sum + row.preleadDivergence, 0),
   events: rows,
   failures
 };
