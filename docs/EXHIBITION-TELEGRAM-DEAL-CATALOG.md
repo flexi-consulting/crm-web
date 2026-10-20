@@ -366,15 +366,23 @@ group messages when the chat id is in its allowlist:
 
 - `TELEGRAM_ALLOWED_CHAT_ID` — secret, holds the main list
 - `TELEGRAM_EXTRA_ALLOWED_CHAT_IDS` — `plain_text`, currently
-  `-5253164492,-5423408115,-5441770657`
-- `TELEGRAM_TEST_CHAT_IDS` — `plain_text`, currently `-5213761301`
+  `-5253164492,-5423408115,-1004485888030`; the new production group is
+  `-1004485888030`
+- `TELEGRAM_TEST_CHAT_IDS` — `plain_text`, currently
+  `-5213761301,-5441770657`; the exhibition deal acceptance and CI test group
+  is `-5441770657`
 
 `TELEGRAM_ALLOW_ALL_CHATS` is not bound on the production worker, so the allowlist
 is mandatory for groups. Private chats with the bot are allowed by default.
 
-The test group `-5441770657` was added to `TELEGRAM_EXTRA_ALLOWED_CHAT_IDS` on
-2026-10-20 with the binding procedure described above. The readback confirmed
-102 bindings, 12 secrets, and a single changed value.
+The test group `-5441770657` was first added to
+`TELEGRAM_EXTRA_ALLOWED_CHAT_IDS` on 2026-10-20. It was then moved to
+`TELEGRAM_TEST_CHAT_IDS` when the separate production group was assigned. Run
+`npm run update:exhibition-chat-bindings` with `CLOUDFLARE_API_TOKEN` and
+`CLOUDFLARE_ACCOUNT_ID` to repeat the two-binding update. The script preserves
+the other bindings and verifies the complete readback. The repository CI suite
+uses synthetic fixtures; creating a real Weeek deal still requires a Telegram
+acceptance click in the test group.
 
 A group that is not in the allowlist is not silently ignored: the bot answers with
 "добавьте этот id в TELEGRAM_ALLOWED_CHAT_ID, TELEGRAM_TEST_CHAT_IDS или
