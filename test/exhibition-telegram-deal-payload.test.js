@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { exhibitionCardFields, exhibitionCompaniesUrlByEvent,
-  exhibitionDealPayloadFor, exhibitionDealPayloadParts,
+  exhibitionDealCompanyId, exhibitionDealPayloadFor, exhibitionDealPayloadParts,
+  exhibitionNotesCompanyId, exhibitionPreleadIdPaths, exhibitionSitePreleadId,
   parseExhibitionBindingJson, parseExhibitionDealPayload,
   resolveExhibitionDealCompany,
   validatePublishedExhibitionCatalog } from "../src/exhibition-telegram-deal-payload.js";
@@ -187,4 +188,51 @@ test("card fields accept both published card shapes", () => {
   assert.deepEqual(exhibitionCardFields({ name: "Alpha", stand: "A1" }),
     { name: "Alpha", stand: "A1" });
   assert.deepEqual(exhibitionCardFields(null), { name: "", stand: "" });
+});
+
+test("the prelead key mirrors the bot helper sitePredealId", () => {
+  assert.equal(exhibitionSitePreleadId("heatpower2026", "heatpower2026-3"),
+    "site_heatpower2026_heatpower2026-3");
+  assert.equal(exhibitionSitePreleadId("heatpower2026", "c3"), "site_heatpower2026_c3");
+  // The bot lowercases the key and keeps letters, digits, dots and dashes.
+  assert.equal(exhibitionSitePreleadId("HeatPower2026", "C3"), "site_heatpower2026_c3");
+  // Everything outside that set becomes a dash, and the result is capped.
+  assert.equal(exhibitionSitePreleadId("выставка", "c 3"), "site_item_c-3");
+  assert.equal(exhibitionSitePreleadId("e", "c".repeat(200)).length, "site_e_".length + 80);
+  // Empty parts fall back to the bot defaults.
+  assert.equal(exhibitionSitePreleadId("", ""), "site_event_company");
+});
+
+test("the notes company id is the event key and the catalog index", () => {
+  assert.equal(exhibitionNotesCompanyId({ eventKey: "heatpower2026", cardIndex: 3 }),
+    "heatpower2026-3");
+  assert.equal(exhibitionNotesCompanyId({ eventKey: "HeatPower2026", cardIndex: "3" }),
+    "heatpower2026-3");
+  assert.equal(exhibitionNotesCompanyId({ eventKey: "heatpower2026" }), "");
+  assert.equal(exhibitionNotesCompanyId({ cardIndex: 3 }), "");
+});
+
+test("the deal company id is the suffix of the published payload", () => {
+  assert.equal(exhibitionDealCompanyId({ deal_payload: "deal_c3" }), "c3");
+  assert.equal(exhibitionDealCompanyId({ telegramPayload: "heatpower2026_deal_c3" }), "c3");
+  assert.equal(exhibitionDealCompanyId({ telegram_payload: "deal_c12" }), "c12");
+  assert.equal(exhibitionDealCompanyId({}), "");
+});
+
+test("the two prelead paths diverge when the catalog addresses a company differently", () => {
+  const diverged = exhibitionPreleadIdPaths({
+    eventKey: "heatpower2026", company: { id: "heatpower2026-3", deal_payload: "deal_c3" }
+  });
+  assert.equal(diverged.dealCompanyId, "c3");
+  assert.equal(diverged.notesCompanyId, "heatpower2026-3");
+  assert.equal(diverged.dealPreleadId, "site_heatpower2026_c3");
+  assert.equal(diverged.notesPreleadId, "site_heatpower2026_heatpower2026-3");
+  assert.equal(diverged.same, false);
+
+  const aligned = exhibitionPreleadIdPaths({
+    eventKey: "agroprodmash2026", company: { id: "c0", deal_payload: "deal_c0" }
+  });
+  assert.equal(aligned.dealPreleadId, "site_agroprodmash2026_c0");
+  assert.equal(aligned.notesPreleadId, "site_agroprodmash2026_c0");
+  assert.equal(aligned.same, true);
 });

@@ -80,6 +80,58 @@ export function exhibitionDealPayloadFor(company, payload = {}) {
   return eventKey ? `${eventKey}_deal_${companyId}` : `deal_${companyId}`;
 }
 
+// Mirrors the bot helper `safePathSegment`.
+const safePathSegment = (value) => {
+  const text = clean(value).replace(/[^\w.-]+/g, "-").replace(/-+/g, "-")
+    .replace(/^-|-$/g, "").slice(0, 80);
+  return text || "item";
+};
+
+// Mirrors the bot helper `sitePredealId`: `site_<eventKey>_<companyId>`.
+export function exhibitionSitePreleadId(eventKey, companyId) {
+  const key = clean(eventKey) || "event";
+  const id = clean(companyId) || "company";
+  return `site_${safePathSegment(key)}_${safePathSegment(id)}`.toLowerCase();
+}
+
+// The company id the published catalog sends in its notes and rejection calls.
+// The catalog page builds it as `<eventKey>-<card index>`, which is the id the
+// published company JSON carries in its `id` field.
+export function exhibitionNotesCompanyId({ eventKey, cardIndex } = {}) {
+  const key = clean(eventKey).toLowerCase();
+  const index = clean(cardIndex);
+  if (!key || !index) return "";
+  return `${key}-${index}`;
+}
+
+// The company id the bot derives from the published deal payload, `c<catalog index>`.
+export function exhibitionDealCompanyId(company) {
+  const source = company && typeof company === "object" ? company : {};
+  const payload = clean(source.deal_payload) || clean(source.telegramPayload) ||
+    clean(source.telegram_payload);
+  const parts = exhibitionDealPayloadParts(payload);
+  return parts ? parts.suffix : "";
+}
+
+// The two prelead keys the notes path and the Telegram deal path address for one
+// company. They are equal only when the catalog addresses a company by the same id
+// in both paths.
+export function exhibitionPreleadIdPaths({ eventKey, company } = {}) {
+  const source = company && typeof company === "object" ? company : {};
+  const dealCompanyId = exhibitionDealCompanyId(source);
+  const notesCompanyId = clean(source.id);
+  const dealPreleadId = exhibitionSitePreleadId(eventKey, dealCompanyId);
+  const notesPreleadId = exhibitionSitePreleadId(eventKey, notesCompanyId);
+  return {
+    dealCompanyId,
+    notesCompanyId,
+    dealPreleadId,
+    notesPreleadId,
+    same: Boolean(dealCompanyId) && Boolean(notesCompanyId) &&
+      dealPreleadId === notesPreleadId
+  };
+}
+
 export function exhibitionCardFields(card) {
   if (Array.isArray(card)) {
     return { name: clean(card[0]), stand: clean(card[1]) };
