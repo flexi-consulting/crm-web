@@ -60,8 +60,10 @@ The safe procedure is therefore:
    unchanged `plain_text` value, and every `d1` and `kv_namespace` id. Roll back to
    the captured list when anything differs.
 
-The production worker holds 99 bindings, 11 of them secret. Both counts and every
-other binding value were confirmed unchanged after the update.
+The production worker holds 102 bindings, 12 of them secret: the 99 bindings of the
+catalog update plus the three of the bridge, `EXHIBITION_DEAL_API_KEY`,
+`EXHIBITION_DEAL_API_URL` and `TELEGRAM_DEAL_EVENT_META_JSON`. Both counts and
+every other binding value were confirmed unchanged after each update.
 
 ## Contract
 
@@ -146,10 +148,16 @@ with its id and link, or the reason why it was not created.
 
 | Worker | Binding | Type | Value |
 |---|---|---|---|
-| `flexi-telegram-deal-bot` | `EXHIBITION_DEAL_API_KEY` | secret | the shared bridge key |
+| `flexi-telegram-deal-bot` | `EXHIBITION_DEAL_API_KEY` | secret | the shared bridge key, checked against `X-Exhibition-Key` |
+| `flexi-telegram-deal-bot` | `EXHIBITION_DEAL_API_URL` | plain_text | the url of the exhibition deal bot, not read by this worker |
 | `flexi-telegram-deal-bot` | `TELEGRAM_DEAL_EVENT_META_JSON` | plain_text | event name and page url per event key |
-| `trained-assist-tg-bot-sales` | `EXHIBITION_DEAL_API_KEY` | secret | the same shared bridge key |
+| `trained-assist-tg-bot-sales` | `EXHIBITION_DEAL_API_KEY` | secret | the same shared bridge key, sent as `X-Exhibition-Key` |
 | `trained-assist-tg-bot-sales` | `EXHIBITION_DEAL_API_URL` | plain_text | the url of the exhibition deal bot |
+
+The key is a secret on both sides, so neither the key nor the url of the bridge is
+readable from the repository. `scripts/apply-exhibition-worker-bindings.mjs` takes
+the key from the environment and writes it to both workers; the value is never
+printed.
 
 `TELEGRAM_DEAL_EVENT_META_JSON` holds the fallback metadata of the published
 catalogs, see [The published catalog JSON carries no `meta` block](#the-published-catalog-json-carries-no-meta-block).
@@ -366,7 +374,7 @@ is mandatory for groups. Private chats with the bot are allowed by default.
 
 The test group `-5441770657` was added to `TELEGRAM_EXTRA_ALLOWED_CHAT_IDS` on
 2026-10-20 with the binding procedure described above. The readback confirmed
-99 bindings, 11 secrets, and a single changed value.
+102 bindings, 12 secrets, and a single changed value.
 
 A group that is not in the allowlist is not silently ignored: the bot answers with
 "добавьте этот id в TELEGRAM_ALLOWED_CHAT_ID, TELEGRAM_TEST_CHAT_IDS или
