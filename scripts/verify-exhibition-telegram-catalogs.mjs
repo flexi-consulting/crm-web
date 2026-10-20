@@ -19,6 +19,7 @@
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
 import { exhibitionCompaniesUrlByEvent, exhibitionDealCompanyId,
+  exhibitionMarkerCompanyId,
   exhibitionPreleadIdPaths, exhibitionSitePreleadId, parseExhibitionDealPayload,
   resolveExhibitionDealCompany,
   validatePublishedExhibitionCatalog } from "../src/exhibition-telegram-deal-payload.js";
@@ -169,7 +170,8 @@ for (const [eventKey, url] of Object.entries(mapping)) {
 
   // Read-only probe of the published notes endpoint. The catalog page posts a note or
   // a rejection for a company under its internal id, the bot answers with the prelead
-  // key of that id, and the Telegram deal path writes its marker under the payload id.
+  // key of that id, and the Telegram deal path writes its marker under the same id, so
+  // the notes and the deal land in the same pre-lead record.
   const probeCompany = catalog.companies[0];
   if (probeCompany) {
     const companyId = cleanId(probeCompany);
@@ -177,7 +179,7 @@ for (const [eventKey, url] of Object.entries(mapping)) {
       `&companyId=${encodeURIComponent(companyId)}`;
     const notesResponse = await getText(notesUrl);
     row.notesPath = { url: notesUrl, status: notesResponse.status, companyId,
-      preleadId: null, dealPreleadId: exhibitionSitePreleadId(key, exhibitionDealCompanyId(probeCompany)),
+      preleadId: null, dealPreleadId: exhibitionSitePreleadId(key, exhibitionMarkerCompanyId(probeCompany)),
       matchesDealPreleadId: null };
     if (notesResponse.status === 200) {
       try {
@@ -194,8 +196,8 @@ for (const [eventKey, url] of Object.entries(mapping)) {
   rows.push(row);
 }
 
-// The prelead id divergence is a known open finding of the published catalog, so it is
-// reported by default and only fails the probe when it is asked for explicitly.
+// The deal marker and the notes path have to address the same pre-lead record. The
+// probe reports the divergence by default and fails when it is asked for explicitly.
 const strictPreleadIds = ["1", "true", "yes"].includes(
   String(process.env.VERIFY_STRICT_PRELEAD_IDS ?? "").toLowerCase());
 if (strictPreleadIds) {

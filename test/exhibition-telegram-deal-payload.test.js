@@ -219,15 +219,16 @@ test("the deal company id is the suffix of the published payload", () => {
   assert.equal(exhibitionDealCompanyId({}), "");
 });
 
-test("the two prelead paths diverge when the catalog addresses a company differently", () => {
+test("the deal marker follows the published company id, so both paths agree", () => {
   const diverged = exhibitionPreleadIdPaths({
     eventKey: "heatpower2026", company: { id: "heatpower2026-3", deal_payload: "deal_c3" }
   });
   assert.equal(diverged.dealCompanyId, "c3");
   assert.equal(diverged.notesCompanyId, "heatpower2026-3");
-  assert.equal(diverged.dealPreleadId, "site_heatpower2026_c3");
+  assert.equal(diverged.markerCompanyId, "heatpower2026-3");
+  assert.equal(diverged.dealPreleadId, "site_heatpower2026_heatpower2026-3");
   assert.equal(diverged.notesPreleadId, "site_heatpower2026_heatpower2026-3");
-  assert.equal(diverged.same, false);
+  assert.equal(diverged.same, true);
 
   const aligned = exhibitionPreleadIdPaths({
     eventKey: "agroprodmash2026", company: { id: "c0", deal_payload: "deal_c0" }
@@ -235,4 +236,13 @@ test("the two prelead paths diverge when the catalog addresses a company differe
   assert.equal(aligned.dealPreleadId, "site_agroprodmash2026_c0");
   assert.equal(aligned.notesPreleadId, "site_agroprodmash2026_c0");
   assert.equal(aligned.same, true);
+});
+
+test("a catalog without a published id falls back to the payload id", () => {
+  const paths = exhibitionPreleadIdPaths({
+    eventKey: "heatpower2026", company: { deal_payload: "deal_c3" }
+  });
+  assert.equal(paths.markerCompanyId, "c3");
+  assert.equal(paths.dealPreleadId, "site_heatpower2026_c3");
+  assert.equal(paths.same, false);
 });
